@@ -106,7 +106,7 @@ def register(bot, channel_id, admin_ids):
             bot.reply_to(message, f"لم يتم العثور على نتائج للبحث عن \"{query}\".")
             return
         keyboard = create_paginated_keyboard(videos, total_count, 0, "search_all", "all")
-        bot.reply_to(message, f"نتائج البحث عن \"{query}\":", reply_markup=keyboard)
+        bot.reply_to(message, f"نتائج البحث عن \"{query}\" ({total_count} نتيجة):", reply_markup=keyboard)
 
     @bot.message_handler(content_types=["video"])
     def handle_new_video(message):
