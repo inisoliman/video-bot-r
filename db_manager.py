@@ -84,7 +84,6 @@ def verify_and_repair_schema():
     finally:
         if conn: conn.close()
 
-
 def execute_query(query, params=None, fetch=None, commit=False):
     conn = get_db_connection()
     if not conn:
@@ -109,94 +108,48 @@ def execute_query(query, params=None, fetch=None, commit=False):
         if conn: conn.close()
     return result
 
-# ==============================================================================
-# دالة بحث مطورة لتدعم الفلاتر المتقدمة
-# ==============================================================================
 def search_videos(query, page=0, category_id=None, quality=None, status=None):
     offset = page * VIDEOS_PER_PAGE
-    search_term = f"%{query}%"
-
-    # بناء جملة WHERE بشكل ديناميكي
-    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
-    params = [search_term, search_term]
-
+    search_term = f"%{query}%" if query else "%"
+    base_query = """
+        SELECT * FROM video_archive
+        WHERE (caption ILIKE %s OR file_name ILIKE %s OR metadata->>'series_name' ILIKE %s)
+    """
+    params = [search_term, search_term, search_term]
     if category_id:
-        where_clauses.append("category_id = %s")
+        base_query += " AND category_id = %s"
         params.append(category_id)
     if quality:
-        # البحث داخل حقل JSON
-        where_clauses.append("metadata->>'quality_resolution' = %s")
+        base_query += " AND metadata->>'quality_resolution' = %s"
         params.append(quality)
     if status:
-        # البحث داخل حقل JSON
-        where_clauses.append("metadata->>'status' = %s")
+        base_query += " AND metadata->>'status' = %s"
         params.append(status)
-
-    where_string = " AND ".join(where_clauses)
-
-    # استعلام جلب الفيديوهات
-    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
-    final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
-    videos = execute_query(videos_query, final_params_videos, fetch="all")
-
-    # استعلام جلب العدد الإجمالي
-    count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
-    final_params_count = tuple(params)
-    total = execute_query(count_query, final_params_count, fetch="one")
-
-    return videos, total['count'] if total else 0
-
-def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    metadata_json = json.dumps(metadata)
-    query = """
-        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (message_id) DO UPDATE SET
-            caption = EXCLUDED.caption,
-            file_name = EXCLUDED.file_name,
-            file_id = EXCLUDED.file_id,
-            metadata = EXCLUDED.metadata,
-            grouping_key = EXCLUDED.grouping_key,
-            category_id = EXCLUDED.category_id
-        RETURNING id
+    base_query += " ORDER BY upload_date DESC LIMIT %s OFFSET %s"
+    params.extend([VIDEOS_PER_PAGE, offset])
+    
+    videos = execute_query(base_query, params, fetch="all")
+    
+    count_query = """
+        SELECT COUNT(*) as count FROM video_archive
+        WHERE (caption ILIKE %s OR file_name ILIKE %s OR metadata->>'series_name' ILIKE %s)
     """
-    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
-    result = execute_query(query, params, fetch="one", commit=True)
-    return result['id'] if result else None
+    count_params = [search_term, search_term, search_term]
+    if category_id:
+        count_query += " AND category_id = %s"
+        count_params.append(category_id)
+    if quality:
+        count_query += " AND metadata->>'quality_resolution' = %s"
+        count_params.append(quality)
+    if status:
+        count_query += " AND metadata->>'status' = %s"
+        count_params.append(status)
+    total_count = execute_query(count_query, count_params, fetch="one")['count']
+    
+    return videos, total_count
 
-def get_categories_tree():
-    return execute_query("SELECT * FROM categories ORDER BY name", fetch="all")
-
-def get_child_categories(parent_id):
-    if parent_id is None:
-        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
-    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
-
-def get_category_by_id(category_id):
-    return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
-
-def add_category(name, parent_id=None):
-    res = execute_query("INSERT INTO categories (name, parent_id) VALUES (%s, %s) RETURNING id", (name, parent_id), fetch="one", commit=True)
-    return (True, res) if res else (False, "Failed to add category")
-
-def get_videos(category_id, page=0):
-    offset = page * VIDEOS_PER_PAGE
-    videos = execute_query("SELECT * FROM video_archive WHERE category_id = %s ORDER BY id DESC LIMIT %s OFFSET %s", (category_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    total = execute_query("SELECT COUNT(*) as count FROM video_archive WHERE category_id = %s", (category_id,), fetch="one")
-    return videos, total['count'] if total else 0
-
-def increment_video_view_count(video_id):
-    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
-
-def get_video_by_message_id(message_id):
-    return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
-
-def get_active_category_id():
-    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
-    return int(res['setting_value']) if res else None
-
-def set_active_category_id(category_id):
-    return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('active_category_id', %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", (str(category_id),), commit=True)
+def set_active_category(category_id):
+    return execute_query("INSERT INTO settings (setting_key, setting_value) VALUES ('active_category_id', %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", (str(category_id),), commit=True)
 
 def add_video_rating(video_id, user_id, rating):
     return execute_query("INSERT INTO video_ratings (video_id, user_id, rating) VALUES (%s, %s, %s) ON CONFLICT (video_id, user_id) DO UPDATE SET rating = EXCLUDED.rating", (video_id, user_id, rating), commit=True)
