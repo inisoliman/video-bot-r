@@ -296,8 +296,7 @@ def register(bot, admin_ids):
                 bot.answer_callback_query(call.id)
 
             elif action == "back_to_main":
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-                bot.send_message(call.message.chat.id, "القائمة الرئيسية:", reply_markup=helpers.main_menu())
+                helpers.list_videos(bot, call.message, edit_message=call.message)  # ده هيعرض قائمة التصنيفات
                 bot.answer_callback_query(call.id)
 
             elif action == "video":
