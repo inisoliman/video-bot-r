@@ -83,12 +83,18 @@ def register(bot, admin_ids):
                 elif filter_type == 'status': kwargs['status'] = filter_value
 
                 videos, total_count = search_videos(**kwargs)
+                logger.info(f"Advanced search: query={query}, page={page}, videos_count={len(videos)}, total={total_count}")  # Logging هنا
 
                 if not videos:
                     bot.edit_message_text(f"لا توجد نتائج للبحث المتقدم.", call.message.chat.id, call.message.message_id)
                 else:
                     keyboard = helpers.create_paginated_keyboard(videos, total_count, page, "adv_search", f"{filter_type}::{filter_value}")
-                    bot.edit_message_text(f"نتائج البحث عن \"{query}\" ({total_count} نتيجة):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    text = f"نتائج البحث عن \"{query}\" ({total_count} نتيجة) - صفحة {page + 1}"
+                    try:
+                        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    except telebot.apihelper.ApiTelegramException as e:
+                        logger.error(f"Error editing message in adv_search: {e}")
+                        bot.answer_callback_query(call.id, "حدث خطأ في تحديث الصفحة، حاول مرة أخرى.", show_alert=True)
                 bot.answer_callback_query(call.id)
 
             elif action == "search_scope":
@@ -101,11 +107,18 @@ def register(bot, admin_ids):
                 query = query_data['query']
                 category_id = None if scope == "all" else int(scope)
                 videos, total_count = search_videos(query=query, page=page, category_id=category_id)
+                logger.info(f"Search scope: query={query}, scope={scope}, page={page}, videos_count={len(videos)}, total={total_count}")  # Logging هنا
+
                 if not videos:
                     bot.edit_message_text(f"لم يتم العثور على نتائج للبحث عن \"{query}\".", call.message.chat.id, call.message.message_id)
                 else:
                     keyboard = helpers.create_paginated_keyboard(videos, total_count, page, "search_all" if scope == "all" else "search_cat", scope)
-                    bot.edit_message_text(f"نتائج البحث عن \"{query}\" ({total_count} نتيجة):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    text = f"نتائج البحث عن \"{query}\" ({total_count} نتيجة) - صفحة {page + 1}"
+                    try:
+                        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    except telebot.apihelper.ApiTelegramException as e:
+                        logger.error(f"Error editing message in search_scope: {e}")
+                        bot.answer_callback_query(call.id, "حدث خطأ في تحديث الصفحة، حاول مرة أخرى.", show_alert=True)
                 bot.answer_callback_query(call.id)
 
             elif action == "check_subscription":
@@ -134,7 +147,7 @@ def register(bot, admin_ids):
                 bot.answer_callback_query(call.id)
 
             elif action == "back_to_main":
-                helpers.list_videos(bot, call.message, edit_message=call.message)  # تعديل هنا: عرض قائمة التصنيفات بدل القائمة الأساسية
+                helpers.list_videos(bot, call.message, edit_message=call.message)  # عرض قائمة التصنيفات
                 bot.answer_callback_query(call.id)
 
             elif action == "video":
