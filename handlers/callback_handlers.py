@@ -31,6 +31,7 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 if not query_data or 'query' not in query_data:
                     bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    logger.warning(f"Search expired for chat_id {call.message.chat.id}")
                     return
 
                 if search_type == "normal":
@@ -75,6 +76,7 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 if not query_data or 'query' not in query_data:
                     bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    logger.warning(f"Advanced search expired for chat_id {call.message.chat.id}")
                     return
 
                 query = query_data['query']
@@ -83,7 +85,7 @@ def register(bot, admin_ids):
                 elif filter_type == 'status': kwargs['status'] = filter_value
 
                 videos, total_count = search_videos(**kwargs)
-                logger.info(f"Advanced search: query={query}, page={page}, videos_count={len(videos)}, total={total_count}")  # Logging هنا
+                logger.info(f"Advanced search: query={query}, filter={filter_type}:{filter_value}, page={page}, videos_count={len(videos)}, total={total_count}")
 
                 if not videos:
                     bot.edit_message_text(f"لا توجد نتائج للبحث المتقدم.", call.message.chat.id, call.message.message_id)
@@ -103,11 +105,12 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 if not query_data or 'query' not in query_data:
                     bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    logger.warning(f"Search scope expired for chat_id {call.message.chat.id}, scope={scope}, page={page}")
                     return
                 query = query_data['query']
                 category_id = None if scope == "all" else int(scope)
                 videos, total_count = search_videos(query=query, page=page, category_id=category_id)
-                logger.info(f"Search scope: query={query}, scope={scope}, page={page}, videos_count={len(videos)}, total={total_count}")  # Logging هنا
+                logger.info(f"Search scope: query={query}, scope={scope}, page={page}, videos_count={len(videos)}, total={total_count}")
 
                 if not videos:
                     bot.edit_message_text(f"لم يتم العثور على نتائج للبحث عن \"{query}\".", call.message.chat.id, call.message.message_id)
@@ -147,7 +150,7 @@ def register(bot, admin_ids):
                 bot.answer_callback_query(call.id)
 
             elif action == "back_to_main":
-                helpers.list_videos(bot, call.message, edit_message=call.message)  # عرض قائمة التصنيفات
+                helpers.list_videos(bot, call.message, edit_message=call.message)
                 bot.answer_callback_query(call.id)
 
             elif action == "video":
