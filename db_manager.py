@@ -27,11 +27,6 @@ user_last_search = {}
 
 # --- هيكل قاعدة البيانات المتوقع (مصدر الحقيقة) ---
 EXPECTED_SCHEMA = {
-    'categories': {
-        'id': 'SERIAL PRIMARY KEY',
-        'name': 'VARCHAR(255) NOT NULL',
-        'parent_id': 'INTEGER REFERENCES categories(id) ON DELETE CASCADE'
-    },
     'video_archive': {
         'id': 'SERIAL PRIMARY KEY',
         'message_id': 'BIGINT UNIQUE',
@@ -42,48 +37,8 @@ EXPECTED_SCHEMA = {
         'category_id': 'INTEGER REFERENCES categories(id) ON DELETE SET NULL',
         'metadata': 'JSONB',
         'view_count': 'INTEGER DEFAULT 0',
-        'upload_date': 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP',
+        'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT'
-    },
-    'video_ratings': {
-        'id': 'SERIAL PRIMARY KEY',
-        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
-        'user_id': 'BIGINT',
-        'rating': 'INTEGER CHECK (rating >= 1 AND rating <= 5)',
-        '_unique_rating': 'UNIQUE (video_id, user_id)'
-    },
-    'bot_users': {
-        'user_id': 'BIGINT PRIMARY KEY',
-        'username': 'VARCHAR(255)',
-        'first_name': 'VARCHAR(255)',
-        'join_date': 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP'
-    },
-    'bot_settings': {
-        'setting_key': 'VARCHAR(255) PRIMARY KEY',
-        'setting_value': 'TEXT'
-    },
-    'required_channels': {
-        'channel_id': 'VARCHAR(255) PRIMARY KEY',
-        'channel_name': 'VARCHAR(255) NOT NULL'
-    },
-    'user_favorites': {
-        'id': 'SERIAL PRIMARY KEY',
-        'user_id': 'BIGINT REFERENCES bot_users(user_id) ON DELETE CASCADE',
-        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
-        'added_date': 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP',
-        '_unique_favorite': 'UNIQUE (user_id, video_id)'
-    },
-    'user_watch_history': {
-        'id': 'SERIAL PRIMARY KEY',
-        'user_id': 'BIGINT REFERENCES bot_users(user_id) ON DELETE CASCADE',
-        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
-        'last_watched_date': 'TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP',
-        '_unique_history': 'UNIQUE (user_id, video_id)'
-    },
-    'user_states': {
-        'user_id': 'BIGINT PRIMARY KEY REFERENCES bot_users(user_id) ON DELETE CASCADE',
-        'state': 'VARCHAR(255) NOT NULL',
-        'context': 'JSONB'
     }
 }
 
@@ -103,40 +58,26 @@ def verify_and_repair_schema():
 
     try:
         with conn.cursor() as c:
-            # First, create tables if they don't exist
             for table_name, columns in EXPECTED_SCHEMA.items():
-                c.execute("SELECT 1 FROM information_schema.tables WHERE table_name = %s", (table_name,))
-                if c.fetchone() is None:
-                    logger.warning(f"Table '{table_name}' not found. Creating it now.")
-                    cols_sql = ", ".join([f"{col_name} {col_def}" for col_name, col_def in columns.items()])
-                    create_table_query = sql.SQL("CREATE TABLE {} ({})").format(sql.Identifier(table_name), sql.SQL(cols_sql))
-                    c.execute(create_table_query)
-                    logger.info(f"Table '{table_name}' created successfully.")
-                else:
-                    # If table exists, check for missing columns
-                    for column_name, column_definition in columns.items():
-                        if column_name.startswith('_'): # Skip constraints defined as columns
-                            continue
-                        c.execute("""
-                            SELECT 1 FROM information_schema.columns 
-                            WHERE table_name = %s AND column_name = %s
-                        """, (table_name, column_name))
-                        if c.fetchone() is None:
-                            logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-                            alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                                sql.Identifier(table_name),
-                                sql.Identifier(column_name),
-                                sql.SQL(column_definition)
-                            )
-                            c.execute(alter_query)
-                            logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
-
+                logger.info(f"Checking table: {table_name}")
+                for column_name, column_definition in columns.items():
+                    if column_name.startswith('_'):
+                        continue
+                    c.execute("""
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = %s AND column_name = %s
+                    """, (table_name, column_name))
+                    if c.fetchone() is None:
+                        logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
+                        alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                            sql.Identifier(table_name),
+                            sql.Identifier(column_name),
+                            sql.SQL(column_definition)
+                        )
+                        c.execute(alter_query)
+                        logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
             conn.commit()
             logger.info("Schema verification and repair process completed successfully.")
-            
-            # After schema is stable, create indexes
-            create_indexes()
-
     except psycopg2.Error as e:
         logger.error(f"Schema verification error: {e}", exc_info=True)
         if conn: conn.rollback()
@@ -171,27 +112,7 @@ def execute_query(query, params=None, fetch=None, commit=False):
 # ==============================================================================
 # دالة بحث مطورة لتدعم الفلاتر المتقدمة
 # ==============================================================================
-def search_videos(query, page=0, category_id=None, quality=None, status=None, 
-                 date_from=None, date_to=None, duration_min=None, duration_max=None,
-                 file_size_min=None, file_size_max=None, sort_by='upload_date', sort_order='DESC'):
-    """
-    Advanced video search with multiple filters.
-    
-    Args:
-        query: Search term for caption and filename
-        page: Page number for pagination
-        category_id: Filter by category
-        quality: Filter by video quality (e.g., '720p', '1080p')
-        status: Filter by video status
-        date_from: Filter videos uploaded after this date (YYYY-MM-DD)
-        date_to: Filter videos uploaded before this date (YYYY-MM-DD)
-        duration_min: Minimum video duration in seconds
-        duration_max: Maximum video duration in seconds
-        file_size_min: Minimum file size in bytes
-        file_size_max: Maximum file size in bytes
-        sort_by: Sort field ('upload_date', 'view_count', 'rating')
-        sort_order: Sort order ('ASC' or 'DESC')
-    """
+def search_videos(query, page=0, category_id=None, quality=None, status=None):
     offset = page * VIDEOS_PER_PAGE
     search_term = f"%{query}%"
 
@@ -203,59 +124,18 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None,
         where_clauses.append("category_id = %s")
         params.append(category_id)
     if quality:
+        # البحث داخل حقل JSON
         where_clauses.append("metadata->>'quality_resolution' = %s")
         params.append(quality)
     if status:
+        # البحث داخل حقل JSON
         where_clauses.append("metadata->>'status' = %s")
         params.append(status)
-    if date_from:
-        where_clauses.append("upload_date >= %s")
-        params.append(date_from)
-    if date_to:
-        where_clauses.append("upload_date <= %s")
-        params.append(date_to)
-    if duration_min:
-        where_clauses.append("CAST(metadata->>'duration' AS INTEGER) >= %s")
-        params.append(duration_min)
-    if duration_max:
-        where_clauses.append("CAST(metadata->>'duration' AS INTEGER) <= %s")
-        params.append(duration_max)
-    if file_size_min:
-        where_clauses.append("CAST(metadata->>'file_size' AS BIGINT) >= %s")
-        params.append(file_size_min)
-    if file_size_max:
-        where_clauses.append("CAST(metadata->>'file_size' AS BIGINT) <= %s")
-        params.append(file_size_max)
 
     where_string = " AND ".join(where_clauses)
 
-    # بناء جملة ORDER BY
-    valid_sort_fields = {'upload_date': 'upload_date', 'view_count': 'view_count', 'rating': 'avg_rating'}
-    sort_field = valid_sort_fields.get(sort_by, 'upload_date')
-    sort_order = 'DESC' if sort_order.upper() == 'DESC' else 'ASC'
-    
-    if sort_by == 'rating':
-        # استعلام مع التقييمات
-        videos_query = f"""
-            SELECT v.*, COALESCE(r.avg_rating, 0) as avg_rating
-            FROM video_archive v
-            LEFT JOIN (
-                SELECT video_id, AVG(rating) as avg_rating
-                FROM video_ratings
-                GROUP BY video_id
-            ) r ON v.id = r.video_id
-            WHERE {where_string}
-            ORDER BY {sort_field} {sort_order}, v.id DESC
-            LIMIT %s OFFSET %s
-        """
-    else:
-        videos_query = f"""
-            SELECT * FROM video_archive 
-            WHERE {where_string} 
-            ORDER BY {sort_field} {sort_order}, id DESC 
-            LIMIT %s OFFSET %s
-        """
-    
+    # استعلام جلب الفيديوهات
+    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
     final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
     videos = execute_query(videos_query, final_params_videos, fetch="all")
 
@@ -265,51 +145,6 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None,
     total = execute_query(count_query, final_params_count, fetch="one")
 
     return videos, total['count'] if total else 0
-
-
-def get_videos_by_date_range(days_back=7, page=0):
-    """Gets videos uploaded within the specified number of days."""
-    offset = page * VIDEOS_PER_PAGE
-    query = """
-        SELECT * FROM video_archive 
-        WHERE upload_date >= CURRENT_DATE - INTERVAL '%s days'
-        ORDER BY upload_date DESC 
-        LIMIT %s OFFSET %s
-    """
-    videos = execute_query(query, (days_back, VIDEOS_PER_PAGE, offset), fetch="all")
-    
-    count_query = """
-        SELECT COUNT(*) as count FROM video_archive 
-        WHERE upload_date >= CURRENT_DATE - INTERVAL '%s days'
-    """
-    total = execute_query(count_query, (days_back,), fetch="one")
-    
-    return videos, total['count'] if total else 0
-
-
-def get_video_metadata_options():
-    """Gets available metadata options for filtering."""
-    quality_query = """
-        SELECT DISTINCT metadata->>'quality_resolution' as quality
-        FROM video_archive 
-        WHERE metadata->>'quality_resolution' IS NOT NULL
-        ORDER BY quality
-    """
-    
-    status_query = """
-        SELECT DISTINCT metadata->>'status' as status
-        FROM video_archive 
-        WHERE metadata->>'status' IS NOT NULL
-        ORDER BY status
-    """
-    
-    qualities = execute_query(quality_query, fetch="all")
-    statuses = execute_query(status_query, fetch="all")
-    
-    return {
-        'qualities': [q['quality'] for q in qualities if q['quality']],
-        'statuses': [s['status'] for s in statuses if s['status']]
-    }
 
 def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
     metadata_json = json.dumps(metadata)
@@ -432,250 +267,3 @@ def get_random_video():
     """Fetches a single random video from the database."""
     query = "SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1"
     return execute_query(query, fetch="one")
-
-
-def set_user_state(user_id, state, context=None):
-    """Sets or updates the state for a given user."""
-    # Ensure the user exists in bot_users first
-    execute_query(
-        "INSERT INTO bot_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
-        (user_id,),
-        commit=True
-    )
-    query = """
-        INSERT INTO user_states (user_id, state, context)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE
-        SET state = EXCLUDED.state, context = EXCLUDED.context;
-    """
-    params = (user_id, state, json.dumps(context) if context else None)
-    execute_query(query, params, commit=True)
-    logger.info(f"Set state for user {user_id} to '{state}' with context: {context}")
-
-
-def get_user_state(user_id):
-    """Retrieves the state for a given user."""
-    query = "SELECT state, context FROM user_states WHERE user_id = %s"
-    return execute_query(query, (user_id,), fetch="one")
-
-
-def clear_user_state(user_id):
-    """Clears the state for a given user."""
-    query = "DELETE FROM user_states WHERE user_id = %s"
-    execute_query(query, (user_id,), commit=True)
-    logger.info(f"Cleared state for user {user_id}")
-
-
-def add_to_favorites(user_id, video_id):
-    """Adds a video to user's favorites."""
-    # Ensure the user exists in bot_users first
-    execute_query(
-        "INSERT INTO bot_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
-        (user_id,),
-        commit=True
-    )
-    query = """
-        INSERT INTO user_favorites (user_id, video_id)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id, video_id) DO NOTHING
-    """
-    return execute_query(query, (user_id, video_id), commit=True)
-
-
-def remove_from_favorites(user_id, video_id):
-    """Removes a video from user's favorites."""
-    query = "DELETE FROM user_favorites WHERE user_id = %s AND video_id = %s"
-    return execute_query(query, (user_id, video_id), commit=True)
-
-
-def get_user_favorites(user_id, page=0):
-    """Gets user's favorite videos with pagination."""
-    offset = page * VIDEOS_PER_PAGE
-    query = """
-        SELECT v.*, f.added_date
-        FROM video_archive v
-        JOIN user_favorites f ON v.id = f.video_id
-        WHERE f.user_id = %s
-        ORDER BY f.added_date DESC
-        LIMIT %s OFFSET %s
-    """
-    videos = execute_query(query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    
-    count_query = "SELECT COUNT(*) as count FROM user_favorites WHERE user_id = %s"
-    total = execute_query(count_query, (user_id,), fetch="one")
-    
-    return videos, total['count'] if total else 0
-
-
-def is_video_favorite(user_id, video_id):
-    """Checks if a video is in user's favorites."""
-    query = "SELECT 1 FROM user_favorites WHERE user_id = %s AND video_id = %s"
-    result = execute_query(query, (user_id, video_id), fetch="one")
-    return result is not None
-
-
-def add_to_watch_history(user_id, video_id):
-    """Adds or updates a video in user's watch history."""
-    # Ensure the user exists in bot_users first
-    execute_query(
-        "INSERT INTO bot_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING",
-        (user_id,),
-        commit=True
-    )
-    query = """
-        INSERT INTO user_watch_history (user_id, video_id)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id, video_id) DO UPDATE
-        SET last_watched_date = CURRENT_TIMESTAMP
-    """
-    return execute_query(query, (user_id, video_id), commit=True)
-
-
-def get_user_watch_history(user_id, page=0):
-    """Gets user's watch history with pagination."""
-    offset = page * VIDEOS_PER_PAGE
-    query = """
-        SELECT v.*, h.last_watched_date
-        FROM video_archive v
-        JOIN user_watch_history h ON v.id = h.video_id
-        WHERE h.user_id = %s
-        ORDER BY h.last_watched_date DESC
-        LIMIT %s OFFSET %s
-    """
-    videos = execute_query(query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    
-    count_query = "SELECT COUNT(*) as count FROM user_watch_history WHERE user_id = %s"
-    total = execute_query(count_query, (user_id,), fetch="one")
-    
-    return videos, total['count'] if total else 0
-
-
-def get_last_watched_video(user_id):
-    """Gets the last video watched by the user."""
-    query = """
-        SELECT v.*, h.last_watched_date
-        FROM video_archive v
-        JOIN user_watch_history h ON v.id = h.video_id
-        WHERE h.user_id = %s
-        ORDER BY h.last_watched_date DESC
-        LIMIT 1
-    """
-    return execute_query(query, (user_id,), fetch="one")
-
-
-def get_recommended_videos(user_id, limit=10):
-    """Gets recommended videos for a user based on their history and ratings."""
-    # Simple recommendation based on:
-    # 1. Categories the user watches frequently
-    # 2. Highly rated videos in those categories
-    # 3. Popular videos overall
-    
-    query = """
-        WITH user_categories AS (
-            SELECT v.category_id, COUNT(*) as watch_count
-            FROM user_watch_history h
-            JOIN video_archive v ON h.video_id = v.id
-            WHERE h.user_id = %s AND v.category_id IS NOT NULL
-            GROUP BY v.category_id
-            ORDER BY watch_count DESC
-            LIMIT 3
-        ),
-        category_recommendations AS (
-            SELECT DISTINCT v.*, 
-                   COALESCE(r.avg_rating, 0) as avg_rating,
-                   v.view_count
-            FROM video_archive v
-            LEFT JOIN (
-                SELECT video_id, AVG(rating) as avg_rating
-                FROM video_ratings
-                GROUP BY video_id
-            ) r ON v.id = r.video_id
-            WHERE v.category_id IN (SELECT category_id FROM user_categories)
-            AND v.id NOT IN (
-                SELECT video_id FROM user_watch_history WHERE user_id = %s
-            )
-        ),
-        popular_recommendations AS (
-            SELECT DISTINCT v.*,
-                   COALESCE(r.avg_rating, 0) as avg_rating,
-                   v.view_count
-            FROM video_archive v
-            LEFT JOIN (
-                SELECT video_id, AVG(rating) as avg_rating
-                FROM video_ratings
-                GROUP BY video_id
-            ) r ON v.id = r.video_id
-            WHERE v.id NOT IN (
-                SELECT video_id FROM user_watch_history WHERE user_id = %s
-            )
-            ORDER BY v.view_count DESC, r.avg_rating DESC
-            LIMIT %s
-        )
-        SELECT * FROM category_recommendations
-        UNION ALL
-        SELECT * FROM popular_recommendations
-        ORDER BY avg_rating DESC, view_count DESC
-        LIMIT %s
-    """
-    return execute_query(query, (user_id, user_id, user_id, limit, limit), fetch="all")
-
-def create_indexes():
-    """Create indexes for the database to improve performance."""
-    logger.info("Creating database indexes if they don't exist...")
-    
-    # List of indexes to create: (table, index_name, columns, type)
-    indexes = [
-        ('video_archive', 'idx_video_archive_category_id', '(category_id)', 'BTREE'),
-        ('video_archive', 'idx_video_archive_view_count', '(view_count DESC)', 'BTREE'),
-        ('video_archive', 'idx_video_archive_upload_date', '(upload_date DESC)', 'BTREE'),
-        ('video_archive', 'idx_video_archive_grouping_key', '(grouping_key)', 'BTREE'),
-        ('video_archive', 'idx_video_archive_metadata', '(metadata)', 'GIN'), # For JSONB
-        ('categories', 'idx_categories_parent_id', '(parent_id)', 'BTREE'),
-        ('video_ratings', 'idx_video_ratings_video_user', '(video_id, user_id)', 'BTREE'),
-        ('user_favorites', 'idx_user_favorites_user_video', '(user_id, video_id)', 'BTREE'),
-        ('user_watch_history', 'idx_user_watch_history_user_video', '(user_id, video_id)', 'BTREE'),
-        ('video_archive', 'idx_video_archive_caption_trgm', 'USING gin(caption gin_trgm_ops)', ''), # For ILIKE
-        ('video_archive', 'idx_video_archive_filename_trgm', 'USING gin(file_name gin_trgm_ops)', '') # For ILIKE
-    ]
-
-    conn = get_db_connection()
-    if not conn:
-        logger.error("Cannot create indexes, no DB connection.")
-        return
-
-    try:
-        with conn.cursor() as c:
-            # Enable pg_trgm extension for faster ILIKE searches
-            c.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm;")
-            logger.info("Ensured pg_trgm extension is enabled.")
-
-            for table, index_name, columns, index_type in indexes:
-                # Check if the index already exists
-                c.execute("SELECT 1 FROM pg_class WHERE relname = %s;", (index_name,))
-                if c.fetchone():
-                    # logger.info(f"Index '{index_name}' already exists.")
-                    continue
-                
-                logger.info(f"Creating index '{index_name}' on table '{table}'.")
-                if index_type: # Handle BTREE and GIN
-                    query = sql.SQL("CREATE INDEX {} ON {} USING {} {}").format(
-                        sql.Identifier(index_name),
-                        sql.Identifier(table),
-                        sql.SQL(index_type),
-                        sql.SQL(columns)
-                    )
-                else: # Handle custom definitions like gin_trgm_ops
-                    query = sql.SQL("CREATE INDEX {} ON {} {}").format(
-                        sql.Identifier(index_name),
-                        sql.Identifier(table),
-                        sql.SQL(columns)
-                    )
-                c.execute(query)
-                logger.info(f"Index '{index_name}' created successfully.")
-            conn.commit()
-            logger.info("Finished creating indexes.")
-    except psycopg2.Error as e:
-        logger.error(f"Index creation failed: {e}", exc_info=True)
-        if conn: conn.rollback()
-    finally:
-        if conn: conn.close()
