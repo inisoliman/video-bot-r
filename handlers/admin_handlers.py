@@ -12,6 +12,7 @@ from db_manager import (
     delete_videos_by_ids, get_video_by_id
 )
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
+from state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +47,18 @@ def handle_add_new_category(message, bot):
 def handle_add_channel_step1(message, bot):
     if check_cancel(message, bot): return
     channel_id = message.text.strip()
-    admin_steps[message.chat.id] = {"channel_id": channel_id}
-    msg = bot.send_message(message.chat.id, "الآن أرسل اسم القناة (مثال: قناة الأفلام). (أو /cancel)")
-    bot.register_next_step_handler(msg, handle_add_channel_step2, bot)
+    state_manager.set_user_state(message.from_user.id, 'waiting_channel_name', {'channel_id': channel_id})
+    bot.send_message(message.chat.id, "الآن أرسل اسم القناة (مثال: قناة الأفلام). (أو /cancel)")
 
 def handle_add_channel_step2(message, bot):
     if check_cancel(message, bot): return
     channel_name = message.text.strip()
-    channel_id = admin_steps.pop(message.chat.id, {}).get("channel_id")
-    if not channel_id: return
+    user_state = state_manager.get_user_state(message.from_user.id)
+    if not user_state or not user_state.get('data', {}).get('channel_id'):
+        bot.send_message(message.chat.id, "❌ حدث خطأ في استرجاع معرف القناة.")
+        return
+    channel_id = user_state['data']['channel_id']
+    state_manager.clear_user_state(message.from_user.id)
     if add_required_channel(channel_id, channel_name):
         bot.send_message(message.chat.id, f"✅ تم إضافة القناة \"{channel_name}\" (ID: {channel_id}) كقناة مطلوبة.")
     else:
@@ -96,8 +100,8 @@ def handle_move_by_id_input(message, bot):
         video_id = int(message.text.strip())
         video = get_video_by_id(video_id)
         if not video:
-            msg = bot.reply_to(message, "عذراً، لا يوجد فيديو بهذا الرقم. حاول مرة أخرى أو أرسل /cancel.")
-            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
+            state_manager.set_user_state(message.from_user.id, 'waiting_video_id_move')
+            bot.reply_to(message, "عذراً، لا يوجد فيديو بهذا الرقم. حاول مرة أخرى أو أرسل /cancel.")
             return
         keyboard = create_categories_keyboard()
         if not keyboard.keyboard:
@@ -109,8 +113,8 @@ def handle_move_by_id_input(message, bot):
                 button.callback_data = f"admin::move_confirm::{video['id']}::{parts[1]}"
         bot.reply_to(message, f"اختر التصنيف الجديد لنقل الفيديو رقم {video_id}:", reply_markup=keyboard)
     except ValueError:
-        msg = bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
-        bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
+        state_manager.set_user_state(message.from_user.id, 'waiting_video_id_move')
+        bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
     except Exception as e:
         logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
         bot.reply_to(message, "حدث خطأ غير متوقع.")
@@ -119,6 +123,7 @@ def check_cancel(message, bot):
     if message.text == "/cancel":
         if message.chat.id in admin_steps:
             del admin_steps[message.chat.id]
+        state_manager.clear_user_state(message.from_user.id)
         bot.send_message(message.chat.id, "تم إلغاء العملية.")
         return True
     return False

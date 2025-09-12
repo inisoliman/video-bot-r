@@ -9,6 +9,7 @@ from db_manager import *
 from . import helpers
 from . import admin_handlers
 from update_metadata import run_update_and_report_progress
+from state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +128,8 @@ def register(bot, admin_ids):
                     bot.edit_message_text("اختر نوع التصنيف الذي تريد إضافته:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_main":
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": None}
-                    msg = bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_category_name', {'parent_id': None})
+                    bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
 
                 elif sub_action == "add_cat_sub_select_parent":
                     keyboard = helpers.create_categories_keyboard()
@@ -144,9 +144,8 @@ def register(bot, admin_ids):
 
                 elif sub_action == "add_cat_sub_set_parent":
                     parent_id = int(data[2])
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": parent_id}
-                    msg = bot.send_message(call.message.chat.id, "الآن أرسل اسم التصنيف الفرعي الجديد. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_category_name', {'parent_id': parent_id})
+                    bot.send_message(call.message.chat.id, "الآن أرسل اسم التصنيف الفرعي الجديد. (أو /cancel)")
 
                 elif sub_action == "delete_category_select":
                     keyboard = helpers.create_categories_keyboard()
@@ -199,12 +198,12 @@ def register(bot, admin_ids):
                     bot.edit_message_text("👍 تم إلغاء عملية حذف التصنيف.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "move_video_by_id":
-                    msg = bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) الذي تريد نقله. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_move_by_id_input, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_video_id_move')
+                    bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) الذي تريد نقله. (أو /cancel)")
 
                 elif sub_action == "delete_videos_by_ids":
-                    msg = bot.send_message(call.message.chat.id, "أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_video_ids_delete')
+                    bot.send_message(call.message.chat.id, "أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
 
                 elif sub_action == "move_confirm":
                     _, video_id, new_category_id = data
@@ -234,19 +233,19 @@ def register(bot, admin_ids):
                         bot.edit_message_text(f"✅ تم تفعيل التصنيف \"{category['name']}\" بنجاح.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "add_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_channel_step1, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_channel_id')
+                    bot.send_message(call.message.chat.id, "أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
 
                 elif sub_action == "remove_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_remove_channel_step, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_remove_channel_id')
+                    bot.send_message(call.message.chat.id, "أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
 
                 elif sub_action == "list_channels":
                     admin_handlers.handle_list_channels(call.message, bot)
 
                 elif sub_action == "broadcast":
-                    msg = bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد بثها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_rich_broadcast, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_broadcast_message')
+                    bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد بثها. (أو /cancel)")
 
                 elif sub_action == "sub_count":
                     count = get_subscriber_count()

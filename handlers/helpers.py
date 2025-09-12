@@ -59,6 +59,8 @@ def main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("🎬 عرض كل الفيديوهات"), KeyboardButton("🔥 الفيديوهات الشائعة"))
     markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
+    markup.add(KeyboardButton("⭐ المفضلة"), KeyboardButton("📺 سجل المشاهدة"))
+    markup.add(KeyboardButton("🎯 اقتراحات شخصية"))
     return markup
 
 def create_categories_keyboard(parent_id=None):
