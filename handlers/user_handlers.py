@@ -84,7 +84,7 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
     def handle_private_text(message):
-        user_state = state_manager.get_user_state(message.from_user.id)
+        user_state = state_manager.get_state(message.from_user.id)
         if user_state and user_state.get('state') == 'waiting_search_query':
             handle_private_text_search(message)
         else:

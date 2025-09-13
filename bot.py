@@ -7,6 +7,7 @@ import telebot
 import os
 import time
 import logging
+import gc
 from threading import Thread
 from telebot.apihelper import ApiTelegramException
 
@@ -42,26 +43,63 @@ except ValueError:
     logger.critical("FATAL ERROR: ADMIN_IDS contains non-integer values.")
     exit()
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+# تحسينات الأداء للبوت
+bot = telebot.TeleBot(
+    BOT_TOKEN, 
+    parse_mode='HTML',
+    threaded=True,
+    num_threads=8,
+    skip_pending=True
+)
 
 # --- دالة تشغيل البوت في خيط منفصل ---
 def run_bot_polling():
     logger.info("✅ Bot polling has started.")
+    retry_count = 0
+    max_retries = 5
+    
     while True:
         try:
-            bot.polling(non_stop=True)
+            # تنظيف الذاكرة قبل بدء التشغيل
+            gc.collect()
+            
+            bot.polling(
+                non_stop=True,
+                interval=0.5,  # تقليل فترة الاستعلام
+                timeout=20,    # زيادة timeout
+                long_polling_timeout=20,
+                restart_on_change=True
+            )
+            
         except ApiTelegramException as e:
             logger.error(f"Telegram API Error caught: {e.description}")
             if e.error_code == 409:
                 logger.warning("Conflict error (409): Another instance of the bot is likely running.")
                 time.sleep(60)
+                retry_count += 1
+            elif e.error_code == 429:  # Rate limiting
+                logger.warning("Rate limit exceeded. Waiting 60 seconds...")
+                time.sleep(60)
             else:
-                logger.info("A non-conflict API error occurred. Retrying in 30 seconds...")
-                time.sleep(30)
+                logger.info(f"API error occurred. Retrying in {min(30 * (retry_count + 1), 300)} seconds...")
+                time.sleep(min(30 * (retry_count + 1), 300))
+                retry_count += 1
+                
         except Exception as e:
             logger.error(f"An unexpected error occurred in the main polling loop: {e}", exc_info=True)
-            logger.info("Restarting in 15 seconds...")
-            time.sleep(15)
+            retry_count += 1
+            
+            if retry_count >= max_retries:
+                logger.critical("Maximum retry attempts reached. Resetting retry counter.")
+                retry_count = 0
+                time.sleep(300)  # انتظار 5 دقائق قبل إعادة المحاولة
+            else:
+                wait_time = min(15 * retry_count, 120)
+                logger.info(f"Restarting in {wait_time} seconds... (Attempt {retry_count}/{max_retries})")
+                time.sleep(wait_time)
+                
+        # تنظيف الذاكرة بعد كل خطأ
+        gc.collect()
 
 # --- دالة تشغيل البوت الرئيسية ---
 def main_bot_function():

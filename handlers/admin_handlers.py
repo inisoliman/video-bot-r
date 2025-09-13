@@ -53,7 +53,7 @@ def handle_add_channel_step1(message, bot):
 def handle_add_channel_step2(message, bot):
     if check_cancel(message, bot): return
     channel_name = message.text.strip()
-    user_state = state_manager.get_user_state(message.from_user.id)
+    user_state = state_manager.get_state(message.from_user.id)
     if not user_state or not user_state.get('data', {}).get('channel_id'):
         bot.send_message(message.chat.id, "❌ حدث خطأ في استرجاع معرف القناة.")
         return

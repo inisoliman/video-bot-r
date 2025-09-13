@@ -18,7 +18,7 @@ def register_admin_message_handler(bot, admin_ids):
     
     @bot.message_handler(func=lambda message: message.from_user.id in admin_ids and message.chat.type == "private" and not message.text.startswith("/"))
     def handle_admin_messages(message):
-        user_state = state_manager.get_user_state(message.from_user.id)
+        user_state = state_manager.get_state(message.from_user.id)
         
         if not user_state:
             return  # No state, let other handlers process this message
