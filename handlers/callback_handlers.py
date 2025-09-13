@@ -9,6 +9,7 @@ from db_manager import *
 from . import helpers
 from . import admin_handlers
 from update_metadata import run_update_and_report_progress
+from state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +128,8 @@ def register(bot, admin_ids):
                     bot.edit_message_text("اختر نوع التصنيف الذي تريد إضافته:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_main":
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": None}
-                    msg = bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_category_name', {'parent_id': None})
+                    bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
 
                 elif sub_action == "add_cat_sub_select_parent":
                     keyboard = helpers.create_categories_keyboard()
@@ -144,9 +144,8 @@ def register(bot, admin_ids):
 
                 elif sub_action == "add_cat_sub_set_parent":
                     parent_id = int(data[2])
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": parent_id}
-                    msg = bot.send_message(call.message.chat.id, "الآن أرسل اسم التصنيف الفرعي الجديد. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_category_name', {'parent_id': parent_id})
+                    bot.send_message(call.message.chat.id, "الآن أرسل اسم التصنيف الفرعي الجديد. (أو /cancel)")
 
                 elif sub_action == "delete_category_select":
                     keyboard = helpers.create_categories_keyboard()
@@ -199,12 +198,12 @@ def register(bot, admin_ids):
                     bot.edit_message_text("👍 تم إلغاء عملية حذف التصنيف.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "move_video_by_id":
-                    msg = bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) الذي تريد نقله. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_move_by_id_input, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_video_id_move')
+                    bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) الذي تريد نقله. (أو /cancel)")
 
                 elif sub_action == "delete_videos_by_ids":
-                    msg = bot.send_message(call.message.chat.id, "أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_video_ids_delete')
+                    bot.send_message(call.message.chat.id, "أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
 
                 elif sub_action == "move_confirm":
                     _, video_id, new_category_id = data
@@ -234,19 +233,19 @@ def register(bot, admin_ids):
                         bot.edit_message_text(f"✅ تم تفعيل التصنيف \"{category['name']}\" بنجاح.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "add_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_channel_step1, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_channel_id')
+                    bot.send_message(call.message.chat.id, "أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
 
                 elif sub_action == "remove_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_remove_channel_step, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_remove_channel_id')
+                    bot.send_message(call.message.chat.id, "أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
 
                 elif sub_action == "list_channels":
                     admin_handlers.handle_list_channels(call.message, bot)
 
                 elif sub_action == "broadcast":
-                    msg = bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد بثها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_rich_broadcast, bot)
+                    state_manager.set_user_state(call.from_user.id, 'waiting_broadcast_message')
+                    bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد بثها. (أو /cancel)")
 
                 elif sub_action == "sub_count":
                     count = get_subscriber_count()
@@ -303,6 +302,7 @@ def register(bot, admin_ids):
             elif action == "video":
                 _, video_id, message_id, chat_id = data
                 increment_video_view_count(int(video_id))
+                add_to_watch_history(user_id, int(video_id))  # Add to watch history
                 try:
                     bot.copy_message(call.message.chat.id, chat_id, int(message_id))
                     rating_keyboard = helpers.create_video_action_keyboard(int(video_id), user_id)
@@ -320,6 +320,57 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, f"تم تقييم الفيديو بـ {rating} نجوم!")
                 else:
                     bot.answer_callback_query(call.id, "حدث خطأ في التقييم.")
+
+            elif action == "add_favorite":
+                video_id = int(data[1])
+                if add_to_favorites(user_id, video_id):
+                    new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
+                    bot.answer_callback_query(call.id, "✅ تم إضافة الفيديو للمفضلة!")
+                else:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في إضافة الفيديو للمفضلة.")
+
+            elif action == "remove_favorite":
+                video_id = int(data[1])
+                if remove_from_favorites(user_id, video_id):
+                    new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
+                    bot.answer_callback_query(call.id, "❌ تم إزالة الفيديو من المفضلة!")
+                else:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في إزالة الفيديو من المفضلة.")
+
+            elif action == "favorites":
+                _, context_id, page_str = data
+                page = int(page_str)
+                favorites, total_count = get_user_favorites(user_id, page)
+                if favorites:
+                    keyboard = helpers.create_paginated_keyboard(favorites, total_count, page, "favorites", "user")
+                    bot.edit_message_text(f"⭐ المفضلة ({total_count} فيديو):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا توجد فيديوهات في قائمة المفضلة.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+
+            elif action == "history":
+                _, context_id, page_str = data
+                page = int(page_str)
+                history, total_count = get_user_watch_history(user_id, page)
+                if history:
+                    keyboard = helpers.create_paginated_keyboard(history, total_count, page, "history", "user")
+                    bot.edit_message_text(f"📺 سجل المشاهدة ({total_count} فيديو):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا يوجد سجل مشاهدة.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+
+            elif action == "recommendations":
+                _, context_id, page_str = data
+                page = int(page_str)
+                recommendations = get_recommended_videos(user_id, limit=10)
+                if recommendations:
+                    keyboard = helpers.create_paginated_keyboard(recommendations, len(recommendations), page, "recommendations", "user")
+                    bot.edit_message_text("🎯 اقتراحات شخصية لك:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا توجد اقتراحات متاحة حالياً.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
 
             elif action == "cat":
                 _, category_id_str, page_str = data

@@ -15,6 +15,7 @@ from .helpers import (
     check_subscription, list_videos
 )
 from utils import extract_video_metadata
+from state_manager import state_manager
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text == "🔍 بحث")
     def handle_search_button(message):
-        msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
-        bot.register_next_step_handler(msg, handle_private_text_search)
+        state_manager.set_user_state(message.from_user.id, 'waiting_search_query')
+        bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
 
     @bot.message_handler(func=lambda message: message.text == "🍿 اقترح لي فيلم")
     def handle_random_suggestion(message):
@@ -70,7 +71,6 @@ def register(bot, channel_id, admin_ids):
         else:
             bot.reply_to(message, "لا توجد فيديوهات في قاعدة البيانات حالياً.")
 
-    @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
     def handle_private_text_search(message):
         query = message.text.strip()
         user_last_search[message.chat.id] = {'query': query}
@@ -79,13 +79,23 @@ def register(bot, channel_id, admin_ids):
             InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
             InlineKeyboardButton("⚙️ بحث متقدم", callback_data="search_type::advanced")
         )
+        state_manager.clear_user_state(message.from_user.id)
         bot.reply_to(message, f"اختر نوع البحث عن \"{query}\":", reply_markup=keyboard)
+
+    @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
+    def handle_private_text(message):
+        user_state = state_manager.get_state(message.from_user.id)
+        if user_state and user_state.get('state') == 'waiting_search_query':
+            handle_private_text_search(message)
+        else:
+            # Handle as regular message or show help
+            bot.reply_to(message, "استخدم الأزرار أو الأوامر للتفاعل مع البوت.", reply_markup=main_menu())
 
     @bot.message_handler(commands=["search"])
     def handle_search_command(message):
         if message.chat.type == "private":
-            msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث:")
-            bot.register_next_step_handler(msg, handle_private_text_search)
+            state_manager.set_user_state(message.from_user.id, 'waiting_search_query')
+            bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث:")
         else:
             if len(message.text.split()) > 1:
                 query = " ".join(message.text.split()[1:])

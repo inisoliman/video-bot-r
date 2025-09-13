@@ -1,40 +1,25 @@
 # ==============================================================================
 # ملف: requirements.txt
 # الوصف: هذا الملف يحتوي على المكتبات التي يحتاجها المشروع.
-# تم تحديث الإصدارات لتحسين الأداء والاستقرار
+# محسن للعمل على منصة Render
 # ==============================================================================
 
 # Core Bot Framework
-pyTelegramBotAPI>=4.14.0
+pyTelegramBotAPI==4.14.0
 
 # Database
-psycopg2-binary>=2.9.7
-
-# Media Processing
-pymediainfo>=6.0.1
+psycopg2-binary==2.9.7
 
 # Web Server
-Flask>=2.3.3
-Werkzeug>=2.3.7
+Flask==2.3.3
+Werkzeug==2.3.7
 
 # System Monitoring
-psutil>=5.9.5
+psutil==5.9.5
 
 # Utilities
-requests>=2.31.0
-urllib3>=2.0.4
-
-# Performance & Caching
-redis>=4.6.0
-
-# Async Support (optional but recommended)
-aiohttp>=3.8.5
-
-# Logging & Monitoring
-loguru>=0.7.0
+requests==2.31.0
+urllib3==2.0.4
 
 # Date/Time handling
-python-dateutil>=2.8.2
-
-# JSON handling improvements
-orjson>=3.9.5
+python-dateutil==2.8.2

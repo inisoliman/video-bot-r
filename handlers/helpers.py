@@ -59,6 +59,8 @@ def main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("🎬 عرض كل الفيديوهات"), KeyboardButton("🔥 الفيديوهات الشائعة"))
     markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
+    markup.add(KeyboardButton("⭐ المفضلة"), KeyboardButton("📺 سجل المشاهدة"))
+    markup.add(KeyboardButton("🎯 اقتراحات شخصية"))
     return markup
 
 def create_categories_keyboard(parent_id=None):
@@ -153,13 +155,26 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
     return keyboard
 
 def create_video_action_keyboard(video_id, user_id):
+    from db_manager import is_video_favorite
     keyboard = InlineKeyboardMarkup(row_width=5)
+    
+    # Rating buttons
     user_rating = get_user_video_rating(video_id, user_id)
     buttons = [InlineKeyboardButton("⭐" if user_rating == i else "☆", callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
     keyboard.add(*buttons)
+    
+    # Favorite button
+    is_favorite = is_video_favorite(user_id, video_id)
+    if is_favorite:
+        keyboard.add(InlineKeyboardButton("💔 إزالة من المفضلة", callback_data=f"remove_favorite::{video_id}"))
+    else:
+        keyboard.add(InlineKeyboardButton("❤️ إضافة للمفضلة", callback_data=f"add_favorite::{video_id}"))
+    
+    # Rating stats
     stats = get_video_rating_stats(video_id)
     if stats and stats.get('avg') is not None:
         keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"))
+    
     return keyboard
 
 def generate_grouping_key(metadata, caption, file_name):
