@@ -43,6 +43,10 @@ class StateManager:
             }
         return None
     
+    def get_user_state(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Alias for get_state method for backward compatibility."""
+        return self.get_state(user_id)
+    
     def clear_state(self, user_id: int):
         """Clear user state."""
         clear_user_state(user_id)

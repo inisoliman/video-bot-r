@@ -302,6 +302,7 @@ def register(bot, admin_ids):
             elif action == "video":
                 _, video_id, message_id, chat_id = data
                 increment_video_view_count(int(video_id))
+                add_to_watch_history(user_id, int(video_id))  # Add to watch history
                 try:
                     bot.copy_message(call.message.chat.id, chat_id, int(message_id))
                     rating_keyboard = helpers.create_video_action_keyboard(int(video_id), user_id)
@@ -319,6 +320,57 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, f"تم تقييم الفيديو بـ {rating} نجوم!")
                 else:
                     bot.answer_callback_query(call.id, "حدث خطأ في التقييم.")
+
+            elif action == "add_favorite":
+                video_id = int(data[1])
+                if add_to_favorites(user_id, video_id):
+                    new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
+                    bot.answer_callback_query(call.id, "✅ تم إضافة الفيديو للمفضلة!")
+                else:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في إضافة الفيديو للمفضلة.")
+
+            elif action == "remove_favorite":
+                video_id = int(data[1])
+                if remove_from_favorites(user_id, video_id):
+                    new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
+                    bot.answer_callback_query(call.id, "❌ تم إزالة الفيديو من المفضلة!")
+                else:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في إزالة الفيديو من المفضلة.")
+
+            elif action == "favorites":
+                _, context_id, page_str = data
+                page = int(page_str)
+                favorites, total_count = get_user_favorites(user_id, page)
+                if favorites:
+                    keyboard = helpers.create_paginated_keyboard(favorites, total_count, page, "favorites", "user")
+                    bot.edit_message_text(f"⭐ المفضلة ({total_count} فيديو):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا توجد فيديوهات في قائمة المفضلة.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+
+            elif action == "history":
+                _, context_id, page_str = data
+                page = int(page_str)
+                history, total_count = get_user_watch_history(user_id, page)
+                if history:
+                    keyboard = helpers.create_paginated_keyboard(history, total_count, page, "history", "user")
+                    bot.edit_message_text(f"📺 سجل المشاهدة ({total_count} فيديو):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا يوجد سجل مشاهدة.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
+
+            elif action == "recommendations":
+                _, context_id, page_str = data
+                page = int(page_str)
+                recommendations = get_recommended_videos(user_id, limit=10)
+                if recommendations:
+                    keyboard = helpers.create_paginated_keyboard(recommendations, len(recommendations), page, "recommendations", "user")
+                    bot.edit_message_text("🎯 اقتراحات شخصية لك:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا توجد اقتراحات متاحة حالياً.", call.message.chat.id, call.message.message_id)
+                bot.answer_callback_query(call.id)
 
             elif action == "cat":
                 _, category_id_str, page_str = data
