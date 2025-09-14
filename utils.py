@@ -95,18 +95,17 @@ def get_video_info(file_path):
     """استخلاص معلومات الفيديو باستخدام MediaInfo."""
     try:
         media_info = MediaInfo.parse(file_path)
-        video_track = None
-        for track in media_info.tracks:
-            if track.track_type == 'Video':
-                video_track = track
-                break
-        
+        video_track = next((t for t in media_info.tracks if t.track_type == 'Video'), None)
+
         if video_track:
+            duration_ms = video_track.duration
+            duration_seconds = duration_ms / 1000 if duration_ms else 0
+
             return {
-                "duration": int(float(video_track.duration or 0) / 1000),  # تحويل من ميلي ثانية إلى ثانية
-                "width": video_track.width or 0,
-                "height": video_track.height or 0,
-                "file_size": video_track.file_size or 0
+                "duration": duration_seconds,
+                "width": video_track.width,
+                "height": video_track.height,
+                "file_size": video_track.stream_size
             }
     except Exception as e:
         logger.error(f"Could not get video info for {file_path}. Error: {e}")

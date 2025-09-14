@@ -1,29 +1,9 @@
 # ==============================================================================
 # ملف: requirements.txt
 # الوصف: هذا الملف يحتوي على المكتبات التي يحتاجها المشروع.
-# محسن للعمل على منصة Render
 # ==============================================================================
 
-# Core Bot Framework
-pyTelegramBotAPI==4.14.0
-
-# Database
+pyTelegramBotAPI
 psycopg2-binary
-
-# Web Server
-Flask==2.3.3
-Werkzeug==2.3.7
-
-# System Monitoring
-psutil==5.9.5
-
-# Utilities
-requests==2.31.0
-urllib3==2.0.4
-
-# Date/Time handling
-python-dateutil==2.8.2
-
-# Media Information
-pymediainfo==6.0.1
-
+pymediainfo
+Flask
