@@ -7,7 +7,7 @@ echo "🚀 Starting build process..."
 # 1. Install system dependencies
 echo "🔧 Installing system dependencies..."
 apt-get update
-apt-get install -y ffmpeg
+
 
 # 2. Upgrade pip and install wheel for faster builds
 echo "⚡ Upgrading pip and installing build tools..."
