@@ -1,7 +1,7 @@
 # utils.py
 
 import re
-import os
+from pymediainfo import MediaInfo
 import logging
 
 # إعداد المسجل (logger) لهذا الملف
@@ -92,15 +92,21 @@ def extract_video_metadata(caption, file_name=""):
     return metadata
 
 def get_video_info(file_path):
-    """استخلاص معلومات الفيديو الأساسية."""
+    """استخلاص معلومات الفيديو باستخدام MediaInfo."""
     try:
-        if os.path.exists(file_path):
-            file_size = os.path.getsize(file_path)
+        media_info = MediaInfo.parse(file_path)
+        video_track = None
+        for track in media_info.tracks:
+            if track.track_type == 'Video':
+                video_track = track
+                break
+        
+        if video_track:
             return {
-                "duration": 0,  # سيتم تحديثه لاحقاً إذا لزم الأمر
-                "width": 0,
-                "height": 0,
-                "file_size": file_size
+                "duration": int(float(video_track.duration or 0) / 1000),  # تحويل من ميلي ثانية إلى ثانية
+                "width": video_track.width or 0,
+                "height": video_track.height or 0,
+                "file_size": video_track.file_size or 0
             }
     except Exception as e:
         logger.error(f"Could not get video info for {file_path}. Error: {e}")
