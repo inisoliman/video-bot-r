@@ -234,6 +234,16 @@ def get_popular_videos():
     """, fetch="all")
     return {"most_viewed": most_viewed, "highest_rated": highest_rated}
 
+# --- دوال الفيديو (مطلوبة لـ user_handlers) ---
+
+def increment_video_view_count(video_id):
+    """زيادة عداد المشاهدات لفيديو معين."""
+    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
+
+def get_video_by_message_id(message_id):
+    """جلب فيديو عن طريق معرف الرسالة (message_id)."""
+    return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
+
 # [باقي الدوال الضرورية لـ db_manager.py]
 def set_active_category_id(category_id):
     return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES (%s, %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", 
