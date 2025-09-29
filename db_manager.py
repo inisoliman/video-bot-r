@@ -213,6 +213,26 @@ def get_categories_tree():
     # تم تبسيط هذه الدالة للتركيز على استرجاع التصنيفات الرئيسية
     return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
 
+# --- دوال الفيديو (لإضافة الفيديوهات) [تم إضافتها] ---
+def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
+    """إضافة/تحديث فيديو في الأرشيف."""
+    metadata_json = json.dumps(metadata)
+    query = """
+        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (message_id) DO UPDATE SET
+            caption = EXCLUDED.caption,
+            file_name = EXCLUDED.file_name,
+            file_id = EXCLUDED.file_id,
+            metadata = EXCLUDED.metadata,
+            grouping_key = EXCLUDED.grouping_key,
+            category_id = EXCLUDED.category_id
+        RETURNING id
+    """
+    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
+    result = execute_query(query, params, fetch="one", commit=True)
+    return result['id'] if result and result.get('id') else None
+
 # --- دوال الإحصائيات (مطلوبة لـ admin_handlers) ---
 
 def get_bot_stats():
