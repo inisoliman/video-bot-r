@@ -39,201 +39,376 @@ EXPECTED_SCHEMA = {
         'view_count': 'INTEGER DEFAULT 0',
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT'
+    },
+    'categories': {
+        'id': 'SERIAL PRIMARY KEY',
+        'name': 'TEXT NOT NULL',
+        'parent_id': 'INTEGER REFERENCES categories(id) ON DELETE CASCADE',
+        'full_path': 'TEXT NOT NULL' # هذا هو العمود الذي سبب المشكلة
+    },
+    'bot_users': {
+        'user_id': 'BIGINT PRIMARY KEY',
+        'username': 'TEXT',
+        'first_name': 'TEXT',
+        'join_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+    },
+    'bot_settings': {
+        'setting_key': 'TEXT PRIMARY KEY',
+        'setting_value': 'TEXT'
+    },
+    'required_channels': {
+        'id': 'SERIAL PRIMARY KEY',
+        'channel_id': 'TEXT UNIQUE NOT NULL',
+        'channel_name': 'TEXT'
+    },
+    'video_ratings': {
+        'id': 'SERIAL PRIMARY KEY',
+        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
+        'user_id': 'BIGINT',
+        'rating': 'INTEGER NOT NULL',
+        'rating_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+    },
+    'user_states': {
+        'user_id': 'BIGINT PRIMARY KEY',
+        'state': 'TEXT NOT NULL',
+        'context': 'JSONB',
+        'last_update': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
     }
 }
 
 def get_db_connection():
+    """تأسيس اتصال قاعدة البيانات"""
     try:
-        return psycopg2.connect(**DB_CONFIG)
-    except psycopg2.OperationalError as e:
+        conn = psycopg2.connect(**DB_CONFIG)
+        return conn
+    except Exception as e:
         logger.error(f"Database connection failed: {e}")
         return None
 
+def execute_query(query, params=None, fetch="none", commit=False):
+    """تنفيذ استعلام قاعدة بيانات مع التعامل مع الأخطاء."""
+    conn = get_db_connection()
+    if conn is None:
+        return None
+
+    try:
+        # استخدام DictCursor لجعل النتائج قابلة للقراءة كقواميس
+        with conn.cursor(cursor_factory=DictCursor) as c:
+            c.execute(query, params)
+            
+            if commit:
+                conn.commit()
+            
+            if fetch == "one":
+                result = c.fetchone()
+                return dict(result) if result else None
+            elif fetch == "all":
+                results = c.fetchall()
+                # تحويل صفوف DictRow إلى قائمة قواميس عادية
+                return [dict(row) for row in results]
+            return True
+
+    except psycopg2.errors.NotNullViolation as e:
+        logger.error(f"Database query failed. Error: {e}", exc_info=True)
+        if conn: conn.rollback()
+        return None
+    except Exception as e:
+        logger.error(f"Database query failed. Error: {e}", exc_info=True)
+        if conn: conn.rollback()
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+# --- دالة فحص وتصحيح المخطط (Schema) ---
 def verify_and_repair_schema():
-    logger.info("Verifying and repairing database schema...")
     conn = get_db_connection()
     if not conn:
-        logger.critical("Cannot verify schema, no DB connection.")
+        logger.critical("Could not verify schema: No database connection.")
         return
-
+    
     try:
         with conn.cursor() as c:
             for table_name, columns in EXPECTED_SCHEMA.items():
-                logger.info(f"Checking table: {table_name}")
-                for column_name, column_definition in columns.items():
-                    if column_name.startswith('_'):
-                        continue
-                    c.execute("""
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = %s AND column_name = %s
-                    """, (table_name, column_name))
-                    if c.fetchone() is None:
-                        logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-                        alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                            sql.Identifier(table_name),
-                            sql.Identifier(column_name),
-                            sql.SQL(column_definition)
-                        )
-                        c.execute(alter_query)
-                        logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
-            conn.commit()
-            logger.info("Schema verification and repair process completed successfully.")
-    except psycopg2.Error as e:
-        logger.error(f"Schema verification error: {e}", exc_info=True)
+                logger.info(f"Verifying table: {table_name}")
+                
+                # 1. التحقق من وجود الجدول
+                c.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{table_name}');")
+                if not c.fetchone()[0]:
+                    logger.warning(f"Table {table_name} missing. Creating...")
+                    cols_def = ', '.join([f'{col} {dtype}' for col, dtype in columns.items()])
+                    c.execute(f"CREATE TABLE {table_name} ({cols_def})")
+                    logger.info(f"Table {table_name} created successfully.")
+                    conn.commit()
+                    continue
+
+                # 2. التحقق من الأعمدة المفقودة
+                for col_name, col_type in columns.items():
+                    try:
+                        c.execute(f"SELECT data_type FROM information_schema.columns WHERE table_name = '{table_name}' AND column_name = '{col_name}'")
+                        if c.fetchone() is None:
+                            logger.warning(f"Column {col_name} in {table_name} missing. Adding...")
+                            
+                            # يجب استثناء قيود المفاتيح الأجنبية عند الإضافة
+                            col_def_without_fk = col_type.split('REFERENCES')[0].strip()
+                            
+                            # استخدام PostgreSQL ALTER TABLE ADD COLUMN
+                            c.execute(sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                                sql.Identifier(table_name),
+                                sql.Identifier(col_name),
+                                sql.SQL(col_def_without_fk)
+                            ))
+                            logger.info(f"Column {col_name} added to {table_name}.")
+                            conn.commit()
+                    except Exception as e:
+                        logger.error(f"Error adding column {col_name} to {table_name}: {e}")
+                        conn.rollback()
+
+    except Exception as e:
+        logger.critical(f"FATAL SCHEMA ERROR: {e}")
         if conn: conn.rollback()
     finally:
-        if conn: conn.close()
+        if conn:
+            conn.close()
 
 
-def execute_query(query, params=None, fetch=None, commit=False):
-    conn = get_db_connection()
-    if not conn:
-        if fetch == "all": return []
-        return None if fetch else False
-
-    result = None
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as c:
-            c.execute(query, params)
-            if fetch == "one": result = c.fetchone()
-            elif fetch == "all": result = c.fetchall()
-            if commit:
-                conn.commit()
-                if fetch is None: result = True
-    except psycopg2.Error as e:
-        logger.error(f"Database query failed. Error: {e}", exc_info=True)
-        if conn: conn.rollback()
-        if fetch == "all": return []
-        return None if fetch else False
-    finally:
-        if conn: conn.close()
-    return result
-
-# ==============================================================================
-# دالة بحث مطورة لتدعم الفلاتر المتقدمة
-# ==============================================================================
-def search_videos(query, page=0, category_id=None, quality=None, status=None):
-    offset = page * VIDEOS_PER_PAGE
-    search_term = f"%{query}%"
-
-    # بناء جملة WHERE بشكل ديناميكي
-    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
-    params = [search_term, search_term]
-
-    if category_id:
-        where_clauses.append("category_id = %s")
-        params.append(category_id)
-    if quality:
-        # البحث داخل حقل JSON
-        where_clauses.append("metadata->>'quality_resolution' = %s")
-        params.append(quality)
-    if status:
-        # البحث داخل حقل JSON
-        where_clauses.append("metadata->>'status' = %s")
-        params.append(status)
-
-    where_string = " AND ".join(where_clauses)
-
-    # استعلام جلب الفيديوهات
-    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
-    final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
-    videos = execute_query(videos_query, final_params_videos, fetch="all")
-
-    # استعلام جلب العدد الإجمالي
-    count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
-    final_params_count = tuple(params)
-    total = execute_query(count_query, final_params_count, fetch="one")
-
-    return videos, total['count'] if total else 0
-
-def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    metadata_json = json.dumps(metadata)
-    query = """
-        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (message_id) DO UPDATE SET
-            caption = EXCLUDED.caption,
-            file_name = EXCLUDED.file_name,
-            file_id = EXCLUDED.file_id,
-            metadata = EXCLUDED.metadata,
-            grouping_key = EXCLUDED.grouping_key,
-            category_id = EXCLUDED.category_id
-        RETURNING id
-    """
-    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
-    result = execute_query(query, params, fetch="one", commit=True)
-    return result['id'] if result else None
-
-def get_categories_tree():
-    return execute_query("SELECT * FROM categories ORDER BY name", fetch="all")
-
-def get_child_categories(parent_id):
-    if parent_id is None:
-        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
-    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
-
-def get_category_by_id(category_id):
-    return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
-
-def add_category(name, parent_id=None):
-    res = execute_query("INSERT INTO categories (name, parent_id) VALUES (%s, %s) RETURNING id", (name, parent_id), fetch="one", commit=True)
-    return (True, res) if res else (False, "Failed to add category")
-
-def get_videos(category_id, page=0):
-    offset = page * VIDEOS_PER_PAGE
-    videos = execute_query("SELECT * FROM video_archive WHERE category_id = %s ORDER BY id DESC LIMIT %s OFFSET %s", (category_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    total = execute_query("SELECT COUNT(*) as count FROM video_archive WHERE category_id = %s", (category_id,), fetch="one")
-    return videos, total['count'] if total else 0
-
-def increment_video_view_count(video_id):
-    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
-
-def get_video_by_message_id(message_id):
-    return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
-
-def get_active_category_id():
-    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
-    return int(res['setting_value']) if res else None
+# --- دوال التعامل مع المستخدمين والحالة ---
 
 def set_active_category_id(category_id):
-    return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('active_category_id', %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", (str(category_id),), commit=True)
+    """تخزين آخر تصنيف نشط (مستخدم لتحميل الفيديوهات)."""
+    return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES (%s, %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", 
+                         ('active_category_id', str(category_id)), commit=True)
 
-def add_video_rating(video_id, user_id, rating):
-    return execute_query("INSERT INTO video_ratings (video_id, user_id, rating) VALUES (%s, %s, %s) ON CONFLICT (video_id, user_id) DO UPDATE SET rating = EXCLUDED.rating", (video_id, user_id, rating), commit=True)
-
-def get_video_rating_stats(video_id):
-    return execute_query("SELECT AVG(rating) as avg, COUNT(id) as count FROM video_ratings WHERE video_id = %s", (video_id,), fetch="one")
-
-def get_user_video_rating(video_id, user_id):
-    res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
-    return res['rating'] if res else None
-
-def get_popular_videos():
-    most_viewed = execute_query("SELECT * FROM video_archive ORDER BY view_count DESC, id DESC LIMIT 10", fetch="all")
-    highest_rated = execute_query("SELECT v.*, r.avg_rating FROM video_archive v JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r ON v.id = r.video_id ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10", fetch="all")
-    return {"most_viewed": most_viewed, "highest_rated": highest_rated}
+def get_active_category_id():
+    """الحصول على آخر تصنيف نشط."""
+    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
+    return int(res['setting_value']) if res and res.get('setting_value') else None
 
 def add_bot_user(user_id, username, first_name):
-    execute_query("INSERT INTO bot_users (user_id, username, first_name) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, username, first_name), commit=True)
+    return execute_query("INSERT INTO bot_users (user_id, username, first_name) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING", 
+                         (user_id, username, first_name), commit=True)
 
 def get_all_user_ids():
     res = execute_query("SELECT user_id FROM bot_users", fetch="all")
-    return [r['user_id'] for r in res] if res else []
+    return [row['user_id'] for row in res] if res else []
 
 def get_subscriber_count():
-    res = execute_query("SELECT COUNT(*) as count FROM bot_users", fetch="one")
+    res = execute_query("SELECT COUNT(*) FROM bot_users", fetch="one")
     return res['count'] if res else 0
 
-def get_bot_stats():
-    stats = {}
-    stats['video_count'] = (execute_query("SELECT COUNT(*) as count FROM video_archive", fetch="one") or {'count': 0})['count']
-    stats['category_count'] = (execute_query("SELECT COUNT(*) as count FROM categories", fetch="one") or {'count': 0})['count']
-    stats['total_views'] = (execute_query("SELECT SUM(view_count) as sum FROM video_archive", fetch="one") or {'sum': 0})['sum'] or 0
-    stats['total_ratings'] = (execute_query("SELECT COUNT(*) as count FROM video_ratings", fetch="one") or {'count': 0})['count']
-    return stats
+# دوال إدارة حالة المستخدم (User State)
+def set_user_state(user_id, state, context):
+    context_json = json.dumps(context) if context else None
+    return execute_query("INSERT INTO user_states (user_id, state, context) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET state = EXCLUDED.state, context = EXCLUDED.context, last_update = CURRENT_TIMESTAMP", 
+                         (user_id, state, context_json), commit=True)
+
+def get_user_state(user_id):
+    res = execute_query("SELECT state, context FROM user_states WHERE user_id = %s", (user_id,), fetch="one")
+    if res and res.get('context'):
+        res['context'] = json.loads(res['context'])
+    return res
+
+def clear_user_state(user_id):
+    return execute_query("DELETE FROM user_states WHERE user_id = %s", (user_id,), commit=True)
+
+# --- دوال التعامل مع التصنيفات (Categories) ---
+
+def get_category_by_id(category_id):
+    """الحصول على بيانات تصنيف معين بواسطة المعرف."""
+    return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
+
+def get_categories_tree(parent_id=None):
+    """الحصول على التصنيفات الفرعية لتصنيف معين."""
+    if parent_id is None:
+        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY id", fetch="all")
+    else:
+        return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY id", (parent_id,), fetch="all")
+
+def get_child_categories(category_id):
+    """الحصول على التصنيفات الفرعية لتصنيف معين."""
+    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY id", (category_id,), fetch="all")
+
+
+def add_category(name, parent_id=None):
+    """
+    [الإصلاح هنا] تضيف تصنيفاً جديداً مع حساب قيمة full_path.
+    """
+    full_path = name
+    
+    if parent_id is not None:
+        # نحصل على بيانات التصنيف الأب لحساب full_path
+        parent_category = get_category_by_id(parent_id)
+        
+        if parent_category:
+            # نستخدم full_path الخاص بالأب ثم نضيف اسم الابن
+            # إذا كان full_path الخاص بالأب غير موجود لسبب ما، نستخدم اسمه كبديل (كإجراء أمان)
+            parent_path = parent_category.get('full_path') or parent_category['name']
+            full_path = f"{parent_path}/{name}"
+        else:
+            # إذا لم يتم العثور على الأب (خطأ منطقي/في البيانات)، نعتبره تصنيف جذري (Root)
+            full_path = name
+            logger.error(f"Parent category with ID {parent_id} not found when adding child category '{name}'.")
+    else:
+        # هذا هو تصنيف جذري، full_path هو الاسم نفسه
+        full_path = name
+
+    # يتم الآن تمرير full_path الذي تم حسابه إلى قاعدة البيانات
+    query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
+    params = (name, parent_id, full_path)
+    
+    res = execute_query(query, params, fetch="one", commit=True)
+    
+    if res and res.get('id'):
+        return True, res['id']
+    else:
+        return False, "Failed to add category" # execute_query بالفعل سجل الخطأ
+
+def delete_category_by_id(category_id):
+    """حذف تصنيف معين."""
+    # يجب أن يتم حذف المحتويات (الفيديوهات) أولاً أو يتم التعامل معها عبر FOREIGN KEY (ON DELETE SET NULL)
+    # ونظراً لأن العمود category_id في جدول video_archive هو REFERENCES categories(id) ON DELETE SET NULL، فإن حذف التصنيف سيقوم بتعيين category_id إلى NULL في الفيديوهات المرتبطة تلقائياً.
+    return execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
+
+# --- دوال التعامل مع الفيديوهات (Videos) ---
+
+def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
+    """إضافة فيديو جديد إلى الأرشيف."""
+    metadata_json = json.dumps(metadata)
+    query = """
+    INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+    """
+    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
+    res = execute_query(query, params, fetch="one", commit=True)
+    return res['id'] if res and res.get('id') else None
+
+def get_videos(category_id=None, page=1):
+    """الحصول على الفيديوهات حسب التصنيف وترتيبها حسب التاريخ أو المجموعة."""
+    offset = (page - 1) * VIDEOS_PER_PAGE
+    
+    # تحديد شرط التصفية (WHERE clause)
+    if category_id is None:
+        where_clause = ""
+        count_params = ()
+        video_params = (VIDEOS_PER_PAGE, offset)
+    else:
+        where_clause = "WHERE category_id = %s"
+        count_params = (category_id,)
+        video_params = (category_id, VIDEOS_PER_PAGE, offset)
+
+    # حساب العدد الإجمالي
+    total_count_res = execute_query(f"SELECT COUNT(*) FROM video_archive {where_clause}", count_params, fetch="one")
+    total_count = total_count_res['count'] if total_count_res else 0
+
+    # جلب الفيديوهات المرتبة
+    # يجب الترتيب حسب grouping_key (للمسلسلات) ثم upload_date (للأفلام أو الحلقات داخل المسلسل)
+    video_query = f"""
+    SELECT va.*, c.name AS category_name, c.full_path AS category_full_path
+    FROM video_archive va
+    LEFT JOIN categories c ON va.category_id = c.id
+    {where_clause}
+    ORDER BY va.grouping_key NULLS LAST, va.upload_date DESC
+    LIMIT %s OFFSET %s
+    """
+    
+    # تغيير طريقة تمرير المعاملات بناءً على وجود category_id
+    if category_id is None:
+        videos = execute_query(video_query, video_params, fetch="all")
+    else:
+        # هنا يجب استخدام نفس عدد المتغيرات (%s) في الاستعلام
+        video_query = f"""
+        SELECT va.*, c.name AS category_name, c.full_path AS category_full_path
+        FROM video_archive va
+        LEFT JOIN categories c ON va.category_id = c.id
+        WHERE va.category_id = %s
+        ORDER BY va.grouping_key NULLS LAST, va.upload_date DESC
+        LIMIT %s OFFSET %s
+        """
+        videos = execute_query(video_query, video_params, fetch="all")
+        
+    return videos, total_count
+
+def search_videos(query, category_id=None, page=1):
+    """البحث في الفيديوهات."""
+    offset = (page - 1) * VIDEOS_PER_PAGE
+    search_term = f"%{query}%"
+
+    # شرط التصنيف
+    category_filter = "AND category_id = %s" if category_id is not None else ""
+    
+    # المعاملات: [البحث، البحث] + [التصنيف] + [LIMIT, OFFSET]
+    base_params = [search_term, search_term]
+    if category_id is not None:
+        base_params.append(category_id)
+    
+    count_params = tuple(base_params)
+    video_params = tuple(base_params + [VIDEOS_PER_PAGE, offset])
+
+    # حساب العدد الإجمالي
+    count_query = f"""
+    SELECT COUNT(*) FROM video_archive 
+    WHERE caption ILIKE %s OR file_name ILIKE %s {category_filter}
+    """
+    total_count_res = execute_query(count_query, count_params, fetch="one")
+    total_count = total_count_res['count'] if total_count_res else 0
+
+    # جلب الفيديوهات
+    video_query = f"""
+    SELECT va.*, c.name AS category_name 
+    FROM video_archive va
+    LEFT JOIN categories c ON va.category_id = c.id
+    WHERE va.caption ILIKE %s OR va.file_name ILIKE %s {category_filter}
+    ORDER BY upload_date DESC 
+    LIMIT %s OFFSET %s
+    """
+    videos = execute_query(video_query, video_params, fetch="all")
+        
+    return videos, total_count
+
+def get_popular_videos(limit=VIDEOS_PER_PAGE):
+    """الحصول على الفيديوهات الأكثر شعبية."""
+    return execute_query("SELECT va.*, c.name AS category_name FROM video_archive va LEFT JOIN categories c ON va.category_id = c.id ORDER BY view_count DESC LIMIT %s", (limit,), fetch="all")
+
+def get_random_video(category_id=None):
+    """الحصول على فيديو عشوائي."""
+    where_clause = "WHERE category_id = %s" if category_id is not None else ""
+    params = (category_id,) if category_id is not None else ()
+    query = f"""
+    SELECT va.*, c.name AS category_name FROM video_archive va 
+    LEFT JOIN categories c ON va.category_id = c.id
+    {where_clause}
+    ORDER BY RANDOM() LIMIT 1
+    """
+    return execute_query(query, params, fetch="one")
+
+def increment_video_view_count(video_id):
+    """زيادة عداد مشاهدة الفيديو."""
+    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
+
+# --- دوال التعامل مع التقييمات ---
+
+def set_user_video_rating(video_id, user_id, rating):
+    """إضافة أو تحديث تقييم المستخدم لفيديو."""
+    query = "INSERT INTO video_ratings (video_id, user_id, rating) VALUES (%s, %s, %s) ON CONFLICT (video_id, user_id) DO UPDATE SET rating = EXCLUDED.rating, rating_date = CURRENT_TIMESTAMP"
+    params = (video_id, user_id, rating)
+    return execute_query(query, params, commit=True)
+
+def get_user_video_rating(video_id, user_id):
+    """الحصول على تقييم مستخدم معين لفيديو."""
+    res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
+    return res['rating'] if res else None
+
+def get_video_rating_stats(video_id):
+    """الحصول على متوسط التقييم وعدد المقيمين لفيديو."""
+    query = "SELECT AVG(rating) AS avg, COUNT(rating) AS count FROM video_ratings WHERE video_id = %s"
+    return execute_query(query, (video_id,), fetch="one")
+
+# --- دوال إضافية (إدارة القنوات والفيديوهات) ---
 
 def add_required_channel(channel_id, channel_name):
-    return execute_query("INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT(channel_id) DO NOTHING", (str(channel_id), channel_name), commit=True)
+    query = "INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT (channel_id) DO UPDATE SET channel_name = EXCLUDED.channel_name"
+    params = (channel_id, channel_name)
+    return execute_query(query, params, commit=True)
 
 def remove_required_channel(channel_id):
     return execute_query("DELETE FROM required_channels WHERE channel_id = %s", (str(channel_id),), commit=True)
@@ -253,17 +428,10 @@ def delete_videos_by_ids(video_ids):
     return len(res) if isinstance(res, list) else 0
 
 def delete_category_and_contents(category_id):
-    execute_query("DELETE FROM video_archive WHERE category_id = %s", (category_id,), commit=True)
+    # لا نحتاج لحذف الفيديوهات هنا يدوياً بفضل ON DELETE SET NULL في تعريف الجدول
+    # execute_query("DELETE FROM video_archive WHERE category_id = %s", (category_id,), commit=True)
     execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
     return True
 
 def move_videos_from_category(old_category_id, new_category_id):
     return execute_query("UPDATE video_archive SET category_id = %s WHERE category_id = %s", (new_category_id, old_category_id), commit=True)
-
-def delete_category_by_id(category_id):
-    return execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
-
-def get_random_video():
-    """Fetches a single random video from the database."""
-    query = "SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1"
-    return execute_query(query, fetch="one")
