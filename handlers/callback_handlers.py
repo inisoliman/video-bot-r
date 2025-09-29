@@ -30,8 +30,11 @@ def register(bot, admin_ids):
                 bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 search_type = data[1]
                 query_data = helpers.user_last_search.get(call.message.chat.id)
+                
+                # [تعديل] إزالة منطق "انتهت صلاحية البحث" هنا
+                # إذا لم يكن هناك بحث سابق، لا يمكننا الاستمرار.
                 if not query_data or 'query' not in query_data:
-                    bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text("يرجى إرسال كلمة البحث أولاً قبل اختيار نوع البحث.", call.message.chat.id, call.message.message_id)
                     return
 
                 if search_type == "normal":
@@ -87,8 +90,10 @@ def register(bot, admin_ids):
                 _, filter_type, filter_value, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
+                
+                # [تعديل] إزالة منطق "انتهت صلاحية البحث" هنا
                 if not query_data or 'query' not in query_data:
-                    bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text("يرجى إرسال كلمة البحث أولاً قبل اختيار نوع البحث.", call.message.chat.id, call.message.message_id)
                     return
 
                 query = query_data['query']
@@ -112,9 +117,12 @@ def register(bot, admin_ids):
                 _, scope, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
+                
+                # [تعديل] إزالة منطق "انتهت صلاحية البحث" هنا
                 if not query_data or 'query' not in query_data:
-                    bot.edit_message_text("انتهت صلاحية البحث، يرجى البحث مرة أخرى.", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text("يرجى إرسال كلمة البحث أولاً قبل اختيار نوع البحث.", call.message.chat.id, call.message.message_id)
                     return
+                
                 query = query_data['query']
                 category_id = int(scope) if scope != "all" else None
                 videos, total_count = search_videos(query=query, page=page, category_id=category_id)
