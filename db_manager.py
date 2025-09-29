@@ -277,6 +277,7 @@ def delete_videos_by_ids(video_ids):
     res = execute_query("DELETE FROM video_archive WHERE id = ANY(%s) RETURNING id", (video_ids,), fetch="all", commit=True)
     return len(res) if isinstance(res, list) else 0
 def delete_category_and_contents(category_id):
+    # [تعديل]: تم تبسيطها لحذف التصنيف فقط، والقيود (ON DELETE CASCADE) ستحذف الفيديوهات أو تجعلها NULL
     execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
     return True
 def move_videos_from_category(old_category_id, new_category_id):
@@ -323,20 +324,30 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
 def get_random_video():
     query = "SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1"
     return execute_query(query, fetch="one")
-def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    metadata_json = json.dumps(metadata)
+
+# --- دوال إدارة الحالة (State Management) [تم إضافتها لحل مشكلة ImportError] ---
+
+def set_user_state(user_id, state, context=None):
+    """حفظ حالة المستخدم في قاعدة البيانات."""
+    context_json = json.dumps(context) if context else None
     query = """
-        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (message_id) DO UPDATE SET
-            caption = EXCLUDED.caption,
-            file_name = EXCLUDED.file_name,
-            file_id = EXCLUDED.file_id,
-            metadata = EXCLUDED.metadata,
-            grouping_key = EXCLUDED.grouping_key,
-            category_id = EXCLUDED.category_id
-        RETURNING id
+        INSERT INTO user_states (user_id, state, context)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET
+            state = EXCLUDED.state,
+            context = EXCLUDED.context,
+            last_update = CURRENT_TIMESTAMP
+        RETURNING user_id
     """
-    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
-    result = execute_query(query, params, fetch="one", commit=True)
-    return result['id'] if result else None
+    params = (user_id, state, context_json)
+    return execute_query(query, params, commit=True)
+
+def get_user_state(user_id):
+    """جلب حالة المستخدم من قاعدة البيانات."""
+    query = "SELECT user_id, state, context FROM user_states WHERE user_id = %s"
+    return execute_query(query, (user_id,), fetch="one")
+
+def clear_user_state(user_id):
+    """مسح حالة المستخدم من قاعدة البيانات."""
+    query = "DELETE FROM user_states WHERE user_id = %s"
+    return execute_query(query, (user_id,), commit=True)
