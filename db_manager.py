@@ -91,6 +91,7 @@ def execute_query(query, params=None, fetch="none", commit=False):
     if conn is None:
         return None
 
+    result = None
     try:
         # استخدام DictCursor لجعل النتائج قابلة للقراءة كقواميس
         with conn.cursor(cursor_factory=DictCursor) as c:
@@ -101,7 +102,8 @@ def execute_query(query, params=None, fetch="none", commit=False):
             
             if fetch == "one":
                 result = c.fetchone()
-                return dict(result) if result else None
+                # يتم تحويل DictRow إلى قاموس عادي لتجنب الأخطاء في باقي الكود
+                return dict(result) if result else None 
             elif fetch == "all":
                 results = c.fetchall()
                 # تحويل صفوف DictRow إلى قائمة قواميس عادية
@@ -109,6 +111,7 @@ def execute_query(query, params=None, fetch="none", commit=False):
             return True
 
     except psycopg2.errors.NotNullViolation as e:
+        # إذا حدث خطأ NOT NULL (مثل مشكلة full_path)
         logger.error(f"Database query failed. Error: {e}", exc_info=True)
         if conn: conn.rollback()
         return None
@@ -215,6 +218,9 @@ def clear_user_state(user_id):
 
 def get_category_by_id(category_id):
     """الحصول على بيانات تصنيف معين بواسطة المعرف."""
+    # نضمن أن المعرف هو رقم موجب قبل الاستعلام
+    if category_id is None or int(category_id) <= 0:
+        return None
     return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
 
 def get_categories_tree(parent_id=None):
@@ -222,6 +228,7 @@ def get_categories_tree(parent_id=None):
     if parent_id is None:
         return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY id", fetch="all")
     else:
+        # تأكد أننا نمرر ID كـ None إذا كان غير موجود
         return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY id", (parent_id,), fetch="all")
 
 def get_child_categories(category_id):
@@ -235,23 +242,23 @@ def add_category(name, parent_id=None):
     """
     full_path = name
     
+    # إذا كان هناك تصنيف أب
     if parent_id is not None:
         # نحصل على بيانات التصنيف الأب لحساب full_path
         parent_category = get_category_by_id(parent_id)
         
         if parent_category:
             # نستخدم full_path الخاص بالأب ثم نضيف اسم الابن
-            # إذا كان full_path الخاص بالأب غير موجود لسبب ما، نستخدم اسمه كبديل (كإجراء أمان)
             parent_path = parent_category.get('full_path') or parent_category['name']
             full_path = f"{parent_path}/{name}"
         else:
-            # إذا لم يتم العثور على الأب (خطأ منطقي/في البيانات)، نعتبره تصنيف جذري (Root)
+            # إذا لم يتم العثور على الأب (هذا هو سبب خطأك، حيث أن get_category_by_id كانت ترجع None
+            # والآن تم إصلاح هذا ليتم التعامل مع الحالة بأمان)
+            # إذا فشل إيجاد الأب، سنعتبره تصنيف جذري ونضيف خطأ في السجلات
+            logger.error(f"Parent category with ID {parent_id} not found when adding child category '{name}'. Adding as root.")
+            parent_id = None # نضبط الأب على None إذا لم نعثر عليه
             full_path = name
-            logger.error(f"Parent category with ID {parent_id} not found when adding child category '{name}'.")
-    else:
-        # هذا هو تصنيف جذري، full_path هو الاسم نفسه
-        full_path = name
-
+    
     # يتم الآن تمرير full_path الذي تم حسابه إلى قاعدة البيانات
     query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
     params = (name, parent_id, full_path)
@@ -261,12 +268,22 @@ def add_category(name, parent_id=None):
     if res and res.get('id'):
         return True, res['id']
     else:
-        return False, "Failed to add category" # execute_query بالفعل سجل الخطأ
+        return False, "Failed to add category"
+
+# --- دوال الإحصائيات (حل مشكلة ImportError) ---
+
+def get_bot_stats():
+    """الحصول على إحصائيات عامة للبوت."""
+    stats = {}
+    stats['video_count'] = (execute_query("SELECT COUNT(*) as count FROM video_archive", fetch="one") or {'count': 0})['count']
+    stats['category_count'] = (execute_query("SELECT COUNT(*) as count FROM categories", fetch="one") or {'count': 0})['count']
+    stats['total_views'] = (execute_query("SELECT SUM(view_count) as sum FROM video_archive", fetch="one") or {'sum': 0})['sum'] or 0
+    stats['total_ratings'] = (execute_query("SELECT COUNT(*) as count FROM video_ratings", fetch="one") or {'count': 0})['count']
+    return stats
+
 
 def delete_category_by_id(category_id):
     """حذف تصنيف معين."""
-    # يجب أن يتم حذف المحتويات (الفيديوهات) أولاً أو يتم التعامل معها عبر FOREIGN KEY (ON DELETE SET NULL)
-    # ونظراً لأن العمود category_id في جدول video_archive هو REFERENCES categories(id) ON DELETE SET NULL، فإن حذف التصنيف سيقوم بتعيين category_id إلى NULL في الفيديوهات المرتبطة تلقائياً.
     return execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
 
 # --- دوال التعامل مع الفيديوهات (Videos) ---
@@ -365,9 +382,17 @@ def search_videos(query, category_id=None, page=1):
         
     return videos, total_count
 
-def get_popular_videos(limit=VIDEOS_PER_PAGE):
-    """الحصول على الفيديوهات الأكثر شعبية."""
-    return execute_query("SELECT va.*, c.name AS category_name FROM video_archive va LEFT JOIN categories c ON va.category_id = c.id ORDER BY view_count DESC LIMIT %s", (limit,), fetch="all")
+def get_popular_videos():
+    """الحصول على الفيديوهات الأكثر شعبية والأعلى تقييماً."""
+    most_viewed = execute_query("SELECT va.*, c.name AS category_name FROM video_archive va LEFT JOIN categories c ON va.category_id = c.id ORDER BY view_count DESC LIMIT 10", fetch="all")
+    highest_rated = execute_query("""
+        SELECT v.*, r.avg_rating 
+        FROM video_archive v 
+        JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r 
+        ON v.id = r.video_id 
+        ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10
+    """, fetch="all")
+    return {"most_viewed": most_viewed, "highest_rated": highest_rated}
 
 def get_random_video(category_id=None):
     """الحصول على فيديو عشوائي."""
