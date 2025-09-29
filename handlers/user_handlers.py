@@ -14,6 +14,7 @@ from .helpers import (
     create_video_action_keyboard, user_last_search, generate_grouping_key,
     check_subscription, list_videos
 )
+from state_manager import set_user_waiting_for_input, States, get_user_waiting_context, clear_user_waiting_state # [تعديل]
 from utils import extract_video_metadata
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,9 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text == "🔍 بحث")
     def handle_search_button(message):
-        msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
-        bot.register_next_step_handler(msg, handle_private_text_search)
+        # [تعديل] استخدام نظام الحالة بدلاً من next_step_handler
+        set_user_waiting_for_input(message.chat.id, States.WAITING_SEARCH_QUERY)
+        bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
 
     @bot.message_handler(func=lambda message: message.text == "🍿 اقترح لي فيلم")
     def handle_random_suggestion(message):
@@ -70,10 +72,21 @@ def register(bot, channel_id, admin_ids):
         else:
             bot.reply_to(message, "لا توجد فيديوهات في قاعدة البيانات حالياً.")
 
+    # [تعديل] هذه الدالة الآن تعالج البحث من زر "🔍 بحث" ومن الرسائل النصية
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
     def handle_private_text_search(message):
         query = message.text.strip()
+        user_id = message.chat.id
+        
+        # [تعديل] التحقق مما إذا كان المستخدم في حالة انتظار البحث (القادمة من زر "🔍 بحث")
+        user_state_context = get_user_waiting_context(user_id)
+        if user_state_context and 'state' in user_state_context and user_state_context['state'] == States.WAITING_SEARCH_QUERY:
+            clear_user_waiting_state(user_id) # إنهاء حالة الانتظار
+
+        # [تعديل] تخزين كلمة البحث في المتغير المؤقت user_last_search
+        # (سنستخدم هذا المتغير مؤقتاً طالما أننا لم ننشئ دالة لتخزين الحالة في db_manager)
         user_last_search[message.chat.id] = {'query': query}
+        
         keyboard = InlineKeyboardMarkup(row_width=2)
         keyboard.add(
             InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
@@ -84,8 +97,9 @@ def register(bot, channel_id, admin_ids):
     @bot.message_handler(commands=["search"])
     def handle_search_command(message):
         if message.chat.type == "private":
-            msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث:")
-            bot.register_next_step_handler(msg, handle_private_text_search)
+            # [تعديل] استخدام نظام الحالة بدلاً من next_step_handler
+            set_user_waiting_for_input(message.chat.id, States.WAITING_SEARCH_QUERY)
+            bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث:")
         else:
             if len(message.text.split()) > 1:
                 query = " ".join(message.text.split()[1:])
