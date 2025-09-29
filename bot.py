@@ -10,8 +10,10 @@ import logging
 from threading import Thread
 from telebot.apihelper import ApiTelegramException
 
+# استيراد BotManager
+from bot_manager import BotManager 
 from db_manager import verify_and_repair_schema
-from handlers import register_all_handlers # <-- تعديل هنا
+from handlers import register_all_handlers 
 from keep_alive import keep_alive
 
 # --- إعداد نظام التسجيل (Logging) ---
@@ -43,16 +45,17 @@ except ValueError:
 
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-# --- دالة تشغيل البوت في خيط منفصل ---
+# --- دالة تشغيل البوت في خيط منفصل (يتم استدعاؤها من BotManager) ---
 def run_bot_polling():
+    """الدالة التي تقوم بتشغيل البولينج الفعلي للبوت."""
     logger.info("✅ Bot polling has started.")
     while True:
         try:
-            bot.polling(non_stop=True)
+            bot.polling(non_stop=True, timeout=30) # زيادة الـ timeout يقلل من طلبات الـ API
         except ApiTelegramException as e:
             logger.error(f"Telegram API Error caught: {e.description}")
             if e.error_code == 409:
-                logger.warning("Conflict error (409): Another instance of the bot is likely running.")
+                logger.warning("Conflict error (409) caught. This should ideally be prevented by BotManager.")
                 time.sleep(60)
             else:
                 logger.info("A non-conflict API error occurred. Retrying in 30 seconds...")
@@ -66,11 +69,21 @@ def run_bot_polling():
 if __name__ == "__main__":
     logger.info("Bot is starting up...")
 
+    # 1. تهيئة مدير البوت
+    manager = BotManager(bot_name="video_bot")
+    
+    # 2. فحص وإصلاح قاعدة البيانات (خطوة سريعة لضمان سلامة العمل)
     verify_and_repair_schema()
-    register_all_handlers(bot, CHANNEL_ID, ADMIN_IDS) # <-- تعديل هنا
-
+    
+    # 3. تسجيل المعالجات
+    register_all_handlers(bot, CHANNEL_ID, ADMIN_IDS)
+    
+    # 4. تشغيل خادم keep_alive في خيط منفصل
     keep_alive()
 
-    bot_thread = Thread(target=run_bot_polling)
-    bot_thread.start()
-    bot_thread.join()
+    # 5. تشغيل البوت بأمان باستخدام BotManager لمنع خطأ 409
+    # هذه الخطوة ستقوم بالتحقق من وجود نسخة أخرى وإيقافها إذا لزم الأمر
+    # ثم تبدأ بتشغيل run_bot_polling
+    manager.start_bot_safely(run_bot_polling)
+    
+    logger.info("Bot process finished.")
