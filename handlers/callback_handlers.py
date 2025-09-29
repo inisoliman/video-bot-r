@@ -35,11 +35,24 @@ def register(bot, admin_ids):
                     return
 
                 if search_type == "normal":
-                    categories = get_categories_tree()
+                    # [تعديل] يجب جلب كل التصنيفات وليس فقط الرئيسية لإتاحة البحث في الفرعية
+                    # سنعتمد على دالة get_categories_tree لاسترجاع الأباء ثم جلب الأبناء
+                    categories_parents = get_categories_tree()
+                    all_categories = []
+                    
+                    for parent in categories_parents:
+                        all_categories.append(parent)
+                        children = get_child_categories(parent['id'])
+                        for child in children:
+                            child['name'] = f"- {child['name']}" # إضافة علامة للفرعي
+                            all_categories.append(child)
+
                     keyboard = InlineKeyboardMarkup(row_width=1)
                     keyboard.add(InlineKeyboardButton("بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
-                    for cat in categories:
+                    
+                    for cat in all_categories:
                         keyboard.add(InlineKeyboardButton(f"بحث في: {cat['name']}", callback_data=f"search_scope::{cat['id']}::0"))
+                        
                     bot.edit_message_text(f"أين تريد البحث عن \"{query_data['query']}\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif search_type == "advanced":
@@ -222,12 +235,23 @@ def register(bot, admin_ids):
                     update_thread.start()
 
                 elif sub_action == "set_active":
-                    categories = get_categories_tree()
-                    if not categories:
+                    # [تعديل] يجب جلب كل التصنيفات وليس فقط الرئيسية
+                    categories_parents = get_categories_tree()
+                    all_categories = []
+                    
+                    for parent in categories_parents:
+                        all_categories.append(parent)
+                        children = get_child_categories(parent['id'])
+                        for child in children:
+                            child['name'] = f"- {child['name']}" # إضافة علامة للفرعي
+                            all_categories.append(child)
+
+                    if not all_categories:
                         bot.send_message(call.message.chat.id, "لا توجد تصنيفات حالياً.")
                         return
+                    
                     keyboard = InlineKeyboardMarkup(row_width=2)
-                    buttons = [InlineKeyboardButton(text=cat['name'], callback_data=f"admin::setcat::{cat['id']}") for cat in categories]
+                    buttons = [InlineKeyboardButton(text=cat['name'], callback_data=f"admin::setcat::{cat['id']}") for cat in all_categories]
                     keyboard.add(*buttons)
                     bot.edit_message_text("اختر التصنيف الذي تريد تفعيله:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
