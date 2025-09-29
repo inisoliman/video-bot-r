@@ -27,6 +27,7 @@ def register(bot, admin_ids):
                 return
 
             if action == "search_type":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 search_type = data[1]
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 if not query_data or 'query' not in query_data:
@@ -49,9 +50,9 @@ def register(bot, admin_ids):
                     )
                     keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main"))
                     bot.edit_message_text("اختر فلتر للبحث المتقدم:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-                bot.answer_callback_query(call.id)
 
             elif action == "adv_filter":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 filter_type = data[1]
                 if filter_type == "quality":
                     keyboard = InlineKeyboardMarkup(row_width=3)
@@ -67,9 +68,9 @@ def register(bot, admin_ids):
                     keyboard.add(*buttons)
                     keyboard.add(InlineKeyboardButton("🔙 رجوع للفلاتر", callback_data="search_type::advanced"))
                     bot.edit_message_text("اختر الحالة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-                bot.answer_callback_query(call.id)
 
             elif action == "adv_search":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 _, filter_type, filter_value, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
@@ -92,9 +93,9 @@ def register(bot, admin_ids):
                 context_id = filter_value
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, action_prefix, context_id)
                 bot.edit_message_text(f"نتائج البحث المتقدم:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-                bot.answer_callback_query(call.id)
 
             elif action == "search_scope":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 _, scope, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
@@ -110,7 +111,6 @@ def register(bot, admin_ids):
                 prefix = "search_scope"
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, prefix, scope)
                 bot.edit_message_text(f"نتائج البحث عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-                bot.answer_callback_query(call.id)
 
             elif action == "admin":
                 if user_id not in admin_ids:
@@ -118,7 +118,7 @@ def register(bot, admin_ids):
                     return
 
                 sub_action = data[1]
-                bot.answer_callback_query(call.id)
+                bot.answer_callback_query(call.id) # [تعديل] تم رفعه ليكون في هذا المستوى
 
                 if sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
@@ -132,14 +132,18 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
 
                 elif sub_action == "add_cat_sub_select_parent":
-                    keyboard = helpers.create_categories_keyboard()
-                    if not keyboard.keyboard:
-                        bot.answer_callback_query(call.id, "أنشئ تصنيفاً رئيسياً أولاً.", show_alert=True)
+                    # [الإصلاح] يجب أن نستخدم دالة get_categories_tree للحصول على التصنيفات الرئيسية المتاحة كآباء
+                    categories = get_categories_tree()
+                    keyboard = InlineKeyboardMarkup(row_width=2)
+                    
+                    if not categories:
+                        bot.send_message(call.message.chat.id, "❌ يجب إنشاء تصنيف رئيسي أولاً ليكون أبًا.")
                         return
-                    for row in keyboard.keyboard:
-                        for button in row:
-                            parts = button.callback_data.split(helpers.CALLBACK_DELIMITER)
-                            button.callback_data = f"admin::add_cat_sub_set_parent::{parts[1]}"
+
+                    for cat in categories:
+                         # يجب التأكد من أن التصنيف الذي تختاره هو فقط التصنيف الأب (بدون ترقيم الصفحات)
+                        keyboard.add(InlineKeyboardButton(cat['name'], callback_data=f"admin::add_cat_sub_set_parent::{cat['id']}"))
+                    
                     bot.edit_message_text("اختر التصنيف الأب:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_sub_set_parent":
@@ -151,7 +155,7 @@ def register(bot, admin_ids):
                 elif sub_action == "delete_category_select":
                     keyboard = helpers.create_categories_keyboard()
                     if not keyboard.keyboard:
-                        bot.answer_callback_query(call.id, "لا توجد تصنيفات لحذفها.", show_alert=True)
+                        bot.send_message(call.message.chat.id, "لا توجد تصنيفات لحذفها.")
                         return
                     for row in keyboard.keyboard:
                         for button in row:
@@ -191,7 +195,7 @@ def register(bot, admin_ids):
                     new_category_id = int(data[3])
                     category_to_delete = get_category_by_id(old_category_id)
                     move_videos_from_category(old_category_id, new_category_id)
-                    db_delete_category(old_category_id)
+                    delete_category_by_id(old_category_id)
                     new_cat = get_category_by_id(new_category_id)
                     bot.edit_message_text(f"✅ تم نقل الفيديوهات إلى \"{new_cat['name']}\" وحذف التصنيف \"{category_to_delete['name']}\".", call.message.chat.id, call.message.message_id)
 
@@ -220,7 +224,7 @@ def register(bot, admin_ids):
                 elif sub_action == "set_active":
                     categories = get_categories_tree()
                     if not categories:
-                        bot.answer_callback_query(call.id, "لا توجد تصنيفات حالياً.", show_alert=True)
+                        bot.send_message(call.message.chat.id, "لا توجد تصنيفات حالياً.")
                         return
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     buttons = [InlineKeyboardButton(text=cat['name'], callback_data=f"admin::setcat::{cat['id']}") for cat in categories]
@@ -260,11 +264,11 @@ def register(bot, admin_ids):
                                   f"- إجمالي التصنيفات: *{stats['category_count']}*\n"
                                   f"- إجمالي المشاهدات: *{stats['total_views']}*\n"
                                   f"- إجمالي التقييمات: *{stats['total_ratings']}*")
-                    if popular["most_viewed"]:
+                    if popular and popular.get("most_viewed") and popular["most_viewed"][0]:
                         most_viewed = popular["most_viewed"][0]
                         title = (most_viewed['caption'] or "").split('\n')[0] or "فيديو"
                         stats_text += f"\n\n🔥 الأكثر مشاهدة: {title} ({most_viewed['view_count']} مشاهدة)"
-                    if popular["highest_rated"]:
+                    if popular and popular.get("highest_rated") and popular["highest_rated"][0] and popular["highest_rated"][0].get('avg_rating') is not None:
                         highest_rated = popular["highest_rated"][0]
                         title = (highest_rated['caption'] or "").split('\n')[0] or "فيديو"
                         stats_text += f"\n⭐ الأعلى تقييماً: {title} ({highest_rated['avg_rating']:.1f}/5)"
@@ -280,6 +284,7 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد.", show_alert=True)
 
             elif action == "popular":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 sub_action = data[1]
                 popular_data = get_popular_videos()
                 videos = popular_data.get(sub_action, [])
@@ -289,28 +294,27 @@ def register(bot, admin_ids):
                     bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 else:
                     bot.edit_message_text("لا توجد فيديوهات كافية لعرضها حالياً.", call.message.chat.id, call.message.message_id)
-                bot.answer_callback_query(call.id)
 
             elif action == "back_to_cats":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 helpers.list_videos(bot, call.message, edit_message=call.message)
-                bot.answer_callback_query(call.id)
 
             elif action == "back_to_main":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 bot.delete_message(call.message.chat.id, call.message.message_id)
                 bot.send_message(call.message.chat.id, "القائمة الرئيسية:", reply_markup=helpers.main_menu())
-                bot.answer_callback_query(call.id)
 
             elif action == "video":
                 _, video_id, message_id, chat_id = data
+                bot.answer_callback_query(call.id, "جاري إرسال الفيديو...") # [تعديل] تحويله لرد فوري مع رسالة
                 increment_video_view_count(int(video_id))
                 try:
                     bot.copy_message(call.message.chat.id, chat_id, int(message_id))
                     rating_keyboard = helpers.create_video_action_keyboard(int(video_id), user_id)
                     bot.send_message(call.message.chat.id, "قيم هذا الفيديو:", reply_markup=rating_keyboard)
-                    bot.answer_callback_query(call.id, "جاري إرسال الفيديو...")
                 except Exception as e:
                     logger.error(f"Error handling video callback: {e}", exc_info=True)
-                    bot.answer_callback_query(call.id, "خطأ: الفيديو غير موجود بالقناة.", show_alert=True)
+                    bot.send_message(call.message.chat.id, "خطأ: الفيديو غير موجود بالقناة.")
 
             elif action == "rate":
                 _, video_id, rating = data
@@ -322,6 +326,7 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "حدث خطأ في التقييم.")
 
             elif action == "cat":
+                bot.answer_callback_query(call.id) # [إضافة] رد فوري
                 _, category_id_str, page_str = data
                 category_id, page = int(category_id_str), int(page_str)
                 child_categories = get_child_categories(category_id)
@@ -333,7 +338,6 @@ def register(bot, admin_ids):
                 else:
                     keyboard = helpers.create_combined_keyboard(child_categories, videos, total_count, page, category_id)
                     bot.edit_message_text(f"محتويات تصنيف \"{category['name']}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-                bot.answer_callback_query(call.id)
 
             elif action == "noop":
                 bot.answer_callback_query(call.id)
