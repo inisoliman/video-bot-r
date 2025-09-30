@@ -8,7 +8,7 @@ import logging
 from db_manager import (
     get_child_categories, get_category_by_id, get_user_video_rating,
     get_video_rating_stats, VIDEOS_PER_PAGE, CALLBACK_DELIMITER,
-    get_required_channels
+    get_required_channels, is_video_favorite # [تعديل]
 )
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ def list_videos(bot, message, edit_message=None, parent_id=None):
 def main_menu():
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("🎬 عرض كل الفيديوهات"), KeyboardButton("🔥 الفيديوهات الشائعة"))
+    markup.add(KeyboardButton("⭐ المفضلة"), KeyboardButton("📺 سجل المشاهدة")) # [تعديل]
     markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
     return markup
 
@@ -82,6 +83,10 @@ def format_duration(seconds):
     return f"{hours:02}:{mins:02}:{secs:02}" if hours > 0 else f"{mins:02}:{secs:02}"
 
 def format_video_display_info(video):
+    # [تعديل] إضافة حقل لعرض التقييم المحسوب من الدالة
+    avg_rating = video.get('avg_rating', 0) 
+    total_ratings = video.get('total_ratings', 0)
+    
     metadata = video.get('metadata') or {}
     series_name = metadata.get('series_name')
     season = metadata.get('season_number')
@@ -92,19 +97,35 @@ def format_video_display_info(video):
     if season: parts.append(f"م{season}")
     if episode: parts.append(f"ح{episode}")
     title_suffix = f" - {' '.join(parts)}" if parts else ""
-    title = f"{video['id']}. {title_base}{title_suffix}"
+    
+    # [تعديل] عرض ID الفيديو للمساعدة
+    title = f"({video['id']}) {title_base}{title_suffix}" 
+    
     info_parts = []
     if metadata.get('status'): info_parts.append(metadata['status'])
     if metadata.get('quality_resolution'): info_parts.append(metadata['quality_resolution'])
     if metadata.get('duration'): info_parts.append(format_duration(metadata['duration']))
+    
     info_line = f" ({' | '.join(info_parts)})" if info_parts else ""
-    rating_text = f" ⭐ {video.get('avg_rating', 0):.1f}/5" if 'avg_rating' in video and video.get('avg_rating') is not None else ""
+    
+    rating_text = ""
+    if avg_rating is not None and avg_rating > 0:
+         rating_text = f" ⭐ {avg_rating:.1f}/5 ({total_ratings})"
+    
     views_text = f" 👁️ {video.get('view_count', 0)}"
     return f"{title}{info_line}{rating_text}{views_text}"
 
 def create_paginated_keyboard(videos, total_count, current_page, action_prefix, context_id):
     keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    # [تعديل] عند جلب المفضلة والتاريخ، قد لا تكون بيانات التقييم موجودة، لذا نعدلها
     for video in videos:
+        # إذا لم يكن التقييم موجوداً في بيانات الفيديو (جلب عادي)، نقوم بجلبه يدوياً 
+        if 'avg_rating' not in video:
+            stats = get_video_rating_stats(video['id'])
+            video['avg_rating'] = stats['avg'] if stats and stats['avg'] else 0
+            video['total_ratings'] = stats['count'] if stats else 0
+        
         display_title = format_video_display_info(video)
         keyboard.add(InlineKeyboardButton(display_title, callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"))
 
@@ -135,6 +156,10 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
         if child_categories:
             keyboard.add(InlineKeyboardButton("🎬--- الفيديوهات ---🎬", callback_data="noop"), row_width=1)
         for video in videos:
+            stats = get_video_rating_stats(video['id'])
+            video['avg_rating'] = stats['avg'] if stats and stats['avg'] else 0
+            video['total_ratings'] = stats['count'] if stats else 0
+            
             display_title = format_video_display_info(video)
             keyboard.add(InlineKeyboardButton(display_title, callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"), row_width=1)
     nav_buttons = []
@@ -154,9 +179,19 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
 
 def create_video_action_keyboard(video_id, user_id):
     keyboard = InlineKeyboardMarkup(row_width=5)
+    
+    # [تعديل] إضافة زر المفضلة/الإزالة
+    is_fav = is_video_favorite(user_id, video_id)
+    fav_text = "❌ إزالة من المفضلة" if is_fav else "⭐ إضافة للمفضلة"
+    fav_action = "fav::remove" if is_fav else "fav::add"
+    
+    keyboard.add(InlineKeyboardButton(fav_text, callback_data=f"{fav_action}::{video_id}")) # [تعديل]
+
+    # أزرار التقييم
     user_rating = get_user_video_rating(video_id, user_id)
     buttons = [InlineKeyboardButton("⭐" if user_rating == i else "☆", callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
     keyboard.add(*buttons)
+    
     stats = get_video_rating_stats(video_id)
     if stats and stats.get('avg') is not None:
         keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"))
