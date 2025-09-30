@@ -7,7 +7,7 @@ import logging
 from db_manager import (
     add_bot_user, get_popular_videos, search_videos,
     get_random_video, increment_video_view_count, get_categories_tree, add_video,
-    get_active_category_id, get_user_favorites, get_user_history # [تعديل]
+    get_active_category_id, get_user_favorites, get_user_history, add_to_history # [تعديل]
 )
 from .helpers import (
     main_menu, create_paginated_keyboard,
@@ -15,11 +15,40 @@ from .helpers import (
     check_subscription, list_videos
 )
 from utils import extract_video_metadata
-from state_manager import set_user_waiting_for_input, States, get_user_waiting_context, clear_user_waiting_state # [تعديل]
+from state_manager import (
+    set_user_waiting_for_input, States, get_user_waiting_context, 
+    clear_user_waiting_state, state_handler # [تعديل] لاستيراد state_handler
+)
 
 logger = logging.getLogger(__name__)
 
 def register(bot, channel_id, admin_ids):
+
+    # --- معالج حالة البحث (State Handler) [الجديد] ---
+    @state_handler(States.WAITING_SEARCH_QUERY)
+    def handle_search_query_state(message, bot, context):
+        """
+        يتلقى كلمة البحث من المستخدم بعد ضغطه على زر '🔍 بحث'.
+        """
+        if message.text == "/cancel":
+            clear_user_waiting_state(message.from_user.id)
+            bot.reply_to(message, "تم إلغاء عملية البحث.")
+            return
+
+        query = message.text.strip()
+        user_last_search[message.chat.id] = {'query': query}
+        
+        # [الخطوة 1] مسح الحالة حتى يتمكن المستخدم من إرسال رسائل أخرى
+        clear_user_waiting_state(message.from_user.id) 
+        
+        # [الخطوة 2] إظهار لوحة اختيار نوع البحث
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
+            InlineKeyboardButton("⚙️ بحث متقدم", callback_data="search_type::advanced")
+        )
+        bot.reply_to(message, f"اختر نوع البحث عن \"{query}\":", reply_markup=keyboard)
+
 
     @bot.message_handler(commands=["start"])
     def start(message):
@@ -46,7 +75,7 @@ def register(bot, channel_id, admin_ids):
     def handle_list_videos_button(message):
         list_videos(bot, message)
         
-    @bot.message_handler(func=lambda message: message.text == "⭐ المفضلة") # [تعديل]
+    @bot.message_handler(func=lambda message: message.text == "⭐ المفضلة") 
     def handle_favorites_button(message):
         bot.send_chat_action(message.chat.id, 'typing')
         videos, total_count = get_user_favorites(message.from_user.id, page=0)
@@ -56,7 +85,7 @@ def register(bot, channel_id, admin_ids):
         keyboard = create_paginated_keyboard(videos, total_count, 0, "fav_page", "user_fav")
         bot.reply_to(message, f"قائمة مفضلاتك ({total_count} فيديو):", reply_markup=keyboard)
         
-    @bot.message_handler(func=lambda message: message.text == "📺 سجل المشاهدة") # [تعديل]
+    @bot.message_handler(func=lambda message: message.text == "📺 سجل المشاهدة") 
     def handle_history_button(message):
         bot.send_chat_action(message.chat.id, 'typing')
         videos, total_count = get_user_history(message.from_user.id, page=0)
@@ -73,10 +102,9 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text == "🔍 بحث")
     def handle_search_button(message):
-        # [تعديل] استخدام State Manager
+        # [تعديل] تعيين حالة الانتظار
         set_user_waiting_for_input(message.from_user.id, States.WAITING_SEARCH_QUERY)
         msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
-        # لم نعد نستخدم register_next_step_handler هنا، يتم معالجته في state_manager
 
     @bot.message_handler(func=lambda message: message.text == "🍿 اقترح لي فيلم")
     def handle_random_suggestion(message):
@@ -84,12 +112,10 @@ def register(bot, channel_id, admin_ids):
         video = get_random_video()
         if video:
             try:
-                # [تعديل] تتبع المشاهدة في السجل
                 video_id = video['id']
                 increment_video_view_count(video_id)
-                get_user_history(message.from_user.id) # [خطأ: يجب أن تكون add_to_history]
-                # تم تصحيح هذا في callback_handlers عند النقر على الفيديو
-                
+                add_to_history(message.from_user.id, video_id) # تتبع المشاهدة
+
                 bot.copy_message(message.chat.id, video['chat_id'], video['message_id'])
                 rating_keyboard = create_video_action_keyboard(video_id, message.from_user.id)
                 bot.send_message(message.chat.id, "ما رأيك بهذا الفيديو؟ يمكنك تقييمه:", reply_markup=rating_keyboard)
@@ -101,13 +127,12 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
     def handle_private_text_search(message):
-        # [تعديل] هذا الـ handler يتم تشغيله الآن بواسطة state_manager
+        # هذا الـ handler لم يعد يستخدم بعد إضافة State Handler، لكننا نتركه احتياطًا
         pass
 
     @bot.message_handler(commands=["search"])
     def handle_search_command(message):
         if message.chat.type == "private":
-            # [تعديل] استخدام State Manager
             set_user_waiting_for_input(message.from_user.id, States.WAITING_SEARCH_QUERY)
             msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث:")
         else:
