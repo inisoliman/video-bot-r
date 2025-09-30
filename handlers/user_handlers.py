@@ -7,7 +7,7 @@ import logging
 from db_manager import (
     add_bot_user, get_popular_videos, search_videos,
     get_random_video, increment_video_view_count, get_categories_tree, add_video,
-    get_active_category_id, get_user_favorites, get_user_history, add_to_history # [تعديل]
+    get_active_category_id, get_user_favorites, get_user_history, add_to_history
 )
 from .helpers import (
     main_menu, create_paginated_keyboard,
@@ -17,38 +17,29 @@ from .helpers import (
 from utils import extract_video_metadata
 from state_manager import (
     set_user_waiting_for_input, States, get_user_waiting_context, 
-    clear_user_waiting_state, state_handler # [تعديل] لاستيراد state_handler
+    clear_user_waiting_state, state_handler 
 )
 
 logger = logging.getLogger(__name__)
 
 def register(bot, channel_id, admin_ids):
 
-    # --- معالج حالة البحث (State Handler) [الجديد] ---
+    # --- معالج حالة البحث (State Handler) ---
     @state_handler(States.WAITING_SEARCH_QUERY)
     def handle_search_query_state(message, bot, context):
         """
-        يتلقى كلمة البحث من المستخدم بعد ضغطه على زر '🔍 بحث'.
+        يتلقى كلمة البحث من المستخدم بعد ضغطه على زر '🔍 بحث'
+        ويحولها إلى معالج البحث المباشر.
         """
         if message.text == "/cancel":
             clear_user_waiting_state(message.from_user.id)
             bot.reply_to(message, "تم إلغاء عملية البحث.")
             return
-
-        query = message.text.strip()
-        user_last_search[message.chat.id] = {'query': query}
         
-        # [الخطوة 1] مسح الحالة حتى يتمكن المستخدم من إرسال رسائل أخرى
-        clear_user_waiting_state(message.from_user.id) 
-        
-        # [الخطوة 2] إظهار لوحة اختيار نوع البحث
-        keyboard = InlineKeyboardMarkup(row_width=2)
-        keyboard.add(
-            InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
-            InlineKeyboardButton("⚙️ بحث متقدم", callback_data="search_type::advanced")
-        )
-        bot.reply_to(message, f"اختر نوع البحث عن \"{query}\":", reply_markup=keyboard)
-
+        # نرسل الرسالة إلى معالج البحث المباشر (الذي سيبدأ عملية البحث)
+        # ونقوم بمسح الحالة مباشرة لكي لا يتعارض مع الأوامر الأخرى
+        clear_user_waiting_state(message.from_user.id)
+        handle_private_text_search_direct(message, bot)
 
     @bot.message_handler(commands=["start"])
     def start(message):
@@ -102,9 +93,9 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text == "🔍 بحث")
     def handle_search_button(message):
-        # [تعديل] تعيين حالة الانتظار
+        # [تعديل] إبقاء الحالة لـ "البحث" فقط في حال عدم إرسال كلمة مباشرة
         set_user_waiting_for_input(message.from_user.id, States.WAITING_SEARCH_QUERY)
-        msg = bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
+        bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
 
     @bot.message_handler(func=lambda message: message.text == "🍿 اقترح لي فيلم")
     def handle_random_suggestion(message):
@@ -125,10 +116,21 @@ def register(bot, channel_id, admin_ids):
         else:
             bot.reply_to(message, "لا توجد فيديوهات في قاعدة البيانات حالياً.")
 
+    # --- [جديد] دالة مساعدة للبحث المباشر ---
+    def handle_private_text_search_direct(message, bot):
+        query = message.text.strip()
+        user_last_search[message.chat.id] = {'query': query}
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
+            InlineKeyboardButton("⚙️ بحث متقدم", callback_data="search_type::advanced")
+        )
+        bot.reply_to(message, f"اختر نوع البحث عن \"{query}\":", reply_markup=keyboard)
+
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
-    def handle_private_text_search(message):
-        # هذا الـ handler لم يعد يستخدم بعد إضافة State Handler، لكننا نتركه احتياطًا
-        pass
+    def handle_private_text_search_catch_all(message):
+        # هذا المعالج يلتقط أي رسالة نصية لا تبدأ بـ "/"
+        handle_private_text_search_direct(message, bot)
 
     @bot.message_handler(commands=["search"])
     def handle_search_command(message):
