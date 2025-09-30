@@ -321,7 +321,7 @@ def get_user_video_rating(video_id, user_id):
 
 def get_popular_videos():
     most_viewed = execute_query("SELECT * FROM video_archive ORDER BY view_count DESC, id DESC LIMIT 10", fetch="all")
-    highest_rated = execute_query("SELECT v.*, r.avg_rating FROM video_archive v JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r ON v.id = r.video_id ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10", fetch="all")
+    highest_rated = execute_query("SELECT v.*, r.avg_rating FROM video_archive v JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r ON v.id = r.video_id) r ON v.id = r.video_id ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10", fetch="all")
     return {"most_viewed": most_viewed, "highest_rated": highest_rated}
 
 def add_bot_user(user_id, username, first_name):
