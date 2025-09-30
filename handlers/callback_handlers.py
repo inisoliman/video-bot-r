@@ -9,8 +9,8 @@ from db_manager import *
 from . import helpers
 from . import admin_handlers
 from update_metadata import run_update_and_report_progress
-# [تعديل] لاستيراد دوال إدارة الحالة
-from state_manager import set_user_waiting_for_input, States 
+# [تعديل] لإزالة استيراد دوال إدارة الحالة غير المستخدمة هنا
+# from state_manager import set_user_waiting_for_input, States 
 
 
 logger = logging.getLogger(__name__)
@@ -75,8 +75,7 @@ def register(bot, admin_ids):
                 
                 # [إصلاح مشكلة البحث] التحقق من وجود الكلمة في الذاكرة
                 if not query_data or 'query' not in query_data:
-                    # في حال فقدان الكلمة، نطلب من المستخدم بدء البحث من جديد
-                    set_user_waiting_for_input(user_id, States.WAITING_SEARCH_QUERY)
+                    # في حال فقدان الكلمة، نطلب من المستخدم إعادة إرسالها (بدون تعيين حالة)
                     bot.edit_message_text("❌ انتهت صلاحية البحث أو لم ترسل كلمة البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -111,7 +110,6 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
                 if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
-                    set_user_waiting_for_input(user_id, States.WAITING_SEARCH_QUERY)
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -137,7 +135,6 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
                 if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
-                    set_user_waiting_for_input(user_id, States.WAITING_SEARCH_QUERY)
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -164,7 +161,6 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
                 if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
-                    set_user_waiting_for_input(user_id, States.WAITING_SEARCH_QUERY)
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
