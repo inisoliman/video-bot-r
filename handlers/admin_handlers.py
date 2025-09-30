@@ -10,7 +10,7 @@ from db_manager import (
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
     delete_videos_by_ids, get_video_by_id, delete_bot_user, delete_category_by_id,
-    move_videos_from_category # [تعديل] يجب استيراد الدالة
+    move_videos_from_category, get_category_by_id, set_active_category_id # [إصلاح] يجب استيراد الدوال لـ Callbacks
 )
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
 
