@@ -129,7 +129,9 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private")
     def handle_private_text_search_catch_all(message):
+        # [التعديل هنا]
         # هذا المعالج يلتقط أي رسالة نصية لا تبدأ بـ "/"
+        # يجب أن نمرر البوت كمعامل للدالة المساعِدة
         handle_private_text_search_direct(message, bot)
 
     @bot.message_handler(commands=["search"])
