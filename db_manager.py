@@ -57,7 +57,6 @@ EXPECTED_SCHEMA = {
         'setting_value': 'TEXT'
     },
     'required_channels': {
-        # [تعديل] يجب أن نحدد القيود التي قد تتسبب في التعارض أثناء الفحص
         'channel_id': 'TEXT PRIMARY KEY',
         'channel_name': 'TEXT'
     },
@@ -73,6 +72,22 @@ EXPECTED_SCHEMA = {
         'state': 'TEXT NOT NULL',
         'context': 'JSONB',
         'last_update': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+    },
+    # --- [جدول جديد] المفضلة ---
+    'user_favorites': {
+        'id': 'SERIAL PRIMARY KEY',
+        'user_id': 'BIGINT',
+        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
+        'added_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        'UNIQUE_CONSTRAINT': 'UNIQUE (user_id, video_id)' # ضمان عدم تكرار الفيديو في المفضلة
+    },
+    # --- [جدول جديد] سجل المشاهدة ---
+    'user_history': {
+        'id': 'SERIAL PRIMARY KEY',
+        'user_id': 'BIGINT',
+        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
+        'last_viewed': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        'UNIQUE_CONSTRAINT': 'UNIQUE (user_id, video_id)' # تحديث السجل بدلاً من إضافة صف جديد
     }
 }
 
@@ -94,6 +109,11 @@ def execute_query(query, params=None, fetch="none", commit=False):
     result = None
     try:
         with conn.cursor(cursor_factory=DictCursor) as c:
+            # [تعديل] التعامل مع UNIQUE_CONSTRAINT عند إنشاء الجداول الجديدة
+            if 'UNIQUE_CONSTRAINT' in query:
+                # هذا جزء خاص بإنشاء القيود، يتم تجاهله في التنفيذ العادي
+                pass 
+            
             c.execute(query, params)
             
             if commit:
@@ -119,7 +139,7 @@ def execute_query(query, params=None, fetch="none", commit=False):
         if conn:
             conn.close()
 
-# --- دالة فحص وتصحيح المخطط (Schema) [تم إصلاح مشكلة PRIMARY KEY] ---
+# --- دالة فحص وتصحيح المخطط (Schema) [مهمة لإضافة الجداول الجديدة] ---
 def verify_and_repair_schema():
     conn = get_db_connection()
     if not conn:
@@ -131,20 +151,41 @@ def verify_and_repair_schema():
             for table_name, columns in EXPECTED_SCHEMA.items():
                 logger.info(f"Verifying table: {table_name}")
                 
-                # 1. التحقق من وجود الجدول
+                # 1. التحقق من وجود الجدول وإنشاءه إذا لم يكن موجودًا
                 c.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{table_name}');")
                 if not c.fetchone()[0]:
                     logger.warning(f"Table {table_name} missing. Creating...")
-                    cols_def = ', '.join([f'{col} {dtype}' for col, dtype in columns.items()])
-                    c.execute(f"CREATE TABLE {table_name} ({cols_def})")
-                    logger.info(f"Table {table_name} created successfully.")
-                    conn.commit()
-                    continue
+                    
+                    # تنقية تعريف الأعمدة من القيود الخاصة مثل UNIQUE_CONSTRAINT
+                    cols_def = ', '.join([f'{col} {dtype}' for col, dtype in columns.items() if col != 'UNIQUE_CONSTRAINT'])
+                    
+                    # إضافة القيود (مثل UNIQUE) بشكل منفصل بعد إنشاء الجدول
+                    unique_constraint = columns.get('UNIQUE_CONSTRAINT', '')
+                    if unique_constraint:
+                        # يتم إنشاء الجدول بدون القيود أولاً
+                        c.execute(f"CREATE TABLE {table_name} ({cols_def})")
+                        conn.commit()
+                        logger.info(f"Table {table_name} created successfully.")
+                        
+                        # ثم إضافة القيد الفريد إذا كان موجودًا
+                        constraint_name = f'uc_{table_name}'
+                        try:
+                            c.execute(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {unique_constraint}")
+                            conn.commit()
+                            logger.info(f"Added UNIQUE constraint to {table_name}.")
+                        except Exception as e:
+                            logger.warning(f"Failed to add UNIQUE constraint to {table_name}: {e}")
+                            conn.rollback()
+                    else:
+                        c.execute(f"CREATE TABLE {table_name} ({cols_def})")
+                        conn.commit()
+                        logger.info(f"Table {table_name} created successfully.")
+                    
+                    continue # ننتقل للجدول التالي بعد الإنشاء الكامل
 
-                # 2. التحقق من الأعمدة المفقودة
+                # 2. التحقق من الأعمدة المفقودة (نفس المنطق السابق)
                 for col_name, col_type in columns.items():
-                    # [الإصلاح] يجب أن نتجنب محاولة إضافة قيود PRIMARY KEY أو UNIQUE مرة أخرى
-                    # لذا نقوم بتجريد تعريف العمود من القيود قبل محاولة الإضافة
+                    if col_name == 'UNIQUE_CONSTRAINT': continue
                     col_def_stripped = col_type.split('PRIMARY KEY')[0].split('REFERENCES')[0].split('UNIQUE')[0].strip()
                     
                     try:
@@ -160,13 +201,15 @@ def verify_and_repair_schema():
                             logger.info(f"Column {col_name} added to {table_name}.")
                             conn.commit()
                     except Exception as e:
-                        # [الإصلاح] إذا كان الخطأ بسبب أن المفتاح الأساسي موجود بالفعل، نتجاهله.
                         if 'already exists' in str(e).lower() or 'multiple primary keys' in str(e).lower():
                             logger.warning(f"Skipping redundant column/constraint addition for {col_name} in {table_name}.")
-                            conn.rollback() # نتأكد من التراجع عن أي خطأ
+                            conn.rollback() 
                         else:
                             logger.error(f"Error adding column {col_name} to {table_name}: {e}")
                             conn.rollback()
+                            
+            conn.commit()
+            logger.info("Schema verification and repair process completed successfully.")
 
     except Exception as e:
         logger.critical(f"FATAL SCHEMA ERROR: {e}")
@@ -175,47 +218,39 @@ def verify_and_repair_schema():
         if conn:
             conn.close()
 
-# --- دوال التعامل مع التصنيفات (Categories) ---
+# ==============================================================================
+# دوال إدارة الفيديوهات والتصنيفات
+# ==============================================================================
+def search_videos(query, page=0, category_id=None, quality=None, status=None):
+    offset = page * VIDEOS_PER_PAGE
+    search_term = f"%{query}%"
 
-def get_category_by_id(category_id):
-    if category_id is None or (isinstance(category_id, str) and not category_id.isdigit()):
-        return None
-    return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
+    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
+    params = [search_term, search_term]
 
-def get_child_categories(parent_id):
-    if parent_id is None:
-        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
-    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
+    if category_id:
+        where_clauses.append("category_id = %s")
+        params.append(category_id)
+    if quality:
+        where_clauses.append("metadata->>'quality_resolution' = %s")
+        params.append(quality)
+    if status:
+        where_clauses.append("metadata->>'status' = %s")
+        params.append(status)
 
-def add_category(name, parent_id=None):
-    full_path = name
-    if parent_id is not None:
-        parent_category = get_category_by_id(parent_id)
-        if parent_category:
-            parent_path = parent_category.get('full_path') or parent_category['name']
-            full_path = f"{parent_path}/{name}"
-        else:
-            logger.error(f"Parent category with ID {parent_id} not found when adding child category '{name}'. Adding as root.")
-            parent_id = None
-            full_path = name
-    
-    query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
-    params = (name, parent_id, full_path)
-    
-    res = execute_query(query, params, fetch="one", commit=True)
-    
-    if res and res.get('id'):
-        return True, res['id']
-    else:
-        return False, "Failed to add category"
+    where_string = " AND ".join(where_clauses)
 
-def get_categories_tree():
-    # تم تبسيط هذه الدالة للتركيز على استرجاع التصنيفات الرئيسية
-    return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
+    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
+    final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
+    videos = execute_query(videos_query, final_params_videos, fetch="all")
 
-# --- دوال الفيديو (لإضافة الفيديوهات) [تم إضافتها] ---
+    count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
+    final_params_count = tuple(params)
+    total = execute_query(count_query, final_params_count, fetch="one")
+
+    return videos, total['count'] if total else 0
+
 def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    """إضافة/تحديث فيديو في الأرشيف."""
     metadata_json = json.dumps(metadata)
     query = """
         INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
@@ -231,9 +266,84 @@ def add_video(message_id, caption, chat_id, file_name, file_id, metadata, groupi
     """
     params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
     result = execute_query(query, params, fetch="one", commit=True)
-    return result['id'] if result and result.get('id') else None
+    return result['id'] if result else None
+    
+def get_categories_tree():
+    return execute_query("SELECT * FROM categories ORDER BY name", fetch="all")
 
-# --- دوال الإحصائيات (مطلوبة لـ admin_handlers) ---
+def get_child_categories(parent_id):
+    if parent_id is None:
+        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
+    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
+
+def get_category_by_id(category_id):
+    if category_id is None or (isinstance(category_id, str) and not category_id.isdigit()):
+        return None
+    return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
+
+def add_category(name, parent_id=None):
+    full_path = name
+    if parent_id is not None:
+        parent_category = get_category_by_id(parent_id)
+        if parent_category and parent_category.get('full_path'):
+            full_path = f"{parent_category['full_path']}/{name}"
+        elif parent_category:
+             # Fallback if parent exists but somehow lost full_path
+            full_path = f"{parent_category['name']}/{name}"
+        else:
+            # If parent_id is provided but category not found, treat as root to avoid NullViolation
+            full_path = name 
+    
+    query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
+    params = (name, parent_id, full_path)
+    
+    res = execute_query(query, params, fetch="one", commit=True)
+    return (True, res['id']) if res else (False, "Failed to add category")
+
+def get_videos(category_id, page=0):
+    offset = page * VIDEOS_PER_PAGE
+    videos = execute_query("SELECT * FROM video_archive WHERE category_id = %s ORDER BY id DESC LIMIT %s OFFSET %s", (category_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    total = execute_query("SELECT COUNT(*) as count FROM video_archive WHERE category_id = %s", (category_id,), fetch="one")
+    return videos, total['count'] if total else 0
+
+def increment_video_view_count(video_id):
+    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
+
+def get_video_by_message_id(message_id):
+    return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
+
+def get_active_category_id():
+    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
+    return int(res['setting_value']) if res else None
+
+def set_active_category_id(category_id):
+    return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('active_category_id', %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", (str(category_id),), commit=True)
+
+def add_video_rating(video_id, user_id, rating):
+    return execute_query("INSERT INTO video_ratings (video_id, user_id, rating) VALUES (%s, %s, %s) ON CONFLICT (video_id, user_id) DO UPDATE SET rating = EXCLUDED.rating", (video_id, user_id, rating), commit=True)
+
+def get_video_rating_stats(video_id):
+    return execute_query("SELECT AVG(rating) as avg, COUNT(id) as count FROM video_ratings WHERE video_id = %s", (video_id,), fetch="one")
+
+def get_user_video_rating(video_id, user_id):
+    res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
+    return res['rating'] if res else None
+
+def get_popular_videos():
+    most_viewed = execute_query("SELECT * FROM video_archive ORDER BY view_count DESC, id DESC LIMIT 10", fetch="all")
+    highest_rated = execute_query("SELECT v.*, r.avg_rating FROM video_archive v JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r ON v.id = r.video_id ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10", fetch="all")
+    return {"most_viewed": most_viewed, "highest_rated": highest_rated}
+
+def add_bot_user(user_id, username, first_name):
+    execute_query("INSERT INTO bot_users (user_id, username, first_name) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING", (user_id, username, first_name), commit=True)
+
+def get_all_user_ids():
+    res = execute_query("SELECT user_id FROM bot_users", fetch="all")
+    return [r['user_id'] for r in res] if res else []
+
+def get_subscriber_count():
+    res = execute_query("SELECT COUNT(*) as count FROM bot_users", fetch="one")
+    return res['count'] if res else 0
 
 def get_bot_stats():
     stats = {}
@@ -243,110 +353,106 @@ def get_bot_stats():
     stats['total_ratings'] = (execute_query("SELECT COUNT(*) as count FROM video_ratings", fetch="one") or {'count': 0})['count']
     return stats
 
-def get_popular_videos():
-    most_viewed = execute_query("SELECT va.* FROM video_archive va ORDER BY view_count DESC LIMIT 10", fetch="all")
-    highest_rated = execute_query("""
-        SELECT v.*, r.avg_rating 
-        FROM video_archive v 
-        JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r 
-        ON v.id = r.video_id 
-        ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10
-    """, fetch="all")
-    return {"most_viewed": most_viewed, "highest_rated": highest_rated}
-
-# --- دوال الفيديو (مطلوبة لـ user_handlers) ---
-
-def increment_video_view_count(video_id):
-    """زيادة عداد المشاهدات لفيديو معين."""
-    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
-
-def get_video_by_message_id(message_id):
-    """جلب فيديو عن طريق معرف الرسالة (message_id)."""
-    return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
-
-# [باقي الدوال الضرورية لـ db_manager.py]
-def set_active_category_id(category_id):
-    return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES (%s, %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", 
-                         ('active_category_id', str(category_id)), commit=True)
-def get_active_category_id():
-    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
-    return int(res['setting_value']) if res and res.get('setting_value') else None
-def add_bot_user(user_id, username, first_name):
-    return execute_query("INSERT INTO bot_users (user_id, username, first_name) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING", 
-                         (user_id, username, first_name), commit=True)
-def get_all_user_ids():
-    res = execute_query("SELECT user_id FROM bot_users", fetch="all")
-    return [row['user_id'] for row in res] if res else []
-def get_subscriber_count():
-    res = execute_query("SELECT COUNT(*) FROM bot_users", fetch="one")
-    return res['count'] if res else 0
-def get_required_channels():
-    return execute_query("SELECT * FROM required_channels", fetch="all")
 def add_required_channel(channel_id, channel_name):
-    query = "INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT (channel_id) DO UPDATE SET channel_name = EXCLUDED.channel_name"
-    params = (channel_id, channel_name)
-    return execute_query(query, params, commit=True)
+    return execute_query("INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT(channel_id) DO NOTHING", (str(channel_id), channel_name), commit=True)
+
 def remove_required_channel(channel_id):
     return execute_query("DELETE FROM required_channels WHERE channel_id = %s", (str(channel_id),), commit=True)
+
+def get_required_channels():
+    return execute_query("SELECT * FROM required_channels", fetch="all")
+
 def get_video_by_id(video_id):
     return execute_query("SELECT * FROM video_archive WHERE id = %s", (video_id,), fetch="one")
+
 def move_video_to_category(video_id, new_category_id):
     return execute_query("UPDATE video_archive SET category_id = %s WHERE id = %s", (new_category_id, video_id), commit=True)
+
 def delete_videos_by_ids(video_ids):
     if not video_ids: return 0
     res = execute_query("DELETE FROM video_archive WHERE id = ANY(%s) RETURNING id", (video_ids,), fetch="all", commit=True)
     return len(res) if isinstance(res, list) else 0
+
 def delete_category_and_contents(category_id):
-    # [تعديل]: تم تبسيطها لحذف التصنيف فقط، والقيود (ON DELETE CASCADE) ستحذف الفيديوهات أو تجعلها NULL
+    execute_query("DELETE FROM video_archive WHERE category_id = %s", (category_id,), commit=True)
     execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
     return True
+
 def move_videos_from_category(old_category_id, new_category_id):
     return execute_query("UPDATE video_archive SET category_id = %s WHERE category_id = %s", (new_category_id, old_category_id), commit=True)
+
 def delete_category_by_id(category_id):
     return execute_query("DELETE FROM categories WHERE id = %s", (category_id,), commit=True)
-def add_video_rating(video_id, user_id, rating):
-    query = "INSERT INTO video_ratings (video_id, user_id, rating) VALUES (%s, %s, %s) ON CONFLICT (video_id, user_id) DO UPDATE SET rating = EXCLUDED.rating, rating_date = CURRENT_TIMESTAMP"
-    params = (video_id, user_id, rating)
-    return execute_query(query, params, commit=True)
-def get_user_video_rating(video_id, user_id):
-    res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
-    return res['rating'] if res else None
-def get_video_rating_stats(video_id):
-    query = "SELECT AVG(rating) AS avg, COUNT(rating) AS count FROM video_ratings WHERE video_id = %s"
-    return execute_query(query, (video_id,), fetch="one")
-def get_videos(category_id, page=0):
-    offset = page * VIDEOS_PER_PAGE
-    videos = execute_query("SELECT * FROM video_archive WHERE category_id = %s ORDER BY id DESC LIMIT %s OFFSET %s", (category_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    total = execute_query("SELECT COUNT(*) as count FROM video_archive WHERE category_id = %s", (category_id,), fetch="one")
-    return videos, total['count'] if total else 0
-def search_videos(query, page=0, category_id=None, quality=None, status=None):
-    offset = page * VIDEOS_PER_PAGE
-    search_term = f"%{query}%"
-    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
-    params = [search_term, search_term]
-    if category_id:
-        where_clauses.append("category_id = %s")
-        params.append(category_id)
-    if quality:
-        where_clauses.append("metadata->>'quality_resolution' = %s")
-        params.append(quality)
-    if status:
-        where_clauses.append("metadata->>'status' = %s")
-        params.append(status)
-    where_string = " AND ".join(where_clauses)
-    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
-    final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
-    videos = execute_query(videos_query, final_params_videos, fetch="all")
-    count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
-    final_params_count = tuple(params)
-    total = execute_query(count_query, final_params_count, fetch="one")
-    return videos, total['count'] if total else 0
+
 def get_random_video():
+    """Fetches a single random video from the database."""
     query = "SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1"
     return execute_query(query, fetch="one")
 
-# --- دوال إدارة الحالة (State Management) [تم إضافتها لحل مشكلة ImportError] ---
+# --- دوال المفضلة (Favorites) ---
 
+def is_video_favorite(user_id, video_id):
+    """التحقق مما إذا كان الفيديو مفضلاً لدى المستخدم."""
+    query = "SELECT 1 FROM user_favorites WHERE user_id = %s AND video_id = %s"
+    return execute_query(query, (user_id, video_id), fetch="one") is not None
+
+def add_to_favorites(user_id, video_id):
+    """إضافة فيديو إلى المفضلة."""
+    query = "INSERT INTO user_favorites (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING"
+    return execute_query(query, (user_id, video_id), commit=True)
+
+def remove_from_favorites(user_id, video_id):
+    """إزالة فيديو من المفضلة."""
+    query = "DELETE FROM user_favorites WHERE user_id = %s AND video_id = %s"
+    return execute_query(query, (user_id, video_id), commit=True)
+
+def get_user_favorites(user_id, page=0):
+    """جلب قائمة المفضلة للمستخدم مع التصفح."""
+    offset = page * VIDEOS_PER_PAGE
+    videos_query = """
+        SELECT va.* FROM video_archive va
+        JOIN user_favorites uf ON va.id = uf.video_id
+        WHERE uf.user_id = %s
+        ORDER BY uf.added_date DESC
+        LIMIT %s OFFSET %s
+    """
+    total_query = "SELECT COUNT(*) as count FROM user_favorites WHERE user_id = %s"
+    
+    videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    total = execute_query(total_query, (user_id,), fetch="one")
+    
+    return videos, total['count'] if total else 0
+
+# --- دوال سجل المشاهدة (Watch History) ---
+
+def add_to_history(user_id, video_id):
+    """إضافة/تحديث سجل المشاهدة. يستخدم ON CONFLICT لتحديث التاريخ فقط."""
+    query = """
+        INSERT INTO user_history (user_id, video_id)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id, video_id) DO UPDATE SET
+            last_viewed = CURRENT_TIMESTAMP
+    """
+    return execute_query(query, (user_id, video_id), commit=True)
+
+def get_user_history(user_id, page=0):
+    """جلب سجل المشاهدة للمستخدم مع التصفح."""
+    offset = page * VIDEOS_PER_PAGE
+    videos_query = """
+        SELECT va.* FROM video_archive va
+        JOIN user_history uh ON va.id = uh.video_id
+        WHERE uh.user_id = %s
+        ORDER BY uh.last_viewed DESC
+        LIMIT %s OFFSET %s
+    """
+    total_query = "SELECT COUNT(*) as count FROM user_history WHERE user_id = %s"
+    
+    videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    total = execute_query(total_query, (user_id,), fetch="one")
+    
+    return videos, total['count'] if total else 0
+
+# --- دوال إدارة الحالة (State Management) [في نهاية الملف] ---
 def set_user_state(user_id, state, context=None):
     """حفظ حالة المستخدم في قاعدة البيانات."""
     context_json = json.dumps(context) if context else None
