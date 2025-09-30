@@ -45,7 +45,7 @@ def list_videos(bot, message, edit_message=None, parent_id=None):
     This function is now centralized here.
     """
     keyboard = create_categories_keyboard(parent_id)
-    text = "اختر تصنيفًا لعرض محتوياته:" if keyboard.keyboard else "لا توجد تصنيفات متاحة حالياً."
+    text = "اختر تصنيفًا لعرض محتوياته:" if keyboard.keyboard and keyboard.keyboard[0] else "لا توجد تصنيفات متاحة حالياً."
     try:
         if edit_message:
             bot.edit_message_text(text, edit_message.chat.id, edit_message.message_id, reply_markup=keyboard)
