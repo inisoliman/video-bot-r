@@ -40,11 +40,17 @@ EXPECTED_SCHEMA = {
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT'
     },
+    # [إصلاح] تم تحديث هيكل الجدول ليتطابق مع القواعد
+    'required_channels': {
+        'id': 'SERIAL PRIMARY KEY',
+        'channel_id': 'TEXT UNIQUE',
+        'channel_name': 'TEXT'
+    },
     'categories': {
         'id': 'SERIAL PRIMARY KEY',
         'name': 'TEXT NOT NULL',
         'parent_id': 'INTEGER REFERENCES categories(id) ON DELETE CASCADE',
-        'full_path': 'TEXT NOT NULL'
+        'full_path': 'TEXT NOT NULL' # [إصلاح] للتأكد من وجود full_path
     },
     'bot_users': {
         'user_id': 'BIGINT PRIMARY KEY',
@@ -56,175 +62,146 @@ EXPECTED_SCHEMA = {
         'setting_key': 'TEXT PRIMARY KEY',
         'setting_value': 'TEXT'
     },
-    'required_channels': {
-        'channel_id': 'TEXT PRIMARY KEY',
-        'channel_name': 'TEXT'
-    },
     'video_ratings': {
         'id': 'SERIAL PRIMARY KEY',
         'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
         'user_id': 'BIGINT',
-        'rating': 'INTEGER NOT NULL',
-        'rating_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+        'rating': 'INTEGER',
+        '_UNIQUE_CONSTRAINT': 'UNIQUE(video_id, user_id)'
     },
     'user_states': {
         'user_id': 'BIGINT PRIMARY KEY',
-        'state': 'TEXT NOT NULL',
-        'context': 'JSONB',
-        'last_update': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+        'state': 'TEXT',
+        'context': 'JSONB'
     },
-    # --- [جدول جديد] المفضلة ---
     'user_favorites': {
         'id': 'SERIAL PRIMARY KEY',
         'user_id': 'BIGINT',
         'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
-        'added_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
-        'UNIQUE_CONSTRAINT': 'UNIQUE (user_id, video_id)' # ضمان عدم تكرار الفيديو في المفضلة
+        'date_added': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        '_UNIQUE_CONSTRAINT': 'UNIQUE(user_id, video_id)'
     },
-    # --- [جدول جديد] سجل المشاهدة ---
     'user_history': {
         'id': 'SERIAL PRIMARY KEY',
         'user_id': 'BIGINT',
         'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
-        'last_viewed': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
-        'UNIQUE_CONSTRAINT': 'UNIQUE (user_id, video_id)' # تحديث السجل بدلاً من إضافة صف جديد
+        'last_watched': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        '_UNIQUE_CONSTRAINT': 'UNIQUE(user_id, video_id)'
     }
 }
 
+
 def get_db_connection():
-    """تأسيس اتصال قاعدة البيانات"""
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        return conn
-    except Exception as e:
+        return psycopg2.connect(**DB_CONFIG)
+    except psycopg2.OperationalError as e:
         logger.error(f"Database connection failed: {e}")
         return None
 
-def execute_query(query, params=None, fetch="none", commit=False):
-    """تنفيذ استعلام قاعدة بيانات مع التعامل مع الأخطاء."""
+def verify_and_repair_schema():
+    logger.info("Verifying and repairing database schema...")
     conn = get_db_connection()
-    if conn is None:
-        return None
+    if not conn:
+        logger.critical("Cannot verify schema, no DB connection.")
+        return
+
+    try:
+        with conn.cursor() as c:
+            for table_name, columns in EXPECTED_SCHEMA.items():
+                # [إصلاح] معالجة الإنشاء التلقائي للجدول أولاً
+                create_table_query = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY)")
+                try:
+                    c.execute(create_table_query)
+                except psycopg2.ProgrammingError:
+                     # في حالة وجود الجدول بالفعل، نتجاهل الخطأ ونتابع
+                    pass 
+
+                logger.info(f"Checking table: {table_name}")
+                for column_name, column_definition in columns.items():
+                    if column_name.startswith('_'):
+                        # تخطي قيود UNIQUE التي يتم إضافتها في النهاية
+                        continue 
+                        
+                    c.execute("""
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = %s AND column_name = %s
+                    """, (table_name, column_name))
+                    
+                    if c.fetchone() is None:
+                        logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
+                        # تجنب إضافة PRIMARY KEY مكرر، يجب أن يكون موجودًا بالفعل أو يتم التعامل معه يدويًا
+                        if 'PRIMARY KEY' in column_definition or column_name == 'id':
+                            logger.warning(f"Skipping redundant creation of {column_name} in {table_name}.")
+                            continue
+
+                        alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                            sql.Identifier(table_name),
+                            sql.Identifier(column_name),
+                            sql.SQL(column_definition)
+                        )
+                        try:
+                            c.execute(alter_query)
+                            logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
+                        except Exception as add_err:
+                            logger.error(f"Error adding column {column_name} to {table_name}: {add_err}")
+                
+                # إضافة قيود UNIQUE إذا كانت محددة
+                if '_UNIQUE_CONSTRAINT' in columns:
+                    constraint_definition = columns['_UNIQUE_CONSTRAINT']
+                    constraint_name = f"{table_name}_unique_constraint"
+                    c.execute("""
+                        SELECT 1 FROM information_schema.table_constraints 
+                        WHERE table_name = %s AND constraint_name = %s
+                    """, (table_name, constraint_name))
+                    if c.fetchone() is None:
+                        logger.info(f"Adding UNIQUE constraint to {table_name}")
+                        try:
+                            c.execute(sql.SQL(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {constraint_definition}"))
+                        except Exception as const_err:
+                            logger.error(f"Error adding constraint to {table_name}: {const_err}")
+
+
+            conn.commit()
+            logger.info("Schema verification and repair process completed successfully.")
+    except psycopg2.Error as e:
+        logger.error(f"Schema verification error: {e}", exc_info=True)
+        if conn: conn.rollback()
+    finally:
+        if conn: conn.close()
+
+
+def execute_query(query, params=None, fetch=None, commit=False):
+    conn = get_db_connection()
+    if not conn:
+        if fetch == "all": return []
+        return None if fetch else False
 
     result = None
     try:
         with conn.cursor(cursor_factory=DictCursor) as c:
-            # [تعديل] التعامل مع UNIQUE_CONSTRAINT عند إنشاء الجداول الجديدة
-            if 'UNIQUE_CONSTRAINT' in query:
-                # هذا جزء خاص بإنشاء القيود، يتم تجاهله في التنفيذ العادي
-                pass 
-            
             c.execute(query, params)
-            
+            if fetch == "one": result = c.fetchone()
+            elif fetch == "all": result = c.fetchall()
             if commit:
                 conn.commit()
-            
-            if fetch == "one":
-                result = c.fetchone()
-                return dict(result) if result else None
-            elif fetch == "all":
-                results = c.fetchall()
-                return [dict(row) for row in results]
-            return True
-
-    except psycopg2.errors.NotNullViolation as e:
+                if fetch is None: result = True
+    except psycopg2.Error as e:
         logger.error(f"Database query failed. Error: {e}", exc_info=True)
         if conn: conn.rollback()
-        return None
-    except Exception as e:
-        logger.error(f"Database query failed. Error: {e}", exc_info=True)
-        if conn: conn.rollback()
-        return None
+        if fetch == "all": return []
+        return None if fetch else False
     finally:
-        if conn:
-            conn.close()
-
-# --- دالة فحص وتصحيح المخطط (Schema) [مهمة لإضافة الجداول الجديدة] ---
-def verify_and_repair_schema():
-    conn = get_db_connection()
-    if not conn:
-        logger.critical("Could not verify schema: No database connection.")
-        return
-    
-    try:
-        with conn.cursor() as c:
-            for table_name, columns in EXPECTED_SCHEMA.items():
-                logger.info(f"Verifying table: {table_name}")
-                
-                # 1. التحقق من وجود الجدول وإنشاءه إذا لم يكن موجودًا
-                c.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{table_name}');")
-                if not c.fetchone()[0]:
-                    logger.warning(f"Table {table_name} missing. Creating...")
-                    
-                    # تنقية تعريف الأعمدة من القيود الخاصة مثل UNIQUE_CONSTRAINT
-                    cols_def = ', '.join([f'{col} {dtype}' for col, dtype in columns.items() if col != 'UNIQUE_CONSTRAINT'])
-                    
-                    # إضافة القيود (مثل UNIQUE) بشكل منفصل بعد إنشاء الجدول
-                    unique_constraint = columns.get('UNIQUE_CONSTRAINT', '')
-                    if unique_constraint:
-                        # يتم إنشاء الجدول بدون القيود أولاً
-                        c.execute(f"CREATE TABLE {table_name} ({cols_def})")
-                        conn.commit()
-                        logger.info(f"Table {table_name} created successfully.")
-                        
-                        # ثم إضافة القيد الفريد إذا كان موجودًا
-                        constraint_name = f'uc_{table_name}'
-                        try:
-                            c.execute(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {unique_constraint}")
-                            conn.commit()
-                            logger.info(f"Added UNIQUE constraint to {table_name}.")
-                        except Exception as e:
-                            logger.warning(f"Failed to add UNIQUE constraint to {table_name}: {e}")
-                            conn.rollback()
-                    else:
-                        c.execute(f"CREATE TABLE {table_name} ({cols_def})")
-                        conn.commit()
-                        logger.info(f"Table {table_name} created successfully.")
-                    
-                    continue # ننتقل للجدول التالي بعد الإنشاء الكامل
-
-                # 2. التحقق من الأعمدة المفقودة (نفس المنطق السابق)
-                for col_name, col_type in columns.items():
-                    if col_name == 'UNIQUE_CONSTRAINT': continue
-                    col_def_stripped = col_type.split('PRIMARY KEY')[0].split('REFERENCES')[0].split('UNIQUE')[0].strip()
-                    
-                    try:
-                        c.execute(f"SELECT data_type FROM information_schema.columns WHERE table_name = '{table_name}' AND column_name = '{col_name}'")
-                        if c.fetchone() is None:
-                            logger.warning(f"Column {col_name} in {table_name} missing. Adding...")
-                            
-                            c.execute(sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                                sql.Identifier(table_name),
-                                sql.Identifier(col_name),
-                                sql.SQL(col_def_stripped)
-                            ))
-                            logger.info(f"Column {col_name} added to {table_name}.")
-                            conn.commit()
-                    except Exception as e:
-                        if 'already exists' in str(e).lower() or 'multiple primary keys' in str(e).lower():
-                            logger.warning(f"Skipping redundant column/constraint addition for {col_name} in {table_name}.")
-                            conn.rollback() 
-                        else:
-                            logger.error(f"Error adding column {col_name} to {table_name}: {e}")
-                            conn.rollback()
-                            
-            conn.commit()
-            logger.info("Schema verification and repair process completed successfully.")
-
-    except Exception as e:
-        logger.critical(f"FATAL SCHEMA ERROR: {e}")
-        if conn: conn.rollback()
-    finally:
-        if conn:
-            conn.close()
+        if conn: conn.close()
+    return result
 
 # ==============================================================================
-# دوال إدارة الفيديوهات والتصنيفات
+# دالة بحث مطورة لتدعم الفلاتر المتقدمة
 # ==============================================================================
 def search_videos(query, page=0, category_id=None, quality=None, status=None):
     offset = page * VIDEOS_PER_PAGE
     search_term = f"%{query}%"
 
+    # بناء جملة WHERE بشكل ديناميكي
     where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
     params = [search_term, search_term]
 
@@ -232,18 +209,22 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
         where_clauses.append("category_id = %s")
         params.append(category_id)
     if quality:
+        # البحث داخل حقل JSON
         where_clauses.append("metadata->>'quality_resolution' = %s")
         params.append(quality)
     if status:
+        # البحث داخل حقل JSON
         where_clauses.append("metadata->>'status' = %s")
         params.append(status)
 
     where_string = " AND ".join(where_clauses)
 
+    # استعلام جلب الفيديوهات
     videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
     final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
     videos = execute_query(videos_query, final_params_videos, fetch="all")
 
+    # استعلام جلب العدد الإجمالي
     count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
     final_params_count = tuple(params)
     total = execute_query(count_query, final_params_count, fetch="one")
@@ -267,38 +248,40 @@ def add_video(message_id, caption, chat_id, file_name, file_id, metadata, groupi
     params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
     result = execute_query(query, params, fetch="one", commit=True)
     return result['id'] if result else None
-    
-def get_categories_tree():
-    return execute_query("SELECT * FROM categories ORDER BY name", fetch="all")
 
-def get_child_categories(parent_id):
-    if parent_id is None:
-        return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
-    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
-
+# [إصلاح] إضافة دالة get_category_by_id قبل دالة add_category
 def get_category_by_id(category_id):
-    if category_id is None or (isinstance(category_id, str) and not category_id.isdigit()):
-        return None
+    """جلب تصنيف بواسطة معرفه (ID)."""
     return execute_query("SELECT * FROM categories WHERE id = %s", (category_id,), fetch="one")
 
 def add_category(name, parent_id=None):
+    """
+    Adds a new category to the database, including the full_path.
+    """
     full_path = name
     if parent_id is not None:
         parent_category = get_category_by_id(parent_id)
         if parent_category and parent_category.get('full_path'):
             full_path = f"{parent_category['full_path']}/{name}"
         elif parent_category:
-             # Fallback if parent exists but somehow lost full_path
-            full_path = f"{parent_category['name']}/{name}"
-        else:
-            # If parent_id is provided but category not found, treat as root to avoid NullViolation
-            full_path = name 
-    
+            # معالجة بيانات قديمة لا تحتوي على full_path
+            full_path = f"{parent_category['name']}/{name}" 
+        # إذا لم يتم العثور على الأب، نترك full_path = name ونتجاهل الخطأ
+
     query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
     params = (name, parent_id, full_path)
     
     res = execute_query(query, params, fetch="one", commit=True)
-    return (True, res['id']) if res else (False, "Failed to add category")
+    return (True, res) if res else (False, "Failed to add category")
+
+def get_categories_tree():
+    """جلب جميع التصنيفات الرئيسية (parent_id IS NULL)."""
+    return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
+
+def get_child_categories(parent_id):
+    """جلب التصنيفات الفرعية لتصنيف معين."""
+    return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
+
 
 def get_videos(category_id, page=0):
     offset = page * VIDEOS_PER_PAGE
@@ -307,14 +290,16 @@ def get_videos(category_id, page=0):
     return videos, total['count'] if total else 0
 
 def increment_video_view_count(video_id):
+    """[إصلاح] دالة زيادة عداد المشاهدات."""
     return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
 
 def get_video_by_message_id(message_id):
+    """[إصلاح] دالة جلب فيديو بمعرف الرسالة."""
     return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
 
 def get_active_category_id():
     res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
-    return int(res['setting_value']) if res else None
+    return int(res['setting_value']) if res and res['setting_value'].isdigit() else None
 
 def set_active_category_id(category_id):
     return execute_query("INSERT INTO bot_settings (setting_key, setting_value) VALUES ('active_category_id', %s) ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value", (str(category_id),), commit=True)
@@ -349,7 +334,7 @@ def get_bot_stats():
     stats = {}
     stats['video_count'] = (execute_query("SELECT COUNT(*) as count FROM video_archive", fetch="one") or {'count': 0})['count']
     stats['category_count'] = (execute_query("SELECT COUNT(*) as count FROM categories", fetch="one") or {'count': 0})['count']
-    stats['total_views'] = (execute_query("SELECT SUM(view_count) as sum FROM video_archive", fetch="one") or {'sum': 0})['sum'] or 0
+    stats['total_views'] = (execute_query("SELECT COALESCE(SUM(view_count), 0) as sum FROM video_archive", fetch="one") or {'sum': 0})['sum']
     stats['total_ratings'] = (execute_query("SELECT COUNT(*) as count FROM video_ratings", fetch="one") or {'count': 0})['count']
     return stats
 
@@ -389,91 +374,71 @@ def get_random_video():
     query = "SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1"
     return execute_query(query, fetch="one")
 
-# --- دوال المفضلة (Favorites) ---
+# --- دوال إدارة حالة المستخدم (State Management) ---
+def set_user_state(user_id: int, state: str, context: dict = None):
+    context_json = json.dumps(context) if context else None
+    query = "INSERT INTO user_states (user_id, state, context) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET state = EXCLUDED.state, context = EXCLUDED.context"
+    return execute_query(query, (user_id, state, context_json), commit=True)
 
+def get_user_state(user_id: int):
+    return execute_query("SELECT state, context FROM user_states WHERE user_id = %s", (user_id,), fetch="one")
+
+def clear_user_state(user_id: int):
+    return execute_query("DELETE FROM user_states WHERE user_id = %s", (user_id,), commit=True)
+
+# --- دوال المفضلة وسجل المشاهدة ---
 def is_video_favorite(user_id, video_id):
-    """التحقق مما إذا كان الفيديو مفضلاً لدى المستخدم."""
-    query = "SELECT 1 FROM user_favorites WHERE user_id = %s AND video_id = %s"
-    return execute_query(query, (user_id, video_id), fetch="one") is not None
+    res = execute_query("SELECT 1 FROM user_favorites WHERE user_id = %s AND video_id = %s", (user_id, video_id), fetch="one")
+    return bool(res)
 
 def add_to_favorites(user_id, video_id):
-    """إضافة فيديو إلى المفضلة."""
-    query = "INSERT INTO user_favorites (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING"
-    return execute_query(query, (user_id, video_id), commit=True)
+    return execute_query("INSERT INTO user_favorites (user_id, video_id) VALUES (%s, %s) ON CONFLICT (user_id, video_id) DO NOTHING", (user_id, video_id), commit=True)
 
 def remove_from_favorites(user_id, video_id):
-    """إزالة فيديو من المفضلة."""
-    query = "DELETE FROM user_favorites WHERE user_id = %s AND video_id = %s"
-    return execute_query(query, (user_id, video_id), commit=True)
+    return execute_query("DELETE FROM user_favorites WHERE user_id = %s AND video_id = %s", (user_id, video_id), commit=True)
 
 def get_user_favorites(user_id, page=0):
-    """جلب قائمة المفضلة للمستخدم مع التصفح."""
     offset = page * VIDEOS_PER_PAGE
     videos_query = """
-        SELECT va.* FROM video_archive va
-        JOIN user_favorites uf ON va.id = uf.video_id
-        WHERE uf.user_id = %s
-        ORDER BY uf.added_date DESC
+        SELECT v.* FROM video_archive v
+        JOIN user_favorites f ON v.id = f.video_id
+        WHERE f.user_id = %s
+        ORDER BY f.date_added DESC
         LIMIT %s OFFSET %s
     """
-    total_query = "SELECT COUNT(*) as count FROM user_favorites WHERE user_id = %s"
-    
     videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    total = execute_query(total_query, (user_id,), fetch="one")
-    
+    total = execute_query("SELECT COUNT(*) as count FROM user_favorites WHERE user_id = %s", (user_id,), fetch="one")
     return videos, total['count'] if total else 0
 
-# --- دوال سجل المشاهدة (Watch History) ---
-
 def add_to_history(user_id, video_id):
-    """إضافة/تحديث سجل المشاهدة. يستخدم ON CONFLICT لتحديث التاريخ فقط."""
     query = """
-        INSERT INTO user_history (user_id, video_id)
-        VALUES (%s, %s)
-        ON CONFLICT (user_id, video_id) DO UPDATE SET
-            last_viewed = CURRENT_TIMESTAMP
+        INSERT INTO user_history (user_id, video_id, last_watched) 
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, video_id) DO UPDATE SET last_watched = CURRENT_TIMESTAMP
     """
     return execute_query(query, (user_id, video_id), commit=True)
 
 def get_user_history(user_id, page=0):
-    """جلب سجل المشاهدة للمستخدم مع التصفح."""
     offset = page * VIDEOS_PER_PAGE
     videos_query = """
-        SELECT va.* FROM video_archive va
-        JOIN user_history uh ON va.id = uh.video_id
-        WHERE uh.user_id = %s
-        ORDER BY uh.last_viewed DESC
+        SELECT v.* FROM video_archive v
+        JOIN user_history h ON v.id = h.video_id
+        WHERE h.user_id = %s
+        ORDER BY h.last_watched DESC
         LIMIT %s OFFSET %s
     """
-    total_query = "SELECT COUNT(*) as count FROM user_history WHERE user_id = %s"
-    
     videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
-    total = execute_query(total_query, (user_id,), fetch="one")
-    
+    total = execute_query("SELECT COUNT(*) as count FROM user_history WHERE user_id = %s", (user_id,), fetch="one")
     return videos, total['count'] if total else 0
 
-# --- دوال إدارة الحالة (State Management) [في نهاية الملف] ---
-def set_user_state(user_id, state, context=None):
-    """حفظ حالة المستخدم في قاعدة البيانات."""
-    context_json = json.dumps(context) if context else None
-    query = """
-        INSERT INTO user_states (user_id, state, context)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (user_id) DO UPDATE SET
-            state = EXCLUDED.state,
-            context = EXCLUDED.context,
-            last_update = CURRENT_TIMESTAMP
-        RETURNING user_id
-    """
-    params = (user_id, state, context_json)
-    return execute_query(query, params, commit=True)
-
-def get_user_state(user_id):
-    """جلب حالة المستخدم من قاعدة البيانات."""
-    query = "SELECT user_id, state, context FROM user_states WHERE user_id = %s"
-    return execute_query(query, (user_id,), fetch="one")
-
-def clear_user_state(user_id):
-    """مسح حالة المستخدم من قاعدة البيانات."""
-    query = "DELETE FROM user_states WHERE user_id = %s"
-    return execute_query(query, (user_id,), commit=True)
+# --- [إصلاح] دالة حذف المشترك (لحل خطأ البث 403) ---
+def delete_bot_user(user_id):
+    """حذف المستخدم من جدول المشتركين."""
+    # يجب حذف المستخدم من كل الجداول المتعلقة به
+    # (user_states, user_favorites, user_history, video_ratings)
+    execute_query("DELETE FROM user_states WHERE user_id = %s", (user_id,), commit=True)
+    execute_query("DELETE FROM user_favorites WHERE user_id = %s", (user_id,), commit=True)
+    execute_query("DELETE FROM user_history WHERE user_id = %s", (user_id,), commit=True)
+    execute_query("DELETE FROM video_ratings WHERE user_id = %s", (user_id,), commit=True)
+    # الحذف النهائي من جدول المستخدمين
+    return execute_query("DELETE FROM bot_users WHERE user_id = %s", (user_id,), commit=True)
