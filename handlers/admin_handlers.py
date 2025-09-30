@@ -5,32 +5,59 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
 import re
 import time
+from telebot.apihelper import ApiTelegramException # استيراد خطأ API للتعامل مع حظر المستخدم
 
 from db_manager import (
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
-    delete_videos_by_ids, get_video_by_id
+    delete_videos_by_ids, get_video_by_id, execute_query, delete_category_by_id,
+    delete_category_and_contents, move_videos_from_category, get_categories_tree, get_category_by_id
 )
-from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
+from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER, get_child_categories
 
 logger = logging.getLogger(__name__)
+
+# --- دالة مساعدة لحذف المستخدم من قاعدة البيانات ---
+def delete_bot_user(user_id):
+    """حذف المستخدم من جدول المشتركين (bot_users) بعد حظره للبوت."""
+    query = "DELETE FROM bot_users WHERE user_id = %s"
+    # نستخدم execute_query مباشرة هنا
+    return execute_query(query, (user_id,), commit=True)
+
 
 # --- Top-level functions for callbacks and next_step_handlers ---
 
 def handle_rich_broadcast(message, bot):
     if check_cancel(message, bot): return
     user_ids = get_all_user_ids()
-    sent_count, failed_count = 0, 0
+    sent_count, failed_count, removed_count = 0, 0, 0
     bot.send_message(message.chat.id, f"بدء إرسال الرسالة إلى {len(user_ids)} مشترك...")
+    
     for user_id in user_ids:
         try:
             bot.copy_message(user_id, message.chat.id, message.message_id)
             sent_count += 1
+        except ApiTelegramException as e: 
+            if e.error_code == 403 and 'bot was blocked by the user' in e.description:
+                # المستخدم قام بحظر البوت - يجب حذفه
+                delete_bot_user(user_id)
+                removed_count += 1
+                logger.warning(f"User {user_id} blocked the bot and was removed from the database.")
+            else:
+                failed_count += 1
+                logger.warning(f"Failed to send broadcast to {user_id}: {e}")
+            
         except Exception as e:
             failed_count += 1
             logger.warning(f"Failed to send broadcast to {user_id}: {e}")
-        time.sleep(0.1)
-    bot.send_message(message.chat.id, f"✅ اكتمل البث!\n\n- رسائل ناجحة: {sent_count}\n- رسائل فاشلة: {failed_count}")
+            
+        time.sleep(0.1) # الانتظار لمنع تجاوز حد تليجرام
+
+    bot.send_message(message.chat.id, 
+                     f"✅ اكتمل البث!\n\n"
+                     f"- رسائل ناجحة: {sent_count}\n"
+                     f"- رسائل فاشلة: {failed_count}\n"
+                     f"- مشتركين تم حذفهم (حظروا البوت): {removed_count}")
 
 def handle_add_new_category(message, bot):
     if check_cancel(message, bot): return
@@ -41,6 +68,7 @@ def handle_add_new_category(message, bot):
     if success:
         bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\".")
     else:
+        # result في هذه الحالة هو النص "Failed to add category"
         bot.reply_to(message, f"❌ خطأ في إنشاء التصنيف: {result}")
 
 def handle_add_channel_step1(message, bot):
@@ -99,15 +127,28 @@ def handle_move_by_id_input(message, bot):
             msg = bot.reply_to(message, "عذراً، لا يوجد فيديو بهذا الرقم. حاول مرة أخرى أو أرسل /cancel.")
             bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
             return
-        keyboard = create_categories_keyboard()
+        
+        # إنشاء لوحة مفاتيح بجميع التصنيفات
+        categories_tree = get_categories_tree()
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        
+        buttons = []
+        for cat in categories_tree:
+            buttons.append(InlineKeyboardButton(text=cat['name'], callback_data=f"admin::move_confirm::{video['id']}::{cat['id']}"))
+            
+            # إضافة التصنيفات الفرعية
+            child_cats = get_child_categories(cat['id'])
+            for child in child_cats:
+                 buttons.append(InlineKeyboardButton(text=f"- {child['name']}", callback_data=f"admin::move_confirm::{video['id']}::{child['id']}"))
+                 
+        keyboard.add(*buttons)
+        
         if not keyboard.keyboard:
             bot.reply_to(message, "لا توجد تصنيفات لنقل الفيديو إليها.")
             return
-        for row in keyboard.keyboard:
-            for button in row:
-                parts = button.callback_data.split(CALLBACK_DELIMITER)
-                button.callback_data = f"admin::move_confirm::{video['id']}::{parts[1]}"
+        
         bot.reply_to(message, f"اختر التصنيف الجديد لنقل الفيديو رقم {video_id}:", reply_markup=keyboard)
+        
     except ValueError:
         msg = bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
         bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
