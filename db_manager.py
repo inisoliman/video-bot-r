@@ -1,3 +1,5 @@
+# (الكود كامل مدمج من كل التعديلات السابقة)
+
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import DictCursor
@@ -7,6 +9,10 @@ import logging
 import json
 
 logger = logging.getLogger(__name__)
+
+# [تعديل] يجب التأكد من أن هذا الملف لديك هو آخر نسخة كاملة
+# تتضمن EXPECTED_SCHEMA بكل الجداول (favorites, history, user_states)
+# وإلا ستفشل إضافات المفضلة. 
 
 try:
     DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -40,7 +46,6 @@ EXPECTED_SCHEMA = {
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT'
     },
-    # [إصلاح] تم تحديث هيكل الجدول ليتطابق مع القواعد
     'required_channels': {
         'id': 'SERIAL PRIMARY KEY',
         'channel_id': 'TEXT UNIQUE',
@@ -50,7 +55,7 @@ EXPECTED_SCHEMA = {
         'id': 'SERIAL PRIMARY KEY',
         'name': 'TEXT NOT NULL',
         'parent_id': 'INTEGER REFERENCES categories(id) ON DELETE CASCADE',
-        'full_path': 'TEXT NOT NULL' # [إصلاح] للتأكد من وجود full_path
+        'full_path': 'TEXT NOT NULL'
     },
     'bot_users': {
         'user_id': 'BIGINT PRIMARY KEY',
@@ -108,18 +113,15 @@ def verify_and_repair_schema():
     try:
         with conn.cursor() as c:
             for table_name, columns in EXPECTED_SCHEMA.items():
-                # [إصلاح] معالجة الإنشاء التلقائي للجدول أولاً
                 create_table_query = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY)")
                 try:
                     c.execute(create_table_query)
                 except psycopg2.ProgrammingError:
-                     # في حالة وجود الجدول بالفعل، نتجاهل الخطأ ونتابع
                     pass 
 
                 logger.info(f"Checking table: {table_name}")
                 for column_name, column_definition in columns.items():
                     if column_name.startswith('_'):
-                        # تخطي قيود UNIQUE التي يتم إضافتها في النهاية
                         continue 
                         
                     c.execute("""
@@ -129,7 +131,6 @@ def verify_and_repair_schema():
                     
                     if c.fetchone() is None:
                         logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-                        # تجنب إضافة PRIMARY KEY مكرر، يجب أن يكون موجودًا بالفعل أو يتم التعامل معه يدويًا
                         if 'PRIMARY KEY' in column_definition or column_name == 'id':
                             logger.warning(f"Skipping redundant creation of {column_name} in {table_name}.")
                             continue
@@ -266,7 +267,6 @@ def add_category(name, parent_id=None):
         elif parent_category:
             # معالجة بيانات قديمة لا تحتوي على full_path
             full_path = f"{parent_category['name']}/{name}" 
-        # إذا لم يتم العثور على الأب، نترك full_path = name ونتجاهل الخطأ
 
     query = "INSERT INTO categories (name, parent_id, full_path) VALUES (%s, %s, %s) RETURNING id"
     params = (name, parent_id, full_path)
@@ -276,10 +276,15 @@ def add_category(name, parent_id=None):
 
 def get_categories_tree():
     """جلب جميع التصنيفات الرئيسية (parent_id IS NULL)."""
-    return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
+    # [إصلاح] تغيير الاستعلام لكي يجلب جميع التصنيفات الرئيسية
+    return execute_query("SELECT * FROM categories WHERE parent_id IS NULL OR parent_id IS NOT NULL ORDER BY name", fetch="all")
 
 def get_child_categories(parent_id):
     """جلب التصنيفات الفرعية لتصنيف معين."""
+    if parent_id is None:
+         # [إصلاح] التأكد من جلب التصنيفات الرئيسية (parent_id IS NULL)
+         return execute_query("SELECT * FROM categories WHERE parent_id IS NULL ORDER BY name", fetch="all")
+
     return execute_query("SELECT * FROM categories WHERE parent_id = %s ORDER BY name", (parent_id,), fetch="all")
 
 
@@ -290,11 +295,11 @@ def get_videos(category_id, page=0):
     return videos, total['count'] if total else 0
 
 def increment_video_view_count(video_id):
-    """[إصلاح] دالة زيادة عداد المشاهدات."""
+    """دالة زيادة عداد المشاهدات."""
     return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
 
 def get_video_by_message_id(message_id):
-    """[إصلاح] دالة جلب فيديو بمعرف الرسالة."""
+    """دالة جلب فيديو بمعرف الرسالة."""
     return execute_query("SELECT * FROM video_archive WHERE message_id = %s", (message_id,), fetch="one")
 
 def get_active_category_id():
@@ -431,14 +436,11 @@ def get_user_history(user_id, page=0):
     total = execute_query("SELECT COUNT(*) as count FROM user_history WHERE user_id = %s", (user_id,), fetch="one")
     return videos, total['count'] if total else 0
 
-# --- [إصلاح] دالة حذف المشترك (لحل خطأ البث 403) ---
+# --- دالة حذف المشترك (لحل خطأ البث 403) ---
 def delete_bot_user(user_id):
     """حذف المستخدم من جدول المشتركين."""
-    # يجب حذف المستخدم من كل الجداول المتعلقة به
-    # (user_states, user_favorites, user_history, video_ratings)
     execute_query("DELETE FROM user_states WHERE user_id = %s", (user_id,), commit=True)
     execute_query("DELETE FROM user_favorites WHERE user_id = %s", (user_id,), commit=True)
     execute_query("DELETE FROM user_history WHERE user_id = %s", (user_id,), commit=True)
     execute_query("DELETE FROM video_ratings WHERE user_id = %s", (user_id,), commit=True)
-    # الحذف النهائي من جدول المستخدمين
     return execute_query("DELETE FROM bot_users WHERE user_id = %s", (user_id,), commit=True)
