@@ -9,9 +9,7 @@ from db_manager import *
 from . import helpers
 from . import admin_handlers
 from update_metadata import run_update_and_report_progress
-# [تعديل] لإزالة استيراد دوال إدارة الحالة غير المستخدمة هنا
-# from state_manager import set_user_waiting_for_input, States 
-
+from state_manager import States # لاستخدام ثوابت الحالة
 
 logger = logging.getLogger(__name__)
 
@@ -20,19 +18,56 @@ def register(bot, admin_ids):
     @bot.callback_query_handler(func=lambda call: True)
     def callback_query(call):
         try:
-            bot.answer_callback_query(call.id) # الرد الفوري لحل مشكلة query is too old
-            
             user_id = call.from_user.id
             data = call.data.split(helpers.CALLBACK_DELIMITER)
             action = data[0]
 
-            is_subscribed, _ = helpers.check_subscription(bot, user_id)
+            # 1. الرد الفوري على الكولباك لمنع ظهور خطأ 'query is too old'
+            # هذا ضروري ليظل البوت يستجيب
+            bot.answer_callback_query(call.id) 
+
+            is_subscribed, unsub_channels = helpers.check_subscription(bot, user_id)
+            
+            # 2. [الإصلاح المطلوب]: فرض التحقق قبل تنفيذ أي إجراء
             if action != "check_subscription" and not is_subscribed:
-                bot.answer_callback_query(call.id, "🛑 يجب الاشتراك في القنوات المطلوبة أولاً.", show_alert=True)
+                
+                # بناء رسالة وأزرار الاشتراك يدوياً
+                markup = InlineKeyboardMarkup(row_width=1)
+                for channel in unsub_channels:
+                    try:
+                        # بناء رابط القناة بشكل صحيح
+                        link = f"https://t.me/{channel['channel_name']}" if not str(channel['channel_id']).startswith('-100') else f"https://t.me/c/{str(channel['channel_id']).replace('-100', '')}"
+                        markup.add(InlineKeyboardButton(f"اشترك في {channel['channel_name']}", url=link))
+                    except Exception as e:
+                        logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
+                        
+                markup.add(InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription"))
+                
+                # إرسال رسالة الاشتراك بدلاً من تنفيذ الأمر المطلوب
+                try:
+                    bot.edit_message_text("🛑 يجب الاشتراك في القنوات التالية أولاً لمتابعة استخدام البوت:", 
+                                          call.message.chat.id, call.message.message_id, reply_markup=markup)
+                except telebot.apihelper.ApiTelegramException as e:
+                    # قد يحدث هذا إذا لم تتغير الرسالة، أو تم حذفها
+                    bot.send_message(call.message.chat.id, "🛑 يجب الاشتراك في القنوات التالية أولاً لمتابعة استخدام البوت:", reply_markup=markup)
+                
+                # إنهاء التنفيذ هنا
                 return
+            
+            # --- إذا كان مشتركاً، أكمل تنفيذ الأمر ---
+            
+            if action == "check_subscription":
+                if is_subscribed:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                    bot.send_message(call.message.chat.id, "✅ شكراً لاشتراكك! يمكنك الآن استخدام البوت.", reply_markup=helpers.main_menu())
+                else:
+                    bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد.", show_alert=True)
+                return
+
 
             # --- معالجة المفضلة والسجل ---
             if action == "fav":
+                # ... (باقي كود المفضلة كما هو)
                 _, action_type, video_id = data
                 video_id = int(video_id)
                 if action_type == "remove":
@@ -42,13 +77,13 @@ def register(bot, admin_ids):
                     add_to_favorites(user_id, video_id)
                     text = "⭐ تم إضافة الفيديو إلى المفضلة بنجاح!"
                 
-                # تحديث لوحة المفاتيح بعد الإضافة/الإزالة
                 new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
                 bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
                 bot.answer_callback_query(call.id, text)
                 return
 
             elif action in ["fav_page", "history_page"]:
+                # ... (باقي كود التصفح كما هو)
                 _, _, page_str = data
                 page = int(page_str)
                 if action == "fav_page":
@@ -70,12 +105,11 @@ def register(bot, admin_ids):
 
             # --- معالجة البحث ونطاقه ---
             elif action == "search_type":
+                # ... (كود search_type كما هو)
                 search_type = data[1]
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
-                # [إصلاح مشكلة البحث] التحقق من وجود الكلمة في الذاكرة
                 if not query_data or 'query' not in query_data:
-                    # في حال فقدان الكلمة، نطلب من المستخدم إعادة إرسالها (بدون تعيين حالة)
                     bot.edit_message_text("❌ انتهت صلاحية البحث أو لم ترسل كلمة البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -87,7 +121,6 @@ def register(bot, admin_ids):
                     keyboard = InlineKeyboardMarkup(row_width=1)
                     keyboard.add(InlineKeyboardButton("بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
                     
-                    # عرض التصنيفات الرئيسية والفرعية
                     for cat in categories:
                         keyboard.add(InlineKeyboardButton(f"بحث في: {cat['name']}", callback_data=f"search_scope::{cat['id']}::0"))
                         child_cats = get_child_categories(cat['id'])
@@ -106,10 +139,11 @@ def register(bot, admin_ids):
                     bot.edit_message_text("اختر فلتر للبحث المتقدم:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 
             elif action == "adv_filter":
+                # ... (كود adv_filter كما هو)
                 filter_type = data[1]
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
-                if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
+                if not query_data or 'query' not in query_data: 
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -130,11 +164,12 @@ def register(bot, admin_ids):
                     bot.edit_message_text("اختر الحالة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 
             elif action == "adv_search":
+                # ... (كود adv_search كما هو)
                 _, filter_type, filter_value, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
-                if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
+                if not query_data or 'query' not in query_data: 
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -156,11 +191,12 @@ def register(bot, admin_ids):
                 bot.edit_message_text(f"نتائج البحث المتقدم عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 
             elif action == "search_scope":
+                # ... (كود search_scope كما هو)
                 _, scope, page_str = data
                 page = int(page_str)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
-                if not query_data or 'query' not in query_data: # [إصلاح مشكلة البحث]
+                if not query_data or 'query' not in query_data: 
                     bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
@@ -177,12 +213,13 @@ def register(bot, admin_ids):
                 
 
             elif action == "admin":
+                # ... (باقي كود الأدمن)
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "غير مصرح لك.", show_alert=True)
                     return
 
                 sub_action = data[1]
-                # [إصلاح] يجب استدعاء دوال الأدمن هنا
+                
                 if sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
                     keyboard.add(InlineKeyboardButton("تصنيف رئيسي جديد", callback_data="admin::add_cat_main"))
@@ -192,7 +229,6 @@ def register(bot, admin_ids):
                 elif sub_action == "add_cat_main":
                     helpers.admin_steps[call.message.chat.id] = {"parent_id": None}
                     msg = bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
-                    # نستخدم register_next_step_handler مباشرة من admin_handlers
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
 
                 elif sub_action == "add_cat_sub_select_parent":
@@ -220,7 +256,6 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
                     
                 elif sub_action == "delete_category_select":
-                    # [إصلاح] يجب أن يظهر جميع التصنيفات
                     all_categories = get_categories_tree()
                     if not all_categories:
                         bot.answer_callback_query(call.id, "لا توجد تصنيفات لحذفها.", show_alert=True)
@@ -345,16 +380,7 @@ def register(bot, admin_ids):
                         title = (highest_rated['caption'] or "").split('\n')[0] or "فيديو"
                         stats_text += f"\n⭐ الأعلى تقييماً: {title} ({highest_rated['avg_rating']:.1f}/5)"
                     bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown")
-
-            elif action == "check_subscription":
-                is_subscribed, _ = helpers.check_subscription(bot, user_id)
-                if is_subscribed:
-                    bot.answer_callback_query(call.id, "✅ شكراً لاشتراكك!")
-                    bot.delete_message(call.message.chat.id, call.message.message_id)
-                    bot.send_message(call.message.chat.id, "أهلاً بك في بوت البحث عن الفيديوهات!", reply_markup=helpers.main_menu())
-                else:
-                    bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد.", show_alert=True)
-
+            
             elif action == "popular":
                 sub_action = data[1]
                 popular_data = get_popular_videos()
@@ -380,17 +406,14 @@ def register(bot, admin_ids):
                 _, video_id, message_id, chat_id = data
                 video_id = int(video_id)
                 increment_video_view_count(video_id)
-                add_to_history(user_id, video_id) # تتبع المشاهدة
+                add_to_history(user_id, video_id)
                 try:
-                    # [إصلاح] يجب استخدام bot.copy_message لإرسال الفيديو
                     bot.copy_message(call.message.chat.id, chat_id, int(message_id))
                     rating_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
-                    # يجب أن تكون الرسالة التقييمية مختلفة عن الرسالة الأصلية
                     bot.send_message(call.message.chat.id, "قيم هذا الفيديو:", reply_markup=rating_keyboard)
                     
                 except Exception as e:
                     logger.error(f"Error handling video callback: {e}", exc_info=True)
-                    # [إصلاح] يجب الرد على الكولباك لكي لا يفشل البوت
                     bot.answer_callback_query(call.id, "خطأ: الفيديو غير موجود بالقناة.", show_alert=True)
 
 
