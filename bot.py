@@ -80,12 +80,6 @@ if __name__ == "__main__":
     
     # 4. تشغيل خادم keep_alive في خيط منفصل
     keep_alive()
-
-# في نهاية ملف bot.py، قبل bot.polling()
-from history_cleaner import start_history_cleanup
-
-start_history_cleanup()
-logger.info("✅ نظام تنظيف سجل المشاهدة مفعّل")
     
     # 5. تشغيل البوت بأمان باستخدام BotManager لمنع خطأ 409
     # هذه الخطوة ستقوم بالتحقق من وجود نسخة أخرى وإيقافها إذا لزم الأمر
@@ -93,3 +87,9 @@ logger.info("✅ نظام تنظيف سجل المشاهدة مفعّل")
     manager.start_bot_safely(run_bot_polling)
     
     logger.info("Bot process finished.")
+
+    # في نهاية ملف bot.py، قبل bot.polling()
+    from history_cleaner import start_history_cleanup
+
+    start_history_cleanup()
+    logger.info("✅ نظام تنظيف سجل المشاهدة مفعّل")
