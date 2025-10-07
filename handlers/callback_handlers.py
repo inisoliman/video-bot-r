@@ -197,7 +197,7 @@ def register(bot, admin_ids):
                 query_data = helpers.user_last_search.get(call.message.chat.id)
                 
                 if not query_data or 'query' not in query_data: 
-                    bot.edit_message_text("❌ انتهت صلاحية البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
+                    bot.edit_message_text("❌ انتهت صلاحية البحث أو لم ترسل كلمة البحث. يرجى إرسال الكلمة المفتاحية الآن.", 
                                           call.message.chat.id, call.message.message_id)
                     return
                 
@@ -308,7 +308,7 @@ def register(bot, admin_ids):
                     bot.edit_message_text("👍 تم إلغاء عملية حذف التصنيف.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "move_video_by_id":
-                    msg = bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) الذي تريد نقله. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "أرسل رقم الفيديو أو أرقام الفيديوهات (مفصولة بمسافة أو فاصلة) التي تريد نقلها. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_move_by_id_input, bot)
 
                 elif sub_action == "delete_videos_by_ids":
@@ -320,6 +320,33 @@ def register(bot, admin_ids):
                     move_video_to_category(int(video_id), int(new_category_id))
                     category = get_category_by_id(int(new_category_id))
                     bot.edit_message_text(f"✅ تم نقل الفيديو بنجاح إلى تصنيف \"{category['name']}\".", call.message.chat.id, call.message.message_id)
+
+                # [جديد] معالجة النقل الجماعي للفيديوهات
+                elif sub_action == "move_multiple_confirm":
+                    _, video_ids_str, new_category_id = data
+                    video_ids = [int(vid) for vid in video_ids_str.split(',') if vid.strip().isdigit()]
+                    new_category_id = int(new_category_id)
+                    
+                    moved_count = 0
+                    failed_videos = []
+                    
+                    for video_id in video_ids:
+                        try:
+                            if move_video_to_category(video_id, new_category_id):
+                                moved_count += 1
+                            else:
+                                failed_videos.append(video_id)
+                        except Exception as e:
+                            logger.error(f"Error moving video {video_id}: {e}")
+                            failed_videos.append(video_id)
+                    
+                    category = get_category_by_id(new_category_id)
+                    result_text = f"✅ تم نقل {moved_count} فيديو بنجاح إلى تصنيف \"{category['name']}\"."
+                    
+                    if failed_videos:
+                        result_text += f"\n❌ فشل في نقل الفيديوهات التالية: {', '.join(map(str, failed_videos))}"
+                    
+                    bot.edit_message_text(result_text, call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "update_metadata":
                     msg = bot.edit_message_text("تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
