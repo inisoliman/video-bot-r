@@ -93,7 +93,7 @@ def handle_remove_channel_step(message, bot):
 def handle_list_channels(message, bot):
     channels = get_required_channels()
     if channels:
-        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)") for ch in channels])
+        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)" for ch in channels])
         bot.send_message(message.chat.id, response, parse_mode="Markdown")
     else:
         bot.send_message(message.chat.id, "لا توجد قنوات مطلوبة حالياً.")
