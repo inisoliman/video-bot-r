@@ -12,7 +12,8 @@ from db_manager import (
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
     delete_videos_by_ids, get_video_by_id, delete_bot_user, # [تعديل] يجب استيراد الدالة المضافة هنا
     delete_category_and_contents, move_videos_from_category, delete_category_by_id, 
-    get_categories_tree, set_active_category_id # [تعديل] استيراد الدوال المطلوبة للأدمن
+    get_categories_tree, set_active_category_id, # [تعديل] استيراد الدوال المطلوبة للأدمن
+    get_child_categories, move_video_to_category # [إصلاح] إضافة الدالتين المفقودتين
 )
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
 
@@ -92,11 +93,12 @@ def handle_remove_channel_step(message, bot):
 def handle_list_channels(message, bot):
     channels = get_required_channels()
     if channels:
-        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)" for ch in channels])
+        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)") for ch in channels])
         bot.send_message(message.chat.id, response, parse_mode="Markdown")
     else:
         bot.send_message(message.chat.id, "لا توجد قنوات مطلوبة حالياً.")
 
+# [تحسين] دعم حذف أكثر من فيديو
 def handle_delete_by_ids_input(message, bot):
     if check_cancel(message, bot): return
     try:
@@ -107,39 +109,76 @@ def handle_delete_by_ids_input(message, bot):
             bot.register_next_step_handler(msg, handle_delete_by_ids_input, bot)
             return
         deleted_count = delete_videos_by_ids(video_ids)
-        bot.reply_to(message, f"✅ تم حذف {deleted_count} فيديو بنجاح.")
+        bot.reply_to(message, f"✅ تم حذف {deleted_count} فيديو بنجاح من أصل {len(video_ids)} مطلوب.")
     except Exception as e:
         logger.error(f"Error in handle_delete_by_ids_input: {e}", exc_info=True)
         bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
 
+# [تحسين] دعم نقل أكثر من فيديو
 def handle_move_by_id_input(message, bot):
     if check_cancel(message, bot): return
     try:
-        video_id = int(message.text.strip())
-        video = get_video_by_id(video_id)
-        if not video:
-            msg = bot.reply_to(message, "عذراً، لا يوجد فيديو بهذا الرقم. حاول مرة أخرى أو أرسل /cancel.")
+        # [جديد] دعم أكثر من رقم فيديو
+        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
+        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
+        
+        if not video_ids:
+            msg = bot.reply_to(message, "لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
             bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
             return
-        keyboard = create_categories_keyboard()
-        if not keyboard.keyboard:
-            bot.reply_to(message, "لا توجد تصنيفات لنقل الفيديو إليها.")
+            
+        # التحقق من وجود الفيديوهات
+        valid_videos = []
+        invalid_ids = []
+        
+        for video_id in video_ids:
+            video = get_video_by_id(video_id)
+            if video:
+                valid_videos.append((video_id, video))
+            else:
+                invalid_ids.append(video_id)
+        
+        if not valid_videos:
+            msg = bot.reply_to(message, f"لا توجد فيديوهات صحيحة بهذه الأرقام: {', '.join(map(str, invalid_ids))}\nحاول مرة أخرى أو أرسل /cancel.")
+            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
             return
         
-        # [تعديل] عرض التصنيفات الرئيسية والفرعية
+        # إنشاء لوحة التصنيفات
         all_categories = get_categories_tree()
+        if not all_categories:
+            bot.reply_to(message, "لا توجد تصنيفات لنقل الفيديوهات إليها.")
+            return
+            
         move_keyboard = InlineKeyboardMarkup(row_width=1)
         
+        # إضافة التصنيفات الرئيسية
         for cat in all_categories:
-            move_keyboard.add(InlineKeyboardButton(cat['name'], callback_data=f"admin::move_confirm::{video['id']}::{cat['id']}"))
+            video_ids_str = ','.join(str(vid) for vid, _ in valid_videos)
+            move_keyboard.add(InlineKeyboardButton(
+                f"📁 {cat['name']}", 
+                callback_data=f"admin::move_multiple_confirm::{video_ids_str}::{cat['id']}"
+            ))
+            
+            # إضافة التصنيفات الفرعية
             child_cats = get_child_categories(cat['id'])
             for child in child_cats:
-                 move_keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"admin::move_confirm::{video['id']}::{child['id']}"))
-                 
-        bot.reply_to(message, f"اختر التصنيف الجديد لنقل الفيديو رقم {video_id}:", reply_markup=move_keyboard)
+                move_keyboard.add(InlineKeyboardButton(
+                    f"  └── {child['name']}", 
+                    callback_data=f"admin::move_multiple_confirm::{video_ids_str}::{child['id']}"
+                ))
+        
+        # رسالة التأكيد
+        video_list = '\n'.join([f"- رقم {vid}: {video.get('caption', 'بدون عنوان')[:50]}..." for vid, video in valid_videos])
+        if invalid_ids:
+            video_list += f"\n\n❌ أرقام غير صحيحة: {', '.join(map(str, invalid_ids))}"
+            
+        bot.reply_to(message, 
+            f"اختر التصنيف الجديد لنقل الفيديوهات التالية:\n\n{video_list}\n\n📁 اختر التصنيف:", 
+            reply_markup=move_keyboard
+        )
         
     except ValueError:
-        msg = bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
+        msg = bot.reply_to(message, "الرجاء إدخال أرقام صحيحة فقط. حاول مرة أخرى أو أرسل /cancel.")
         bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
     except Exception as e:
         logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
@@ -168,7 +207,7 @@ def register(bot, admin_ids):
         keyboard = InlineKeyboardMarkup(row_width=2)
         keyboard.add(InlineKeyboardButton("➕ إضافة تصنيف", callback_data="admin::add_new_cat"),
                      InlineKeyboardButton("🗑️ حذف تصنيف", callback_data="admin::delete_category_select"))
-        keyboard.add(InlineKeyboardButton("➡️ نقل فيديو بالرقم", callback_data="admin::move_video_by_id"),
+        keyboard.add(InlineKeyboardButton("➡️ نقل فيديو/فيديوهات بالرقم", callback_data="admin::move_video_by_id"),
                      InlineKeyboardButton("❌ حذف فيديوهات بالأرقام", callback_data="admin::delete_videos_by_ids"))
         keyboard.add(InlineKeyboardButton("🔘 تعيين التصنيف النشط", callback_data="admin::set_active"),
                      InlineKeyboardButton("🔄 تحديث بيانات الفيديوهات القديمة", callback_data="admin::update_metadata"))
