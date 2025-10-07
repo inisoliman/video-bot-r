@@ -49,7 +49,13 @@ def register(bot, channel_id, admin_ids):
             markup = InlineKeyboardMarkup(row_width=1)
             for channel in unsub_channels:
                 try:
-                    link = f"https://t.me/{channel['channel_name']}" if not str(channel['channel_id']).startswith('-100') else f"https://t.me/c/{str(channel['channel_id']).replace('-100', '')}"
+                    # للقنوات العامة
+if not str(channel['channel_id']).startswith('-100'):
+    link = f"https://t.me/{channel['channel_name']}"
+# للقنوات الخاصة - استخدم معرف القناة مباشرة
+else:
+    link = f"tg://resolve?domain={channel['channel_name']}" if channel['channel_name'] else f"https://t.me/joinchat/{channel['invite_link']}"
+
                     markup.add(InlineKeyboardButton(f"اشترك في {channel['channel_name']}", url=link))
                 except Exception as e:
                     logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
