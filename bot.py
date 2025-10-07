@@ -13,7 +13,7 @@ from telebot.apihelper import ApiTelegramException
 # استيراد BotManager
 from bot_manager import BotManager 
 from db_manager import verify_and_repair_schema
-from handlers import register_all_handlers 
+from handlers import register_handlers 
 from keep_alive import keep_alive
 
 # --- إعداد نظام التسجيل (Logging) ---
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     verify_and_repair_schema()
     
     # 3. تسجيل المعالجات
-    register_all_handlers(bot, CHANNEL_ID, ADMIN_IDS)
+    register_handlers(bot, CHANNEL_ID, ADMIN_IDS)
     
     # 4. تشغيل خادم keep_alive في خيط منفصل
     keep_alive()
