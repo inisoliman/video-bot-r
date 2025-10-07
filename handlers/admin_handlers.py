@@ -115,9 +115,78 @@ def handle_delete_by_ids_input(message, bot):
         bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
 
 # [تحسين] دعم نقل أكثر من فيديو
-def handle_move_by_id_input(message, bot):
-    if check_cancel(message, bot): return
+def handle_move_by_id_input(message):
+    """معالج إدخال أرقام الفيديوهات للنقل"""
     try:
+        user_id = message.from_user.id
+        text = message.text.strip()
+        
+        # استخراج أرقام الفيديوهات (دعم الفواصل والمسافات)
+        import re
+        video_ids = re.split(r'[,\s]+', text)
+        video_ids = [vid.strip() for vid in video_ids if vid.strip().isdigit()]
+        
+        if not video_ids:
+            bot.reply_to(message, "❌ لم يتم إدخال أرقام فيديو صحيحة.\nمثال: 123 أو 123, 456, 789")
+            return
+        
+        # التحقق من وجود الفيديوهات
+        valid_videos = []
+        invalid_ids = []
+        
+        for vid in video_ids:
+            video = get_video_by_id(int(vid))
+            if video:
+                valid_videos.append(video)
+            else:
+                invalid_ids.append(vid)
+        
+        if not valid_videos:
+            bot.reply_to(message, f"❌ لم يتم العثور على أي فيديو من الأرقام المدخلة.")
+            return
+        
+        # حفظ معلومات الفيديوهات في الحالة
+        video_ids_str = ",".join([str(v['id']) for v in valid_videos])
+        state_manager.set_state(user_id, 'awaiting_move_category', {
+            'video_ids': video_ids_str,
+            'videos_info': valid_videos
+        })
+        
+        # عرض التصنيفات
+        categories = get_all_categories()
+        if not categories:
+            bot.reply_to(message, "❌ لا توجد تصنيفات متاحة.")
+            return
+        
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        for cat in categories:
+            # لا نعرض التصنيفات الفرعية هنا، فقط الرئيسية
+            if cat.get('parent_id') is None:
+                keyboard.add(InlineKeyboardButton(
+                    text=f"📁 {cat['name']}",
+                    callback_data=f"movecat:{video_ids_str}:{cat['id']}"
+                ))
+        
+        keyboard.add(InlineKeyboardButton("❌ إلغاء", callback_data="cancel_move"))
+        
+        # رسالة تفصيلية
+        video_names = "\n".join([f"• {v['title']}" for v in valid_videos[:5]])
+        if len(valid_videos) > 5:
+            video_names += f"\n... و{len(valid_videos) - 5} فيديو آخر"
+        
+        msg = f"📋 **الفيديوهات المراد نقلها ({len(valid_videos)}):**\n{video_names}\n\n"
+        
+        if invalid_ids:
+            msg += f"⚠️ أرقام غير موجودة: {', '.join(invalid_ids)}\n\n"
+        
+        msg += "اختر التصنيف الجديد:"
+        
+        bot.reply_to(message, msg, reply_markup=keyboard, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ غير متوقع.")
+
         # [جديد] دعم أكثر من رقم فيديو
         video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
         video_ids = [int(num) for num in video_ids_str if num.isdigit()]
