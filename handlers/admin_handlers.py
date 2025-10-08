@@ -7,7 +7,7 @@ import re
 import time
 from telebot.apihelper import ApiTelegramException # [إصلاح] لإصدار الخطأ 403
 
-from db_manager import (
+from db_manager import (, get_child_categories
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
     delete_videos_by_ids, get_video_by_id, delete_bot_user, # [تعديل] يجب استيراد الدالة المضافة هنا
