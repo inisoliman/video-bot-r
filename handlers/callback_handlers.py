@@ -316,7 +316,7 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
 
                 elif sub_action == "move_confirm":
-                    _, video_id, new_category_id = data
+                    _, _, video_id, new_category_id = data  # <-- تم إصلاح هذا السطر
                     move_video_to_category(int(video_id), int(new_category_id))
                     category = get_category_by_id(int(new_category_id))
                     bot.edit_message_text(f"✅ تم نقل الفيديو بنجاح إلى تصنيف \"{category['name']}\".", call.message.chat.id, call.message.message_id)
