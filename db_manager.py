@@ -444,3 +444,21 @@ def delete_bot_user(user_id):
     execute_query("DELETE FROM user_history WHERE user_id = %s", (user_id,), commit=True)
     execute_query("DELETE FROM video_ratings WHERE user_id = %s", (user_id,), commit=True)
     return execute_query("DELETE FROM bot_users WHERE user_id = %s", (user_id,), commit=True)
+
+def move_videos_bulk(video_ids, new_category_id):
+    """
+    نقل مجموعة من الفيديوهات إلى تصنيف جديد دفعة واحدة.
+
+    Args:
+        video_ids: قائمة بأرقام الفيديوهات
+        new_category_id: رقم التصنيف الجديد
+
+    Returns:
+        عدد الفيديوهات التي تم نقلها بنجاح
+    """
+    if not video_ids:
+        return 0
+
+    query = "UPDATE video_archive SET category_id = %s WHERE id = ANY(%s) RETURNING id"
+    result = execute_query(query, (new_category_id, video_ids), fetch='all', commit=True)
+    return len(result) if isinstance(result, list) else 0
