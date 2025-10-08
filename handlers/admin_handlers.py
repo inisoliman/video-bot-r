@@ -5,15 +5,16 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
 import re
 import time
-from telebot.apihelper import ApiTelegramException # [إصلاح] لإصدار الخطأ 403
+from telebot.apihelper import ApiTelegramException
 
-from db_manager import (, get_child_categories
+from db_manager import (
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
-    delete_videos_by_ids, get_video_by_id, delete_bot_user, # [تعديل] يجب استيراد الدالة المضافة هنا
-    delete_category_and_contents, move_videos_from_category, delete_category_by_id, 
-    get_categories_tree, set_active_category_id # [تعديل] استيراد الدوال المطلوبة للأدمن
+    delete_videos_by_ids, get_video_by_id, delete_bot_user,
+    delete_category_and_contents, move_videos_from_category, delete_category_by_id,
+    get_categories_tree, set_active_category_id, get_child_categories
 )
+
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
 
 logger = logging.getLogger(__name__)
@@ -23,17 +24,14 @@ logger = logging.getLogger(__name__)
 def handle_rich_broadcast(message, bot):
     if check_cancel(message, bot): return
     user_ids = get_all_user_ids()
-    sent_count, failed_count, removed_count = 0, 0, 0 # [تعديل] إضافة عداد الحذف
+    sent_count, failed_count, removed_count = 0, 0, 0
     bot.send_message(message.chat.id, f"بدء إرسال الرسالة إلى {len(user_ids)} مشترك...")
-    
     for user_id in user_ids:
         try:
-            # استخدام copy_message لتمرير الرسائل النصية الغنية (Rich messages)
             bot.copy_message(user_id, message.chat.id, message.message_id)
             sent_count += 1
         except ApiTelegramException as e:
             if 'bot was blocked by the user' in e.description:
-                # [إصلاح] تنظيف قاعدة البيانات تلقائياً
                 delete_bot_user(user_id)
                 removed_count += 1
                 logger.warning(f"Failed to send broadcast to {user_id}: Bot was blocked. User deleted.")
@@ -43,12 +41,9 @@ def handle_rich_broadcast(message, bot):
         except Exception as e:
             failed_count += 1
             logger.error(f"Unexpected error broadcasting to {user_id}: {e}")
-            
         time.sleep(0.1)
-    
-    bot.send_message(message.chat.id, 
+    bot.send_message(message.chat.id,
                      f"✅ اكتمل البث!\n\n- رسائل ناجحة: {sent_count}\n- رسائل فاشلة (لم يتم إرسالها): {failed_count}\n- مشتركين محذوفين (لأنهم حظروا البوت): {removed_count}")
-
 
 def handle_add_new_category(message, bot):
     if check_cancel(message, bot): return
@@ -59,9 +54,8 @@ def handle_add_new_category(message, bot):
     if success:
         bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\".")
     else:
-        # [إصلاح] يجب أن تكون رسالة الخطأ واضحة
         bot.reply_to(message, f"❌ خطأ في إنشاء التصنيف: {result[1] if isinstance(result, tuple) else result}")
-        
+
 def handle_add_channel_step1(message, bot):
     if check_cancel(message, bot): return
     channel_id = message.text.strip()
@@ -74,8 +68,6 @@ def handle_add_channel_step2(message, bot):
     channel_name = message.text.strip()
     channel_id = admin_steps.pop(message.chat.id, {}).get("channel_id")
     if not channel_id: return
-    
-    # [تعديل] استخدام دالة إضافة القناة
     if add_required_channel(channel_id, channel_name):
         bot.send_message(message.chat.id, f"✅ تم إضافة القناة \"{channel_name}\" (ID: `{channel_id}`).", parse_mode="Markdown")
     else:
@@ -125,19 +117,14 @@ def handle_move_by_id_input(message, bot):
         if not keyboard.keyboard:
             bot.reply_to(message, "لا توجد تصنيفات لنقل الفيديو إليها.")
             return
-        
-        # [تعديل] عرض التصنيفات الرئيسية والفرعية
         all_categories = get_categories_tree()
         move_keyboard = InlineKeyboardMarkup(row_width=1)
-        
         for cat in all_categories:
             move_keyboard.add(InlineKeyboardButton(cat['name'], callback_data=f"admin::move_confirm::{video['id']}::{cat['id']}"))
             child_cats = get_child_categories(cat['id'])
             for child in child_cats:
-                 move_keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"admin::move_confirm::{video['id']}::{child['id']}"))
-                 
+                move_keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"admin::move_confirm::{video['id']}::{child['id']}"))
         bot.reply_to(message, f"اختر التصنيف الجديد لنقل الفيديو رقم {video_id}:", reply_markup=move_keyboard)
-        
     except ValueError:
         msg = bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
         bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
@@ -154,8 +141,8 @@ def check_cancel(message, bot):
     return False
 
 # --- Handler Registration ---
-def register(bot, admin_ids):
 
+def register(bot, admin_ids):
     def check_admin(func):
         def wrapper(message):
             if message.from_user.id in admin_ids:
