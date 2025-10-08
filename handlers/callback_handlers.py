@@ -345,8 +345,40 @@ def register(bot, admin_ids):
                 elif sub_action == "set_active":
                     all_categories = get_categories_tree()
                     if not all_categories:
-                        bot.answer_callback_query(call.id, "لا توجد تصنيفات حالياً.", show_alert=True)
-                        return
+                    bot.answer_callback_query(call.id, "لا توجد تصنيفات حالياً.", show_alert=True)
+                    return
+    
+                 # عرض التصنيفات بشكل شجري (رئيسي ثم فرعي تحته مباشرة)
+                    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+                    for cat in all_categories:
+                 # إضافة التصنيف الرئيسي
+                        keyboard.add(
+                        InlineKeyboardButton(
+                        f"📁 {cat['name']}", 
+                        callback_data=f"admin::setcat::{cat['id']}"
+                       )
+                       )
+        
+                 # إضافة التصنيفات الفرعية تحت الرئيسي مباشرة
+                       child_cats = get_child_categories(cat['id'])
+                       for child in child_cats:
+                       keyboard.add(
+                       inlinekeyboardbutton(
+                       f"  └─ {child['name']}", 
+                       callback_data=f"admin::setcat::{child['id']}"
+                      )
+                      )
+    
+                    bot.edit_message_text(
+                    "📂 اختر التصنيف الذي تريد تفعيله:\n\n"
+                    "📁 = تصنيف رئيسي\n"
+                    "└─ = تصنيف فرعي",
+                    call.message.chat.id, 
+                    call.message.message_id, 
+                    reply_markup=keyboard
+                    )
+
 
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     for cat in all_categories:
