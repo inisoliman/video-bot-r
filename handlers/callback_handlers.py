@@ -316,10 +316,32 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
 
                 elif sub_action == "move_confirm":
-                    _, _, video_id, new_category_id = data  # <-- تم إصلاح هذا السطر
-                    move_video_to_category(int(video_id), int(new_category_id))
-                    category = get_category_by_id(int(new_category_id))
-                    bot.edit_message_text(f"✅ تم نقل الفيديو بنجاح إلى تصنيف \"{category['name']}\".", call.message.chat.id, call.message.message_id)
+                    _, _, new_category_id = data
+                    step_data = admin_steps.pop(call.message.chat.id, {})
+                    video_ids = step_data.get("video_ids", [])
+    
+                if not video_ids:
+                    bot.edit_message_text(
+                    "❌ خطأ: لم يتم العثور على أرقام الفيديوهات.", 
+                    call.message.chat.id, 
+                    call.message.message_id
+                    )
+                return
+    
+    # نقل الفيديوهات (فردي أو جماعي)
+    moved_count = move_videos_bulk(video_ids, int(new_category_id))
+    category = get_category_by_id(int(new_category_id))
+    
+    # رسالة مختلفة للنقل الفردي أو الجماعي
+    if len(video_ids) == 1:
+        message_text = f"✅ تم نقل الفيديو رقم {video_ids[0]} بنجاح إلى تصنيف \"{category['name']}\"."
+    else:
+        message_text = (
+            f"✅ تم نقل {moved_count} فيديو بنجاح إلى تصنيف \"{category['name']}\".\n\n"
+            f"الأرقام المنقولة: {', '.join(map(str, video_ids))}"
+        )
+    
+    bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "update_metadata":
                     msg = bot.edit_message_text("تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
