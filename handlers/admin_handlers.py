@@ -12,7 +12,8 @@ from db_manager import (
     get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
     delete_videos_by_ids, get_video_by_id, delete_bot_user,
     delete_category_and_contents, move_videos_from_category, delete_category_by_id,
-    get_categories_tree, set_active_category_id, get_child_categories
+    get_categories_tree, set_active_category_id, get_child_categories,
+    move_videos_bulk  # إضافة الدالة الجديدة
 )
 
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
@@ -105,32 +106,83 @@ def handle_delete_by_ids_input(message, bot):
         bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
 
 def handle_move_by_id_input(message, bot):
-    if check_cancel(message, bot): return
+    """معالج النقل الفردي والجماعي للفيديوهات - تم تحديثه"""
+    if check_cancel(message, bot): 
+        return
+
     try:
-        video_id = int(message.text.strip())
-        video = get_video_by_id(video_id)
-        if not video:
-            msg = bot.reply_to(message, "عذراً، لا يوجد فيديو بهذا الرقم. حاول مرة أخرى أو أرسل /cancel.")
+        # قراءة الأرقام المدخلة (يدعم رقم واحد أو أرقام متعددة)
+        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
+        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
+
+        if not video_ids:
+            msg = bot.reply_to(message, "❌ لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
             bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
             return
-        keyboard = create_categories_keyboard()
-        if not keyboard.keyboard:
-            bot.reply_to(message, "لا توجد تصنيفات لنقل الفيديو إليها.")
+
+        # التحقق من وجود الفيديوهات
+        valid_videos = []
+        invalid_ids = []
+
+        for vid_id in video_ids:
+            video = get_video_by_id(vid_id)
+            if video:
+                valid_videos.append(vid_id)
+            else:
+                invalid_ids.append(vid_id)
+
+        if not valid_videos:
+            msg = bot.reply_to(message, "❌ لا توجد فيديوهات صحيحة بالأرقام المدخلة. حاول مرة أخرى أو أرسل /cancel.")
+            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
             return
+
+        # حفظ أرقام الفيديوهات في admin_steps
+        admin_steps[message.chat.id] = {"video_ids": valid_videos}
+
+        # عرض التصنيفات للاختيار
         all_categories = get_categories_tree()
+        if not all_categories:
+            bot.reply_to(message, "❌ لا توجد تصنيفات لنقل الفيديوهات إليها.")
+            return
+
         move_keyboard = InlineKeyboardMarkup(row_width=1)
         for cat in all_categories:
-            move_keyboard.add(InlineKeyboardButton(cat['name'], callback_data=f"admin::move_confirm::{video['id']}::{cat['id']}"))
+            move_keyboard.add(
+                InlineKeyboardButton(
+                    cat['name'], 
+                    callback_data=f"admin::move_confirm::{cat['id']}"
+                )
+            )
+            # إضافة التصنيفات الفرعية
             child_cats = get_child_categories(cat['id'])
             for child in child_cats:
-                move_keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"admin::move_confirm::{video['id']}::{child['id']}"))
-        bot.reply_to(message, f"اختر التصنيف الجديد لنقل الفيديو رقم {video_id}:", reply_markup=move_keyboard)
+                move_keyboard.add(
+                    InlineKeyboardButton(
+                        f"  └─ {child['name']}", 
+                        callback_data=f"admin::move_confirm::{child['id']}"
+                    )
+                )
+
+        # رسالة مختلفة للنقل الفردي أو الجماعي
+        if len(valid_videos) == 1:
+            message_text = f"✅ تم اختيار الفيديو رقم {valid_videos[0]}\n\nاختر التصنيف الجديد:"
+        else:
+            message_text = (
+                f"✅ تم اختيار {len(valid_videos)} فيديو للنقل\n\n"
+                f"الأرقام: {', '.join(map(str, valid_videos))}\n\n"
+            )
+            if invalid_ids:
+                message_text += f"⚠️ أرقام غير موجودة (تم تجاهلها): {', '.join(map(str, invalid_ids))}\n\n"
+            message_text += "اختر التصنيف الجديد:"
+
+        bot.reply_to(message, message_text, reply_markup=move_keyboard)
+
     except ValueError:
-        msg = bot.reply_to(message, "الرجاء إدخال رقم صحيح. حاول مرة أخرى أو أرسل /cancel.")
+        msg = bot.reply_to(message, "❌ الرجاء إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
         bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
     except Exception as e:
         logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
-        bot.reply_to(message, "حدث خطأ غير متوقع.")
+        bot.reply_to(message, "❌ حدث خطأ غير متوقع.")
 
 def check_cancel(message, bot):
     if message.text == "/cancel":
