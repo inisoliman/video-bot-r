@@ -43,20 +43,54 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(commands=["start"])
     def start(message):
+        # إضافة المستخدم إلى قاعدة البيانات
         add_bot_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
+        
+        # التحقق من الاشتراك في القنوات المطلوبة
         is_subscribed, unsub_channels = check_subscription(bot, message.from_user.id)
+        
         if not is_subscribed:
             markup = InlineKeyboardMarkup(row_width=1)
             for channel in unsub_channels:
                 try:
-                    link = f"https://t.me/{channel['channel_name']}" if not str(channel['channel_id']).startswith('-100') else f"https://t.me/c/{str(channel['channel_id']).replace('-100', '')}"
-                    markup.add(InlineKeyboardButton(f"اشترك في {channel['channel_name']}", url=link))
+                    # إنشاء رابط القناة
+                    channel_id_str = str(channel['channel_id'])
+                    if channel_id_str.startswith('-100'):
+                        # قناة بمعرف رقمي
+                        link = f"https://t.me/c/{channel_id_str.replace('-100', '')}"
+                    elif channel_id_str.startswith('@'):
+                        # قناة باسم مستخدم
+                        link = f"https://t.me/{channel_id_str[1:]}"
+                    else:
+                        # قناة باسم مستخدم بدون @
+                        link = f"https://t.me/{channel_id_str}"
+                    
+                    markup.add(InlineKeyboardButton(f"📢 اشترك في {channel['channel_name']}", url=link))
                 except Exception as e:
                     logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
+            
             markup.add(InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription"))
-            bot.reply_to(message, "يرجى الاشتراك في القنوات التالية لاستخدام البوت:", reply_markup=markup)
+            
+            welcome_text = (
+                "🤖 مرحباً بك في بوت البحث عن الفيديوهات!\n\n"
+                "📋 للاستفادة من البوت، يجب عليك الاشتراك في القنوات التالية أولاً:\n"
+                "👇 اضغط على الأزرار أدناه للاشتراك"
+            )
+            
+            bot.reply_to(message, welcome_text, reply_markup=markup)
             return
-        bot.reply_to(message, "أهلاً بك في بوت البحث عن الفيديوهات!", reply_markup=main_menu())
+        
+        # إذا كان المستخدم مشتركاً في جميع القنوات
+        welcome_text = (
+            "🎬 أهلاً بك في بوت البحث عن الفيديوهات!\n\n"
+            "يمكنك الآن:\n"
+            "• 🎬 عرض كل الفيديوهات\n"
+            "• 🔥 مشاهدة الفيديوهات الشائعة\n"
+            "• 🍿 الحصول على اقتراح عشوائي\n"
+            "• 🔍 البحث عن فيديوهات معينة\n\n"
+            "استمتع بوقتك! 😊"
+        )
+        bot.reply_to(message, welcome_text, reply_markup=main_menu())
 
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):

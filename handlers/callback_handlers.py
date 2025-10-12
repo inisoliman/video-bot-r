@@ -23,8 +23,7 @@ def register(bot, admin_ids):
             data = call.data.split(helpers.CALLBACK_DELIMITER)
             action = data[0]
 
-            # 1. الرد الفوري على الكولباك
-            bot.answer_callback_query(call.id)
+# ملاحظة: سنجيب على callback_query في كل معالج حسب الحاجة بدلاً من الرد الفوري هنا
 
             is_subscribed, unsub_channels = helpers.check_subscription(bot, user_id)
 
@@ -50,11 +49,59 @@ def register(bot, admin_ids):
 
             # --- إذا كان مشتركاً، أكمل تنفيذ الأمر ---
             if action == "check_subscription":
+                # إعادة فحص الاشتراك
+                is_subscribed, unsub_channels = helpers.check_subscription(bot, user_id)
+                
                 if is_subscribed:
-                    bot.delete_message(call.message.chat.id, call.message.message_id)
-                    bot.send_message(call.message.chat.id, "✅ شكراً لاشتراكك! يمكنك الآن استخدام البوت.", reply_markup=helpers.main_menu())
+                    try:
+                        bot.delete_message(call.message.chat.id, call.message.message_id)
+                    except Exception as e:
+                        logger.warning(f"Could not delete subscription check message: {e}")
+                    
+                    welcome_text = (
+                        "🎬 أهلاً بك في بوت البحث عن الفيديوهات!\n\n"
+                        "يمكنك الآن:\n"
+                        "• 🎬 عرض كل الفيديوهات\n"
+                        "• 🔥 مشاهدة الفيديوهات الشائعة\n"
+                        "• 🍿 الحصول على اقتراح عشوائي\n"
+                        "• 🔍 البحث عن فيديوهات معينة\n\n"
+                        "استمتع بوقتك! 😊"
+                    )
+                    bot.send_message(call.message.chat.id, welcome_text, reply_markup=helpers.main_menu())
                 else:
-                    bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد.", show_alert=True)
+                    # إعادة إنشاء رسالة الاشتراك مع القنوات التي لم يشترك فيها المستخدم
+                    markup = InlineKeyboardMarkup(row_width=1)
+                    for channel in unsub_channels:
+                        try:
+                            # إنشاء رابط القناة
+                            channel_id_str = str(channel['channel_id'])
+                            if channel_id_str.startswith('-100'):
+                                # قناة بمعرف رقمي
+                                link = f"https://t.me/c/{channel_id_str.replace('-100', '')}"
+                            elif channel_id_str.startswith('@'):
+                                # قناة باسم مستخدم
+                                link = f"https://t.me/{channel_id_str[1:]}"
+                            else:
+                                # قناة باسم مستخدم بدون @
+                                link = f"https://t.me/{channel_id_str}"
+                            
+                            markup.add(InlineKeyboardButton(f"📢 اشترك في {channel['channel_name']}", url=link))
+                        except Exception as e:
+                            logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
+                    
+                    markup.add(InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription"))
+                    
+                    try:
+                        bot.edit_message_text(
+                            "❌ لم تشترك في جميع القنوات بعد. يرجى الاشتراك في القنوات التالية لاستخدام البوت:",
+                            call.message.chat.id,
+                            call.message.message_id,
+                            reply_markup=markup
+                        )
+                    except Exception as e:
+                        logger.error(f"Error updating subscription message: {e}")
+                        bot.answer_callback_query(call.id, "❌ لم تشترك في جميع القنوات بعد.", show_alert=True)
+                        
                 return
 
             # --- معالجة المفضلة والسجل ---
@@ -310,9 +357,14 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
 
                 elif sub_action == "move_confirm":
-                    _, _, new_category_id = data
-                    step_data = admin_steps.pop(call.message.chat.id, {})
-                    video_ids = step_data.get("video_ids", [])
+                    video_id = int(data[2])
+                    new_category_id = int(data[3])
+                    result = move_video_to_category(video_id, new_category_id)
+                    if result:
+                        category = get_category_by_id(new_category_id)
+                        bot.edit_message_text(f"✅ تم نقل الفيديو رقم {video_id} بنجاح إلى تصنيف \"{category['name']}\".", call.message.chat.id, call.message.message_id)
+                    else:
+                        bot.edit_message_text(f"❌ حدث خطأ أثناء نقل الفيديو رقم {video_id}.", call.message.chat.id, call.message.message_id)
 
                     if not video_ids:
                         bot.edit_message_text(
@@ -410,6 +462,25 @@ def register(bot, admin_ids):
                     bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 else:
                     bot.edit_message_text("لا توجد فيديوهات كافية لعرضها حالياً.", call.message.chat.id, call.message.message_id)
+            
+            elif action == "popular_page":
+                sub_action = data[1]
+                page = int(data[2])
+                popular_data = get_popular_videos()
+                videos = popular_data.get(sub_action, [])
+                title = "📈 الفيديوهات الأكثر مشاهدة:" if sub_action == "most_viewed" else "⭐ الفيديوهات الأعلى تقييماً:"
+                
+                if videos:
+                    # حساب الفيديوهات للصفحة المحددة
+                    start_idx = page * VIDEOS_PER_PAGE
+                    end_idx = start_idx + VIDEOS_PER_PAGE
+                    page_videos = videos[start_idx:end_idx]
+                    
+                    keyboard = helpers.create_paginated_keyboard(page_videos, len(videos), page, "popular_page", sub_action)
+                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                else:
+                    bot.edit_message_text("لا توجد فيديوهات كافية لعرضها حالياً.", call.message.chat.id, call.message.message_id)
+                
 
             elif action == "back_to_cats":
                 helpers.list_videos(bot, call.message, edit_message=call.message)
@@ -419,54 +490,140 @@ def register(bot, admin_ids):
                 bot.send_message(call.message.chat.id, "القائمة الرئيسية:", reply_markup=helpers.main_menu())
 
             elif action == "video":
-                _, video_id, message_id, chat_id = data
-                video_id = int(video_id)
-                increment_video_view_count(video_id)
-                add_to_history(user_id, video_id)
-
                 try:
-                    bot.copy_message(call.message.chat.id, chat_id, int(message_id))
-                    rating_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                    _, video_id, message_id, chat_id = data
+                    
+                    # التحقق من صحة البيانات
+                    if not video_id.isdigit() or not message_id.isdigit():
+                        bot.answer_callback_query(call.id, "خطأ في بيانات الفيديو.", show_alert=True)
+                        return
+                    
+                    video_id_int = int(video_id)
+                    message_id_int = int(message_id)
+                    chat_id_int = int(chat_id)
+                    
+                    # زيادة عداد المشاهدات وإضافة للسجل
+                    increment_video_view_count(video_id_int)
+                    add_to_history(user_id, video_id_int)
+                    
+                    # محاولة إرسال الفيديو
+                    bot.copy_message(call.message.chat.id, chat_id_int, message_id_int)
+                    
+                    # إضافة لوحة التقييم
+                    rating_keyboard = helpers.create_video_action_keyboard(video_id_int, user_id)
                     bot.send_message(call.message.chat.id, "قيم هذا الفيديو:", reply_markup=rating_keyboard)
+                    
+                except telebot.apihelper.ApiTelegramException as e:
+                    logger.error(f"Telegram API error handling video {video_id}: {e}", exc_info=True)
+                    if "message not found" in str(e).lower():
+                        bot.answer_callback_query(call.id, "❌ الفيديو غير متاح حالياً. ربما تم حذفه من القناة.", show_alert=True)
+                    elif "chat not found" in str(e).lower():
+                        bot.answer_callback_query(call.id, "❌ القناة غير متاحة حالياً.", show_alert=True)
+                    else:
+                        bot.answer_callback_query(call.id, "❌ حدث خطأ أثناء إرسال الفيديو.", show_alert=True)
                 except Exception as e:
-                    logger.error(f"Error handling video callback: {e}", exc_info=True)
-                    bot.answer_callback_query(call.id, "خطأ: الفيديو غير موجود بالقناة.", show_alert=True)
+                    logger.error(f"Unexpected error handling video callback: {e}", exc_info=True)
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ غير متوقع.", show_alert=True)
 
             elif action == "rate":
-                _, video_id, rating = data
-                video_id = int(video_id)
-
-                if add_video_rating(video_id, user_id, int(rating)):
-                    new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
-                    bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
-                    bot.answer_callback_query(call.id, f"تم تقييم الفيديو بـ {rating} نجوم!")
-                else:
-                    bot.answer_callback_query(call.id, "حدث خطأ في التقييم.")
+                try:
+                    _, video_id, rating = data
+                    
+                    # التحقق من صحة البيانات
+                    if not video_id.isdigit() or not rating.isdigit():
+                        bot.answer_callback_query(call.id, "خطأ في بيانات التقييم.", show_alert=True)
+                        return
+                    
+                    video_id_int = int(video_id)
+                    rating_int = int(rating)
+                    
+                    # التحقق من نطاق التقييم
+                    if rating_int < 1 or rating_int > 5:
+                        bot.answer_callback_query(call.id, "التقييم يجب أن يكون بين 1 و 5.", show_alert=True)
+                        return
+                    
+                    # إضافة التقييم
+                    if add_video_rating(video_id_int, user_id, rating_int):
+                        new_keyboard = helpers.create_video_action_keyboard(video_id_int, user_id)
+                        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
+                        bot.answer_callback_query(call.id, f"⭐ تم تقييم الفيديو بـ {rating_int} نجوم! شكراً لك.")
+                    else:
+                        bot.answer_callback_query(call.id, "❌ حدث خطأ في حفظ التقييم. حاول مرة أخرى.")
+                        
+                except Exception as e:
+                    logger.error(f"Error handling rating callback: {e}", exc_info=True)
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ أثناء حفظ التقييم.")
 
             elif action == "cat":
-                _, category_id_str, page_str = data
-                category_id, page = int(category_id_str), int(page_str)
-                child_categories = get_child_categories(category_id)
-                videos, total_count = get_videos(category_id, page)
-                category = get_category_by_id(category_id)
-
-                if not category:
-                    bot.edit_message_text("❌ التصنيف غير موجود.", call.message.chat.id, call.message.message_id)
-                    return
-
-                if not child_categories and not videos:
-                    bot.edit_message_text(f"التصنيف \"{category['name']}\" فارغ حالياً.", call.message.chat.id, call.message.message_id,
-                                        reply_markup=helpers.create_combined_keyboard([], [], 0, 0, category_id))
-                else:
-                    keyboard = helpers.create_combined_keyboard(child_categories, videos, total_count, page, category_id)
-                    bot.edit_message_text(f"محتويات تصنيف \"{category['name']}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-
+                try:
+                    _, category_id_str, page_str = data
+                    
+                    # التحقق من صحة البيانات
+                    if not category_id_str.isdigit() or not page_str.isdigit():
+                        bot.answer_callback_query(call.id, "خطأ في بيانات التصنيف.", show_alert=True)
+                        return
+                    
+                    category_id, page = int(category_id_str), int(page_str)
+                    
+                    # الحصول على معلومات التصنيف
+                    category = get_category_by_id(category_id)
+                    if not category:
+                        bot.edit_message_text("❌ التصنيف غير موجود.", call.message.chat.id, call.message.message_id)
+                        return
+                    
+                    # الحصول على التصنيفات الفرعية والفيديوهات
+                    child_categories = get_child_categories(category_id)
+                    videos, total_count = get_videos(category_id, page)
+                    
+                    if not child_categories and not videos:
+                        empty_keyboard = helpers.create_combined_keyboard([], [], 0, 0, category_id)
+                        bot.edit_message_text(
+                            f"📂 التصنيف \"{category['name']}\"\n\n"
+                            "هذا التصنيف فارغ حالياً. لا توجد أقسام فرعية أو فيديوهات.",
+                            call.message.chat.id, 
+                            call.message.message_id,
+                            reply_markup=empty_keyboard
+                        )
+                    else:
+                        keyboard = helpers.create_combined_keyboard(child_categories, videos, total_count, page, category_id)
+                        content_info = []
+                        if child_categories:
+                            content_info.append(f"{len(child_categories)} قسم فرعي")
+                        if videos:
+                            content_info.append(f"{total_count} فيديو")
+                        
+                        content_text = " • ".join(content_info) if content_info else "فارغ"
+                        
+                        bot.edit_message_text(
+                            f"📂 محتويات تصنيف \"{category['name']}\"\n"
+                            f"📊 المحتوى: {content_text}",
+                            call.message.chat.id, 
+                            call.message.message_id, 
+                            reply_markup=keyboard
+                        )
+                        
+                except Exception as e:
+                    logger.error(f"Error handling category callback: {e}", exc_info=True)
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ أثناء تحميل التصنيف.")
+                
             elif action == "noop":
                 pass  # لا تفعل شيئاً
 
-        except Exception as e:
-            logger.error(f"Callback query error: {e}", exc_info=True)
+        except telebot.apihelper.ApiTelegramException as e:
+            logger.error(f"Telegram API error in callback query: {e}", exc_info=True)
             try:
-                bot.answer_callback_query(call.id, "حدث خطأ غير متوقع. حاول مرة أخرى.", show_alert=True)
+                if "query is too old" in str(e).lower():
+                    # لا نحاول الرد على query قديم
+                    pass
+                elif "message is not modified" in str(e).lower():
+                    bot.answer_callback_query(call.id, "تم تحديث المحتوى.")
+                else:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في الاتصال. حاول مرة أخرى.", show_alert=True)
             except Exception as e_inner:
-                logger.error(f"Could not even answer callback query: {e_inner}")
+                logger.error(f"Could not answer callback query after API error: {e_inner}")
+        except Exception as e:
+            logger.error(f"Unexpected callback query error: {e}", exc_info=True)
+            try:
+                bot.answer_callback_query(call.id, "❌ حدث خطأ غير متوقع. حاول مرة أخرى.", show_alert=True)
+            except Exception as e_inner:
+                logger.error(f"Could not answer callback query after unexpected error: {e_inner}")

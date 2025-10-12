@@ -25,18 +25,28 @@ def check_subscription(bot, user_id):
     required_channels = get_required_channels()
     if not required_channels:
         return True, []
+    
     unsubscribed = []
     for channel in required_channels:
         try:
-            # استخدام get_chat_member
             member = bot.get_chat_member(channel['channel_id'], user_id)
             if member.status not in ['member', 'administrator', 'creator']:
                 unsubscribed.append(channel)
         except telebot.apihelper.ApiTelegramException as e:
-            if 'user not found' in e.description or 'chat not found' in e.description:
+            error_msg = str(e.description).lower() if hasattr(e, 'description') else str(e).lower()
+            if 'user not found' in error_msg or 'chat not found' in error_msg or 'bad request' in error_msg:
                 logger.warning(f"Could not check user {user_id} in channel {channel['channel_id']}. Assuming subscribed. Error: {e}")
-            else:
+            elif 'forbidden' in error_msg or 'kicked' in error_msg or 'left' in error_msg:
+                # المستخدم غير مشترك أو محظور أو غادر القناة
                 unsubscribed.append(channel)
+            else:
+                # في حالة أخطاء أخرى، نفترض عدم الاشتراك للأمان
+                logger.error(f"Error checking subscription for user {user_id} in channel {channel['channel_id']}: {e}")
+                unsubscribed.append(channel)
+        except Exception as e:
+            logger.error(f"Unexpected error checking subscription for user {user_id} in channel {channel['channel_id']}: {e}")
+            unsubscribed.append(channel)
+    
     return not unsubscribed, unsubscribed
 
 def list_videos(bot, message, edit_message=None, parent_id=None):
