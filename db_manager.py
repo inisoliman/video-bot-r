@@ -1,4 +1,4 @@
-# (الكود كامل مدمج من كل التعديلات السابقة)
+# (الكود كامل مدمج من كل التعديلات السابقة - مصحح)
 
 import psycopg2
 from psycopg2 import sql
@@ -319,9 +319,31 @@ def get_user_video_rating(video_id, user_id):
     res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
     return res['rating'] if res else None
 
+# ============================================
+# [إصلاح] دالة get_popular_videos - إزالة القوس والـ r المكرر
+# ============================================
 def get_popular_videos():
-    most_viewed = execute_query("SELECT * FROM video_archive ORDER BY view_count DESC, id DESC LIMIT 10", fetch="all")
-    highest_rated = execute_query("SELECT v.*, r.avg_rating FROM video_archive v JOIN (SELECT video_id, AVG(rating) as avg_rating FROM video_ratings GROUP BY video_id) r ON v.id = r.video_id) r ON v.id = r.video_id ORDER BY r.avg_rating DESC, v.view_count DESC LIMIT 10", fetch="all")
+    most_viewed = execute_query(
+        "SELECT * FROM video_archive ORDER BY view_count DESC, id DESC LIMIT 10", 
+        fetch="all"
+    )
+    
+    # [إصلاح] إزالة القوس الإضافي والـ r المكرر
+    highest_rated = execute_query(
+        """
+        SELECT v.*, r.avg_rating 
+        FROM video_archive v 
+        JOIN (
+            SELECT video_id, AVG(rating) as avg_rating 
+            FROM video_ratings 
+            GROUP BY video_id
+        ) r ON v.id = r.video_id 
+        ORDER BY r.avg_rating DESC, v.view_count DESC 
+        LIMIT 10
+        """, 
+        fetch="all"
+    )
+    
     return {"most_viewed": most_viewed, "highest_rated": highest_rated}
 
 def add_bot_user(user_id, username, first_name):
