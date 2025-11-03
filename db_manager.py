@@ -1,5 +1,77 @@
 # (الكود كامل مدمج من كل التعديلات السابقة - مصحح)
 
+
+# إضافة في أعلى db_manager.py
+import psycopg2.pool
+from contextlib import contextmanager
+import threading
+from urllib.parse import urlparse
+
+# إنشاء connection pool
+_connection_pool = None
+_pool_lock = threading.Lock()
+
+def get_connection_pool():
+    """إنشاء أو إرجاع connection pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        with _pool_lock:
+            if _connection_pool is None:
+                try:
+                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                        1, 20,  # min and max connections
+                        **DB_CONFIG
+                    )
+                    logger.info("Database connection pool created successfully")
+                except Exception as e:
+                    logger.error(f"Failed to create connection pool: {e}")
+                    raise
+    return _connection_pool
+
+@contextmanager
+def get_db_connection():
+    """Context manager للحصول على اتصال من pool"""
+    pool = get_connection_pool()
+    conn = None
+    try:
+        conn = pool.getconn()
+        if conn:
+            yield conn
+        else:
+            raise psycopg2.OperationalError("Could not get connection from pool")
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        if conn:
+            pool.putconn(conn)
+        raise
+    finally:
+        if conn:
+            pool.putconn(conn)
+
+# تحديث دالة execute_query لاستخدام connection pool
+def execute_query(query, params=None, fetch=None, commit=False):
+    result = None
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute(query, params)
+                if fetch == "one": 
+                    result = c.fetchone()
+                elif fetch == "all": 
+                    result = c.fetchall()
+                if commit:
+                    conn.commit()
+                    if fetch is None: 
+                        result = True
+    except psycopg2.Error as e:
+        logger.error(f"Database query failed. Error: {e}", exc_info=True)
+        if fetch == "all": 
+            return []
+        return None if fetch else False
+    return result
+
+
+
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import DictCursor
