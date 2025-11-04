@@ -1,133 +1,85 @@
-# 🎬 Video Bot - بوت الفيديوهات المطور
+# 🎬 Video Bot - Telegram Video Archive Bot
 
-بوت تليجرام متقدم لإدارة ومشاركة الفيديوهات مع نظام إدارة حالة محسن ومميزات جديدة.
+## 📋 Overview
+A powerful Telegram bot for managing and organizing video content with webhook support for production deployment.
 
-## 🆕 التحديثات الجديدة
+## 🚀 Deployment (Render.com)
 
-### ✅ إصلاح المشاكل الرئيسية
-- **حل مشكلة خطأ 409**: تم إضافة نظام `BotManager` لمنع تشغيل عدة نسخ من البوت
-- **إصلاح مشكلة البحث**: تم إعادة ترتيب معالجات الرسائل لتجنب التداخل
-- **استبدال `register_next_step_handler`**: تم الانتقال إلى نظام إدارة حالة متقدم
-
-### 🎯 المميزات الجديدة
-- **⭐ المفضلة**: إمكانية حفظ الفيديوهات المفضلة
-- **📺 سجل المشاهدة**: تتبع الفيديوهات التي تم مشاهدتها
-- **🎯 اقتراحات شخصية**: توصيات مخصصة للمستخدمين
-- **🔍 البحث المتقدم**: فلاتر متقدمة للبحث (الجودة، المدة، التاريخ)
-- **💾 حفظ الحالة**: الحالات محفوظة حتى لو أعيد تشغيل البوت
-
-## 🚀 التثبيت والتشغيل
-
-### المتطلبات
-```bash
-pip install -r requirements.txt
-```
-
-### متغيرات البيئة
-أنشئ ملف `.env` مع المتغيرات التالية:
+### Required Environment Variables
 ```env
-BOT_TOKEN=your_bot_token_here
-DATABASE_URL=your_database_url_here
-CHANNEL_ID=your_channel_id_here
-ADMIN_IDS=admin_id1,admin_id2
+BOT_TOKEN=your_telegram_bot_token
+DATABASE_URL=postgresql://user:password@host:port/database
+CHANNEL_ID=-1001234567890
+ADMIN_IDS=123456789,987654321
+APP_URL=https://your-app-name.onrender.com
+# or alternatively:
+BASE_URL=https://your-app-name.onrender.com
 ```
 
-### التشغيل
-```bash
-python bot.py
+### Render Settings
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `python webhook_bot.py`
+- **Runtime**: Python 3.11.9 (specified in runtime.txt)
+
+## 🔧 Features
+- ✅ **Webhook Mode**: Fast, reliable webhook-based operation
+- ✅ **Connection Pooling**: Optimized PostgreSQL connections
+- ✅ **Auto-Indexing**: Performance indexes created at startup
+- ✅ **Health Endpoints**: `/`, `/live`, `/ready` for monitoring
+- ✅ **User Management**: Favorites, history, ratings
+- ✅ **Category System**: Hierarchical video organization
+- ✅ **Search**: Advanced text search with filters
+- ✅ **Admin Panel**: Channel management and statistics
+
+## 📡 Webhook Endpoints
+- `GET /` - Health check
+- `GET /live` - Liveness probe
+- `GET /ready` - Readiness probe
+- `POST /bot{TOKEN}` - Telegram webhook
+- `GET|POST /set_webhook` - Setup webhook
+- `GET /webhook_info` - Webhook status
+
+## 🗄️ Database
+Uses PostgreSQL with auto-migration and schema bootstrapping:
+- **videoarchive**: Main video storage
+- **categories**: Video categorization
+- **botusers**: User management
+- **userfavorites**: User favorites
+- **userhistory**: View history
+- **videoratings**: User ratings
+- **botsettings**: Bot configuration
+- **requiredchannels**: Subscription requirements
+
+## 🔄 Setup Process
+1. Set environment variables in Render dashboard
+2. Deploy with webhook_bot.py as start command
+3. Visit `/set_webhook` to activate webhook
+4. Bot is ready!
+
+## 📁 File Structure
+```
+├── webhook_bot.py          # Main webhook server (PRODUCTION)
+├── db_manager.py          # Database operations
+├── db_pool.py            # Connection pooling
+├── handlers/             # Bot message handlers
+├── state_manager.py      # User state management
+├── utils.py             # Utility functions
+├── requirements.txt     # Dependencies
+├── runtime.txt         # Python version
+└── legacy/             # Old files (reference only)
+    ├── bot.py         # Original polling mode
+    └── keep_alive.py  # Not needed for webhook
 ```
 
-## 🔧 حل المشاكل الشائعة
+## ⚠️ Important Notes
+- **Use webhook_bot.py only** for production deployment
+- Files in `legacy/` are for reference and not used in webhook mode
+- PostgreSQL indexes are created automatically at startup
+- Connection pooling improves performance under load
 
-### خطأ 409 (Conflict)
-إذا ظهر خطأ 409، فهذا يعني أن هناك نسخة أخرى من البوت تعمل:
-
-1. **التحقق التلقائي**: البوت سيتحقق تلقائياً من وجود نسخة أخرى
-2. **الإيقاف الآمن**: يمكن إيقاف النسخة السابقة تلقائياً
-3. **ملفات PID**: يتم إنشاء ملف `.pid` لتتبع العمليات
-
-### مشكلة البحث لا يعمل
-تم حل هذه المشكلة عبر:
-- إعادة ترتيب معالجات الرسائل
-- فصل معالجة رسائل الإدارة عن رسائل المستخدمين
-- تحسين نظام إدارة الحالة
-
-## 📁 هيكل المشروع
-
-```
-video-bot-r-main/
-├── bot.py                 # الملف الرئيسي
-├── bot_manager.py         # إدارة تشغيل البوت
-├── state_manager.py       # نظام إدارة الحالة
-├── db_manager.py          # إدارة قاعدة البيانات
-├── handlers/              # معالجات البوت
-│   ├── __init__.py
-│   ├── user_handlers.py
-│   ├── admin_handlers.py
-│   ├── callback_handlers.py
-│   ├── admin_message_handler.py
-│   ├── favorites_handlers.py
-│   ├── advanced_search_handlers.py
-│   └── helpers.py
-└── requirements.txt       # المكتبات المطلوبة
-```
-
-## 🎮 كيفية الاستخدام
-
-### للمستخدمين
-- `/start` - بدء استخدام البوت
-- `🎬 عرض كل الفيديوهات` - تصفح جميع الفيديوهات
-- `🔥 الفيديوهات الشائعة` - الفيديوهات الأكثر مشاهدة
-- `🔍 بحث` - البحث عن فيديوهات
-- `⭐ المفضلة` - عرض الفيديوهات المفضلة
-- `📺 سجل المشاهدة` - عرض سجل المشاهدة
-- `🎯 اقتراحات شخصية` - توصيات مخصصة
-
-### للإدارة
-- `/admin` - لوحة الإدارة
-- إضافة/حذف الفيديوهات
-- إدارة الفئات
-- إرسال رسائل جماعية
-- إحصائيات البوت
-
-## 🔒 الأمان
-
-- **حماية من التداخل**: منع تشغيل عدة نسخ
-- **إدارة آمنة للحالة**: حفظ مشفر للبيانات
-- **تنظيف تلقائي**: إزالة الحالات المنتهية الصلاحية
-- **معالجة الأخطاء**: نظام شامل لمعالجة الأخطاء
-
-## 📊 المميزات التقنية
-
-### نظام إدارة الحالة
-- **حفظ دائم**: الحالات محفوظة في ملفات JSON
-- **انتهاء صلاحية تلقائي**: تنظيف الحالات القديمة
-- **أمان الخيوط**: آمن للاستخدام المتزامن
-- **كفاءة الذاكرة**: تحميل الحالات النشطة فقط
-
-### إدارة العمليات
-- **كشف النسخ المكررة**: منع تشغيل عدة نسخ
-- **إيقاف آمن**: إغلاق نظيف للعمليات
-- **مراقبة العمليات**: تتبع حالة البوت
-
-## 🐛 الإبلاغ عن المشاكل
-
-إذا واجهت أي مشاكل:
-1. تحقق من ملف `bot.log` للأخطاء
-2. تأكد من صحة متغيرات البيئة
-3. تحقق من اتصال قاعدة البيانات
-4. تأكد من عدم وجود نسخة أخرى من البوت
-
-## 📝 سجل التغييرات
-
-### الإصدار الحالي
-- ✅ إصلاح خطأ 409
-- ✅ إصلاح مشكلة البحث
-- ✅ نظام إدارة حالة جديد
-- ✅ مميزات المفضلة والتوصيات
-- ✅ البحث المتقدم
-- ✅ تحسينات الأمان والاستقرار
+## 🛠️ Development
+For local development with polling mode, see files in `legacy/` directory.
+For production, always use webhook mode with `webhook_bot.py`.
 
 ---
-
-**ملاحظة**: هذا البوت تم تطويره وتحسينه لضمان الاستقرار والأداء الأمثل. جميع المشاكل الرئيسية تم حلها والمميزات الجديدة تم اختبارها.
+*Version: 2.0.0 - Webhook Mode*
