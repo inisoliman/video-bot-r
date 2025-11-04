@@ -3,7 +3,6 @@
 # ==============================================================================
 
 import json
-from . import * if False else None  # no-op to avoid linter
 
 # ==== Backward-compatible functions used by handlers ====
 
