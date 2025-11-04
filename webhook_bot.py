@@ -1,18 +1,14 @@
 # ==============================================================================
-# ملف: webhook_bot.py (نظام webhook المحسن)
-# الوصف: البوت الرئيسي باستخدام webhook بدلاً من polling
+# ملف: webhook_bot.py (محدث للعمل مع Render)
+# الوصف: البوت الرئيسي باستخدام webhook - محسن لـ Render
 # ==============================================================================
 
 import os
 import json
 import logging
-import hmac
-import hashlib
-from threading import Thread
 from flask import Flask, request, jsonify, abort
 import telebot
 from telebot.types import Update
-from cryptography.fernet import Fernet
 
 # استيراد الوحدات المخصصة
 from db_manager import verify_and_repair_schema
@@ -22,121 +18,102 @@ from state_manager import state_manager
 # --- إعداد نظام التسجيل ---
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("webhook_bot.log"),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# --- المتغيرات البيئية ---
+# --- المتغيرات البيئية مع قيم افتراضية للاختبار ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL") 
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "your_secure_secret_key")
-WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0")
-WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "8000"))
-APP_URL = os.getenv("APP_URL")  # رابط التطبيق على Render
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "default_secret")
+APP_URL = os.getenv("APP_URL")
+
+# Render يستخدم PORT بدلاً من WEBHOOK_PORT
+PORT = int(os.getenv("PORT", "10000"))
+
+# طباعة المتغيرات للتشخيص (بدون كشف القيم الحساسة)
+logger.info(f"🔍 Environment Check:")
+logger.info(f"BOT_TOKEN: {'✅ Set' if BOT_TOKEN else '❌ Missing'}")
+logger.info(f"DATABASE_URL: {'✅ Set' if DATABASE_URL else '❌ Missing'}")
+logger.info(f"CHANNEL_ID: {'✅ Set' if CHANNEL_ID else '❌ Missing'}")
+logger.info(f"ADMIN_IDS: {'✅ Set' if ADMIN_IDS_STR else '❌ Missing'}")
+logger.info(f"APP_URL: {'✅ Set' if APP_URL else '❌ Missing'}")
+logger.info(f"PORT: {PORT}")
 
 # التحقق من المتغيرات المطلوبة
-if not all([BOT_TOKEN, DATABASE_URL, CHANNEL_ID, ADMIN_IDS_STR, APP_URL]):
-    logger.critical("FATAL ERROR: Missing required environment variables")
+missing_vars = []
+if not BOT_TOKEN: missing_vars.append("BOT_TOKEN")
+if not DATABASE_URL: missing_vars.append("DATABASE_URL")
+if not CHANNEL_ID: missing_vars.append("CHANNEL_ID")
+if not ADMIN_IDS_STR: missing_vars.append("ADMIN_IDS")
+if not APP_URL: missing_vars.append("APP_URL")
+
+if missing_vars:
+    logger.critical(f"❌ MISSING ENVIRONMENT VARIABLES: {', '.join(missing_vars)}")
+    logger.critical("📋 Required variables:")
+    logger.critical("   BOT_TOKEN=your_bot_token")
+    logger.critical("   DATABASE_URL=your_postgres_url")
+    logger.critical("   CHANNEL_ID=-1001234567890")
+    logger.critical("   ADMIN_IDS=123456789,987654321")
+    logger.critical("   APP_URL=https://your-app.onrender.com")
     exit(1)
 
 try:
-    ADMIN_IDS = [int(admin_id) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
-except ValueError:
-    logger.critical("FATAL ERROR: ADMIN_IDS contains non-integer values")
+    ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(",") if x.strip()]
+    logger.info(f"✅ ADMIN_IDS parsed: {len(ADMIN_IDS)} admins")
+except ValueError as e:
+    logger.critical(f"❌ ADMIN_IDS format error: {e}")
     exit(1)
 
 # --- إعداد Flask والBot ---
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
-# --- دوال الأمان ---
-def verify_webhook_signature(data: bytes, signature: str) -> bool:
-    """التحقق من صحة توقيع webhook"""
-    if not signature:
-        return False
-    
-    try:
-        expected_signature = hmac.new(
-            WEBHOOK_SECRET.encode('utf-8'),
-            data,
-            hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(signature, expected_signature)
-    except Exception as e:
-        logger.error(f"Error verifying webhook signature: {e}")
-        return False
-
-def encrypt_sensitive_data(data: str) -> str:
-    """تشفير البيانات الحساسة"""
-    key = Fernet.generate_key()
-    f = Fernet(key)
-    return f.encrypt(data.encode()).decode()
-
 # --- Routes ---
 @app.route("/", methods=["GET"])
 def health_check():
-    """فحص صحة التطبيق"""
     return jsonify({
         "status": "healthy",
-        "bot": "video-bot-r",
-        "version": "2.0.0-webhook"
+        "bot": "video-bot-webhook",
+        "version": "2.0.0",
+        "webhook_url": f"{APP_URL}/bot{BOT_TOKEN[:10]}..."
     })
 
 @app.route("/health", methods=["GET"])
-def detailed_health():
-    """فحص صحة مفصل"""
+def health():
     try:
-        # اختبار قاعدة البيانات
         from db_manager import get_db_connection
         conn = get_db_connection()
         if conn:
             conn.close()
-            db_status = "healthy"
+            db_status = "connected"
         else:
-            db_status = "unhealthy"
+            db_status = "disconnected"
     except Exception as e:
         db_status = f"error: {str(e)}"
     
     return jsonify({
-        "status": "healthy",
+        "status": "ok",
         "database": db_status,
         "bot_token": "configured" if BOT_TOKEN else "missing",
-        "webhook_url": f"{APP_URL}/webhook/{BOT_TOKEN}"
+        "webhook_url": f"{APP_URL}/bot{BOT_TOKEN}"
     })
 
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+@app.route(f"/bot{BOT_TOKEN}", methods=["POST"])
 def webhook():
-    """معالج webhook الرئيسي"""
     try:
-        # التحقق من Content-Type
         if request.content_type != 'application/json':
-            logger.warning(f"Invalid content type: {request.content_type}")
+            logger.warning(f"Invalid content-type: {request.content_type}")
             abort(400)
         
-        # الحصول على البيانات
-        json_data = request.get_data()
-        
-        # التحقق من التوقيع (اختياري للحماية الإضافية)
-        signature = request.headers.get('X-Webhook-Signature')
-        if WEBHOOK_SECRET != "your_secure_secret_key":  # إذا تم تعيين سر حقيقي
-            if not verify_webhook_signature(json_data, signature):
-                logger.warning("Invalid webhook signature")
-                abort(403)
-        
-        # تحليل JSON
-        update_dict = request.get_json()
-        if not update_dict:
+        json_data = request.get_json()
+        if not json_data:
             logger.warning("Empty JSON received")
             abort(400)
         
-        # إنشاء كائن Update
-        update = Update.de_json(update_dict)
+        update = Update.de_json(json_data)
         if not update:
             logger.warning("Invalid update object")
             abort(400)
@@ -144,149 +121,129 @@ def webhook():
         # معالجة التحديث
         process_update(update)
         
-        return jsonify({"status": "ok"})
+        return jsonify({"ok": True})
         
     except Exception as e:
-        logger.error(f"Error processing webhook: {e}", exc_info=True)
-        return jsonify({"error": "internal_server_error"}), 500
+        logger.error(f"Webhook error: {e}", exc_info=True)
+        return jsonify({"error": "server_error"}), 500
 
-def process_update(update: Update):
-    """معالجة التحديث الوارد من تليجرام"""
+def process_update(update):
     try:
         # معالجة حالة المستخدم أولاً
         if update.message and update.message.from_user:
             if state_manager.handle_message(update.message, bot):
-                return  # تم التعامل مع الرسالة بواسطة state manager
+                return
         
-        # معالجة التحديث بواسطة معالجات البوت
+        # معالجة أنواع التحديثات المختلفة
         if update.message:
             bot.process_new_messages([update.message])
         elif update.callback_query:
             bot.process_new_callback_query([update.callback_query])
         elif update.inline_query:
             bot.process_new_inline_query([update.inline_query])
-        elif update.chosen_inline_result:
-            bot.process_new_chosen_inline_result([update.chosen_inline_result])
-        else:
-            logger.info(f"Unhandled update type: {type(update)}")
             
     except Exception as e:
-        logger.error(f"Error processing update: {e}", exc_info=True)
+        logger.error(f"Process update error: {e}", exc_info=True)
 
-@app.route("/setup", methods=["POST"])
-def setup_webhook():
-    """إعداد webhook تلقائياً"""
+@app.route("/set_webhook", methods=["POST", "GET"])
+def set_webhook():
     try:
-        webhook_url = f"{APP_URL}/webhook/{BOT_TOKEN}"
+        webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
         
-        # إزالة webhook القديم
-        remove_result = bot.remove_webhook()
-        logger.info(f"Remove webhook result: {remove_result}")
+        # حذف webhook القديم
+        bot.remove_webhook()
+        logger.info("🗑️ Old webhook removed")
         
         # تعيين webhook جديد
-        set_result = bot.set_webhook(
+        result = bot.set_webhook(
             url=webhook_url,
-            max_connections=10,
-            allowed_updates=["message", "callback_query", "inline_query", "chosen_inline_result"]
+            max_connections=40,
+            drop_pending_updates=True,
+            allowed_updates=["message", "callback_query"]
         )
         
-        logger.info(f"Set webhook result: {set_result}")
-        
-        if set_result:
+        if result:
+            logger.info(f"✅ Webhook set: {webhook_url}")
             return jsonify({
-                "status": "success",
-                "webhook_url": webhook_url,
-                "message": "Webhook setup successfully"
+                "status": "success", 
+                "webhook": webhook_url
             })
         else:
+            logger.error("❌ Failed to set webhook")
             return jsonify({
-                "status": "error",
-                "message": "Failed to set webhook"
+                "status": "failed",
+                "error": "Could not set webhook"
             }), 500
             
     except Exception as e:
-        logger.error(f"Error setting up webhook: {e}")
+        logger.error(f"Set webhook error: {e}")
         return jsonify({
             "status": "error",
             "message": str(e)
         }), 500
 
-@app.route("/webhook-info", methods=["GET"])
+@app.route("/webhook_info", methods=["GET"])
 def webhook_info():
-    """معلومات webhook الحالي"""
     try:
-        webhook_info = bot.get_webhook_info()
+        info = bot.get_webhook_info()
         return jsonify({
-            "url": webhook_info.url,
-            "has_custom_certificate": webhook_info.has_custom_certificate,
-            "pending_update_count": webhook_info.pending_update_count,
-            "last_error_date": webhook_info.last_error_date,
-            "last_error_message": webhook_info.last_error_message,
-            "max_connections": webhook_info.max_connections,
-            "allowed_updates": webhook_info.allowed_updates
+            "url": info.url,
+            "pending_updates": info.pending_update_count,
+            "last_error": info.last_error_message,
+            "max_connections": info.max_connections
         })
     except Exception as e:
-        logger.error(f"Error getting webhook info: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --- تهيئة التطبيق ---
-def initialize_bot():
-    """تهيئة البوت وقاعدة البيانات"""
-    logger.info("Initializing bot...")
+# --- تهيئة البوت ---
+def init_bot():
+    logger.info("🤖 Initializing bot...")
     
-    # 1. فحص وإصلاح قاعدة البيانات
     try:
+        # فحص قاعدة البيانات
         verify_and_repair_schema()
-        logger.info("Database schema verified successfully")
+        logger.info("✅ Database schema OK")
     except Exception as e:
-        logger.error(f"Database schema verification failed: {e}")
+        logger.error(f"❌ Database error: {e}")
         return False
     
-    # 2. تسجيل معالجات البوت
     try:
+        # تسجيل معالجات البوت
         register_all_handlers(bot, CHANNEL_ID, ADMIN_IDS)
-        logger.info("Bot handlers registered successfully")
+        logger.info("✅ Bot handlers registered")
     except Exception as e:
-        logger.error(f"Failed to register bot handlers: {e}")
+        logger.error(f"❌ Handlers error: {e}")
         return False
     
-    # 3. إعداد webhook تلقائياً
     try:
-        webhook_url = f"{APP_URL}/webhook/{BOT_TOKEN}"
-        
-        # إزالة webhook القديم
+        # إعداد webhook
+        webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
         bot.remove_webhook()
-        
-        # تعيين webhook جديد
         result = bot.set_webhook(
             url=webhook_url,
-            max_connections=10,
-            allowed_updates=["message", "callback_query", "inline_query"]
+            max_connections=40,
+            drop_pending_updates=True
         )
         
         if result:
-            logger.info(f"Webhook set successfully: {webhook_url}")
+            logger.info(f"✅ Webhook set: {webhook_url}")
         else:
-            logger.error("Failed to set webhook")
-            return False
-            
+            logger.warning("⚠️ Webhook setup failed")
     except Exception as e:
-        logger.error(f"Error setting up webhook: {e}")
-        return False
+        logger.error(f"❌ Webhook error: {e}")
+        # لا نتوقف هنا، سيتم إعداده لاحقاً
     
-    logger.info("Bot initialization completed successfully")
+    logger.info("🚀 Bot initialization completed!")
     return True
 
-# --- نقطة البداية ---
+# --- تشغيل التطبيق ---
 if __name__ == "__main__":
-    if not initialize_bot():
-        logger.critical("Bot initialization failed. Exiting.")
+    logger.info("🔥 Starting Video Bot Webhook Server...")
+    
+    if not init_bot():
+        logger.critical("💥 Bot initialization failed")
         exit(1)
     
-    # تشغيل Flask app
-    app.run(
-        host=WEBHOOK_HOST,
-        port=WEBHOOK_PORT,
-        debug=False,
-        use_reloader=False
-    )
+    # تشغيل Flask على المنفذ الصحيح لـ Render
+    logger.info(f"🌐 Starting Flask server on port {PORT}")
+    app.run(host="0.0.0.0", port=PORT, debug=False)
