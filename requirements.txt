@@ -7,15 +7,16 @@
 # ملف: requirements.txt (محدث للدعم webhook)
 # ==============================================================================
 
-pyTelegramBotAPI==4.15.3
-psycopg2-binary==2.9.7
-pymediainfo==6.0.1
-Flask==2.3.3
-gunicorn==21.2.0
-psutil==5.9.5
-requests==2.31.0
-python-dotenv==1.0.0
-cryptography==41.0.7
+pyTelegramBotAPI
+psycopg2-binary
+pymediainfo
+Flask
+gunicorn
+psutil
+requests
+python-dotenv
+cryptography
+
 
 
 
