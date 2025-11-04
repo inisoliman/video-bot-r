@@ -1,5 +1,5 @@
 # ==============================================================================
-# ملف: webhook_bot.py (محدث: fallback BASE_URL + readiness + create_indexes)
+# ملف: webhook_bot.py (fix import syntax; stage 2 features intact)
 # ==============================================================================
 
 import os
@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify, abort
 import telebot
 from telebot.types import Update
 
-from db_manager import create_indexes, verify_and_repair_schema if False else None  # verify removed in patch
+from db_manager import create_indexes
 from handlers import register_all_handlers
 from state_manager import state_manager
 
