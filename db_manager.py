@@ -1,5 +1,5 @@
 # ============================================================================== 
-# تحديثات على db_manager.py للاستفادة من الفهارس وإضافة / إصلاحات طفيفة
+# تحديثات على db_manager.py (استكمال: إضافة دوال كانت مطلوبة من المعالجات)
 # ==============================================================================
 
 import psycopg2
@@ -129,7 +129,6 @@ def verify_and_repair_schema():
 
                     if c.fetchone() is None:
                         if column_name == 'id':
-                            # تحقق من وجود مفتاح أساسي بدلاً من محاولة إضافة id كل مرة
                             c.execute("""
                                 SELECT kcu.column_name
                                 FROM information_schema.table_constraints tc
@@ -182,7 +181,6 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None, or
 
     where_parts = []
     if query:
-        # يدعم pg_trgm عبر ILIKE + فهارس GIN التي أضفناها
         where_parts.append("(caption ILIKE %s OR file_name ILIKE %s)")
         like = f"%{query}%"
         params += [like, like]
@@ -201,7 +199,6 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None, or
 
     where_sql = " AND ".join(where_parts) if where_parts else "TRUE"
 
-    # ترتيب يستفيد من الفهارس الجديدة
     if order_by == "popular":
         order_sql = "ORDER BY view_count DESC, id DESC"
     elif order_by == "recent":
@@ -247,7 +244,66 @@ def execute_query(query, params=None, fetch=None, commit=False):
         if conn: conn.close()
     return result
 
-# ===================== دوال التوافق الرجعي =====================
+# ===================== دوال مطلوبة من المعالجات (توافق رجعي) =====================
+
+def get_active_category_id():
+    res = execute_query("SELECT setting_value FROM bot_settings WHERE setting_key = 'active_category_id'", fetch="one")
+    if res and res.get('setting_value'):
+        try:
+            return int(res['setting_value'])
+        except Exception:
+            return None
+    return None
+
+
+def get_user_favorites(user_id, page=0):
+    offset = page * VIDEOS_PER_PAGE
+    videos = execute_query(
+        """
+        SELECT v.* FROM video_archive v
+        JOIN user_favorites f ON v.id = f.video_id
+        WHERE f.user_id = %s
+        ORDER BY f.date_added DESC
+        LIMIT %s OFFSET %s
+        """,
+        (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    total = execute_query("SELECT COUNT(*) AS count FROM user_favorites WHERE user_id = %s", (user_id,), fetch="one")
+    return videos, (total['count'] if total else 0)
+
+
+def get_user_history(user_id, page=0):
+    offset = page * VIDEOS_PER_PAGE
+    videos = execute_query(
+        """
+        SELECT v.* FROM video_archive v
+        JOIN user_history h ON v.id = h.video_id
+        WHERE h.user_id = %s
+        ORDER BY h.last_watched DESC
+        LIMIT %s OFFSET %s
+        """,
+        (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    total = execute_query("SELECT COUNT(*) AS count FROM user_history WHERE user_id = %s", (user_id,), fetch="one")
+    return videos, (total['count'] if total else 0)
+
+
+def add_to_history(user_id, video_id):
+    return execute_query(
+        """
+        INSERT INTO user_history (user_id, video_id, last_watched)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, video_id) DO UPDATE SET last_watched = EXCLUDED.last_watched
+        """,
+        (user_id, video_id), commit=True)
+
+
+def get_bot_stats():
+    return {
+        "video_count": (execute_query("SELECT COUNT(*) AS count FROM video_archive", fetch="one") or {"count": 0})["count"],
+        "category_count": (execute_query("SELECT COUNT(*) AS count FROM categories", fetch="one") or {"count": 0})["count"],
+        "total_views": (execute_query("SELECT COALESCE(SUM(view_count), 0) AS sum FROM video_archive", fetch="one") or {"sum": 0})["sum"],
+        "total_ratings": (execute_query("SELECT COUNT(*) AS count FROM video_ratings", fetch="one") or {"count": 0})["count"],
+    }
+
 
 def add_bot_user(user_id, username, first_name):
     return execute_query(
