@@ -1,3 +1,5 @@
+# handlers/callback_handlers.py
+
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
@@ -7,7 +9,7 @@ from db_manager import *
 from db_manager import move_videos_bulk  # إضافة الدالة الجديدة بشكل صريح
 from . import helpers
 from . import admin_handlers
-from .helpers import admin_steps  # استيراد admin_steps
+from .helpers import admin_steps, create_hierarchical_category_keyboard  # إضافة استيراد الدالة الجديدة
 from update_metadata import run_update_and_report_progress
 from state_manager import States
 
@@ -126,11 +128,11 @@ def register(bot, admin_ids):
                 if action == "fav_page":
                     videos, total_count = get_user_favorites(user_id, page)
                     prefix = "fav_page"
-                    title = "قائمة مفضلاتك:"
+                    title = "⭐ قائمة مفضلاتك:"
                 else:
                     videos, total_count = get_user_history(user_id, page)
                     prefix = "history_page"
-                    title = "سجل مشاهداتك:"
+                    title = "📺 سجل مشاهداتك:"
 
                 if not videos:
                     bot.edit_message_text("لا توجد المزيد من النتائج.", call.message.chat.id, call.message.message_id)
@@ -153,26 +155,30 @@ def register(bot, admin_ids):
                 query = query_data['query']
 
                 if search_type == "normal":
-                    categories = get_categories_tree()
+                    # 🌟 استخدام الكيبورد الهرمي الجديد للبحث
                     keyboard = InlineKeyboardMarkup(row_width=1)
-                    keyboard.add(InlineKeyboardButton("بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
+                    keyboard.add(InlineKeyboardButton("🔍 بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
+                    
+                    # استخدام الدالة الهرمية لعرض التصنيفات
+                    categories = get_categories_tree()
+                    tree = helpers.build_category_tree(categories)
+                    
+                    for cat in tree:
+                        keyboard.add(InlineKeyboardButton(
+                            f"🔍 {cat['name']}", 
+                            callback_data=f"search_scope::{cat['id']}::0"
+                        ))
 
-                    for cat in categories:
-                        keyboard.add(InlineKeyboardButton(f"بحث في: {cat['name']}", callback_data=f"search_scope::{cat['id']}::0"))
-                        child_cats = get_child_categories(cat['id'])
-                        for child in child_cats:
-                            keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"search_scope::{child['id']}::0"))
-
-                    bot.edit_message_text(f"أين تريد البحث عن \"{query}\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text(f"🎯 أين تريد البحث عن \"{query}\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif search_type == "advanced":
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     keyboard.add(
-                        InlineKeyboardButton("الجودة", callback_data="adv_filter::quality"),
-                        InlineKeyboardButton("الحالة", callback_data="adv_filter::status")
+                        InlineKeyboardButton("📺 الجودة", callback_data="adv_filter::quality"),
+                        InlineKeyboardButton("🗣️ الحالة", callback_data="adv_filter::status")
                     )
                     keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main"))
-                    bot.edit_message_text("اختر فلتر للبحث المتقدم:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text("⚙️ اختر فلتر للبحث المتقدم:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_filter":
                 filter_type = data[1]
@@ -189,7 +195,7 @@ def register(bot, admin_ids):
                     buttons = [InlineKeyboardButton(q, callback_data=f"adv_search::quality::{q}::0") for q in qualities]
                     keyboard.add(*buttons)
                     keyboard.add(InlineKeyboardButton("🔙 رجوع للفلاتر", callback_data="search_type::advanced"))
-                    bot.edit_message_text("اختر الجودة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text("📺 اختر الجودة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif filter_type == "status":
                     keyboard = InlineKeyboardMarkup(row_width=2)
@@ -197,7 +203,7 @@ def register(bot, admin_ids):
                     buttons = [InlineKeyboardButton(s, callback_data=f"adv_search::status::{s}::0") for s in statuses]
                     keyboard.add(*buttons)
                     keyboard.add(InlineKeyboardButton("🔙 رجوع للفلاتر", callback_data="search_type::advanced"))
-                    bot.edit_message_text("اختر الحالة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text("🗣️ اختر الحالة:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_search":
                 _, filter_type, filter_value, page_str = data
@@ -220,13 +226,13 @@ def register(bot, admin_ids):
                 videos, total_count = search_videos(**kwargs)
 
                 if not videos:
-                    bot.edit_message_text(f"لا توجد نتائج للبحث المتقدم عن \"{query}\".", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text(f"❌ لا توجد نتائج للبحث المتقدم عن \"{query}\".", call.message.chat.id, call.message.message_id)
                     return
 
                 action_prefix = f"adv_search::{filter_type}"
                 context_id = filter_value
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, action_prefix, context_id)
-                bot.edit_message_text(f"نتائج البحث المتقدم عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                bot.edit_message_text(f"🔍 نتائج البحث المتقدم عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "search_scope":
                 _, scope, page_str = data
@@ -243,12 +249,12 @@ def register(bot, admin_ids):
                 videos, total_count = search_videos(query=query, page=page, category_id=category_id)
 
                 if not videos:
-                    bot.edit_message_text(f"لا توجد نتائج لـ \"{query}\".", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text(f"❌ لا توجد نتائج لـ \"{query}\".", call.message.chat.id, call.message.message_id)
                     return
 
                 prefix = "search_scope"
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, prefix, scope)
-                bot.edit_message_text(f"نتائج البحث عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                bot.edit_message_text(f"🔍 نتائج البحث عن \"{query}\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             # --- معالجات الأدمن ---
             elif action == "admin":
@@ -260,49 +266,43 @@ def register(bot, admin_ids):
 
                 if sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
-                    keyboard.add(InlineKeyboardButton("تصنيف رئيسي جديد", callback_data="admin::add_cat_main"))
-                    keyboard.add(InlineKeyboardButton("تصنيف فرعي", callback_data="admin::add_cat_sub_select_parent"))
-                    bot.edit_message_text("اختر نوع التصنيف الذي تريد إضافته:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    keyboard.add(InlineKeyboardButton("📂 تصنيف رئيسي جديد", callback_data="admin::add_cat_main"))
+                    keyboard.add(InlineKeyboardButton("🌿 تصنيف فرعي", callback_data="admin::add_cat_sub_select_parent"))
+                    bot.edit_message_text("➕ اختر نوع التصنيف الذي تريد إضافته:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_main":
                     helpers.admin_steps[call.message.chat.id] = {"parent_id": None}
-                    msg = bot.send_message(call.message.chat.id, "أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
 
                 elif sub_action == "add_cat_sub_select_parent":
-                    keyboard = helpers.create_categories_keyboard()
-                    if not keyboard.keyboard:
+                    # 🌟 استخدام الكيبورد الهرمي الجديد
+                    move_keyboard = create_hierarchical_category_keyboard("admin::add_cat_sub_set_parent", add_back_button=False)
+                    
+                    if not move_keyboard.keyboard or len(move_keyboard.keyboard) == 0:
                         bot.answer_callback_query(call.id, "أنشئ تصنيفاً رئيسياً أولاً.", show_alert=True)
                         return
 
-                    move_keyboard = InlineKeyboardMarkup(row_width=1)
-                    all_categories = get_categories_tree()
-
-                    for cat in all_categories:
-                        move_keyboard.add(InlineKeyboardButton(f"📁 {cat['name']}", callback_data=f"admin::add_cat_sub_set_parent::{cat['id']}"))
-                        child_cats = get_child_categories(cat['id'])
-                        for child in child_cats:
-                            move_keyboard.add(InlineKeyboardButton(f"- {child['name']}", callback_data=f"admin::add_cat_sub_set_parent::{child['id']}"))
-
-                    bot.edit_message_text("اختر التصنيف الأب:", call.message.chat.id, call.message.message_id, reply_markup=move_keyboard)
+                    move_keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+                    bot.edit_message_text("🎯 اختر التصنيف الأب:", call.message.chat.id, call.message.message_id, reply_markup=move_keyboard)
 
                 elif sub_action == "add_cat_sub_set_parent":
                     parent_id = int(data[2])
                     helpers.admin_steps[call.message.chat.id] = {"parent_id": parent_id}
-                    msg = bot.send_message(call.message.chat.id, "الآن أرسل اسم التصنيف الفرعي الجديد. (أو /cancel)")
+                    parent_cat = get_category_by_id(parent_id)
+                    msg = bot.send_message(call.message.chat.id, f"📝 الآن أرسل اسم التصنيف الفرعي الجديد تحت 📂 \"{parent_cat['name']}\". (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
 
                 elif sub_action == "delete_category_select":
-                    all_categories = get_categories_tree()
-                    if not all_categories:
+                    # 🌟 استخدام الكيبورد الهرمي الجديد
+                    delete_keyboard = create_hierarchical_category_keyboard("admin::delete_category_confirm", add_back_button=False)
+                    
+                    if not delete_keyboard.keyboard or len(delete_keyboard.keyboard) == 0:
                         bot.answer_callback_query(call.id, "لا توجد تصنيفات لحذفها.", show_alert=True)
                         return
 
-                    delete_keyboard = InlineKeyboardMarkup(row_width=1)
-                    for cat in all_categories:
-                        delete_keyboard.add(InlineKeyboardButton(f"🗑️ {cat['name']}", callback_data=f"admin::delete_category_confirm::{cat['id']}"))
-
-                    bot.edit_message_text("اختر التصنيف الذي تريد حذفه:", call.message.chat.id, call.message.message_id, reply_markup=delete_keyboard)
+                    delete_keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+                    bot.edit_message_text("🗑️ اختر التصنيف الذي تريد حذفه:", call.message.chat.id, call.message.message_id, reply_markup=delete_keyboard)
 
                 elif sub_action == "delete_category_confirm":
                     category_id = int(data[2])
@@ -311,7 +311,7 @@ def register(bot, admin_ids):
                     keyboard.add(InlineKeyboardButton("🗑️ حذف التصنيف مع كل فيديوهاته", callback_data=f"admin::delete_cat_and_videos::{category_id}"))
                     keyboard.add(InlineKeyboardButton("➡️ نقل فيديوهاته لتصنيف آخر", callback_data=f"admin::delete_cat_move_videos_select_dest::{category_id}"))
                     keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="admin::cancel_delete_cat"))
-                    bot.edit_message_text(f"أنت على وشك حذف \"{category['name']}\". ماذا أفعل بالفيديوهات؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text(f"⚠️ أنت على وشك حذف \"{category['name']}\". ماذا أفعل بالفيديوهات؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "delete_cat_and_videos":
                     category_id = int(data[2])
@@ -325,14 +325,16 @@ def register(bot, admin_ids):
                     categories = [cat for cat in all_categories if cat['id'] != old_category_id]
 
                     if not categories:
-                        bot.edit_message_text("لا يوجد تصنيف آخر لنقل الفيديوهات إليه.", call.message.chat.id, call.message.message_id)
+                        bot.edit_message_text("❌ لا يوجد تصنيف آخر لنقل الفيديوهات إليه.", call.message.chat.id, call.message.message_id)
                         return
 
+                    # 🌟 استخدام الشجرة الهرمية مع استبعاد التصنيف المحذوف
+                    tree = helpers.build_category_tree(categories)
                     keyboard = InlineKeyboardMarkup(row_width=1)
-                    for cat in categories:
+                    for cat in tree:
                         keyboard.add(InlineKeyboardButton(cat['name'], callback_data=f"admin::delete_cat_move_videos_confirm::{old_category_id}::{cat['id']}"))
                     keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="admin::cancel_delete_cat"))
-                    bot.edit_message_text("اختر التصنيف الذي ستُنقل إليه الفيديوهات:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text("🎯 اختر التصنيف الذي ستُنقل إليه الفيديوهات:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "delete_cat_move_videos_confirm":
                     old_category_id = int(data[2])
@@ -347,11 +349,11 @@ def register(bot, admin_ids):
                     bot.edit_message_text("👍 تم إلغاء عملية حذف التصنيف.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "move_video_by_id":
-                    msg = bot.send_message(call.message.chat.id, "أرسل رقم الفيديو (ID) أو أرقام متعددة مفصولة بمسافة للنقل الجماعي. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل رقم الفيديو (ID) أو أرقام متعددة مفصولة بمسافة للنقل الجماعي. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_move_by_id_input, bot)
 
                 elif sub_action == "delete_videos_by_ids":
-                    msg = bot.send_message(call.message.chat.id, "أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
 
                 elif sub_action == "move_confirm":
@@ -393,7 +395,7 @@ def register(bot, admin_ids):
                     else:
                         message_text = (
                             f"✅ تم نقل {moved_count} فيديو بنجاح إلى تصنيف \"{category['name']}\".\n\n"
-                            f"الأرقام المنقولة: {', '.join(map(str, video_ids))}"
+                            f"📝 الأرقام المنقولة: {', '.join(map(str, video_ids))}"
                         )
 
                     bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id)
@@ -403,20 +405,20 @@ def register(bot, admin_ids):
                         del admin_steps[call.message.chat.id]
 
                 elif sub_action == "update_metadata":
-                    msg = bot.edit_message_text("تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
+                    msg = bot.edit_message_text("⏳ تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
                     update_thread = threading.Thread(target=run_update_and_report_progress, args=(bot, msg.chat.id, msg.message_id))
                     update_thread.start()
 
                 elif sub_action == "set_active":
-                    all_categories = get_categories_tree()
-                    if not all_categories:
+                    # 🌟 استخدام الكيبورد الهرمي الجديد
+                    keyboard = create_hierarchical_category_keyboard("admin::setcat", add_back_button=False)
+                    
+                    if not keyboard.keyboard or len(keyboard.keyboard) == 0:
                         bot.answer_callback_query(call.id, "لا توجد تصنيفات حالياً.", show_alert=True)
                         return
 
-                    keyboard = InlineKeyboardMarkup(row_width=2)
-                    for cat in all_categories:
-                        keyboard.add(InlineKeyboardButton(f"{cat['name']}", callback_data=f"admin::setcat::{cat['id']}"))
-                    bot.edit_message_text("اختر التصنيف الذي تريد تفعيله (سواء رئيسي أو فرعي):", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+                    bot.edit_message_text("🔘 اختر التصنيف الذي تريد تفعيله:", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "setcat":
                     category_id = int(data[2])
@@ -425,18 +427,18 @@ def register(bot, admin_ids):
                         bot.edit_message_text(f"✅ تم تفعيل التصنيف \"{category['name']}\" بنجاح.", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "add_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_add_channel_step1, bot)
 
                 elif sub_action == "remove_channel":
-                    msg = bot.send_message(call.message.chat.id, "أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_remove_channel_step, bot)
 
                 elif sub_action == "list_channels":
                     admin_handlers.handle_list_channels(call.message, bot)
 
                 elif sub_action == "broadcast":
-                    msg = bot.send_message(call.message.chat.id, "أرسل الرسالة التي تريد بثها. (أو /cancel)")
+                    msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة التي تريد بثها. (أو /cancel)")
                     bot.register_next_step_handler(msg, admin_handlers.handle_rich_broadcast, bot)
 
                 elif sub_action == "sub_count":
@@ -524,7 +526,7 @@ def register(bot, admin_ids):
                     
                     # إضافة لوحة التقييم
                     rating_keyboard = helpers.create_video_action_keyboard(video_id_int, user_id)
-                    bot.send_message(call.message.chat.id, "قيم هذا الفيديو:", reply_markup=rating_keyboard)
+                    bot.send_message(call.message.chat.id, "⭐ قيم هذا الفيديو:", reply_markup=rating_keyboard)
                     
                 except telebot.apihelper.ApiTelegramException as e:
                     logger.error(f"Telegram API error handling video {video_id}: {e}", exc_info=True)
