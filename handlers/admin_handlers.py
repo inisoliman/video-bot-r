@@ -13,10 +13,10 @@ from db_manager import (
     delete_videos_by_ids, get_video_by_id, delete_bot_user,
     delete_category_and_contents, move_videos_from_category, delete_category_by_id,
     get_categories_tree, set_active_category_id, get_child_categories,
-    move_videos_bulk  # إضافة الدالة الجديدة
+    move_videos_bulk, get_category_by_id  # إضافة get_category_by_id
 )
 
-from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
+from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER, create_hierarchical_category_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,12 @@ def handle_add_new_category(message, bot):
     parent_id = step_data.get("parent_id")
     success, result = add_category(category_name, parent_id=parent_id)
     if success:
-        bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\".")
+        parent_info = ""
+        if parent_id:
+            parent_cat = get_category_by_id(parent_id)
+            if parent_cat:
+                parent_info = f" تحت التصنيف 📂 \"{parent_cat['name']}\""
+        bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\"{parent_info}.")
     else:
         bot.reply_to(message, f"❌ خطأ في إنشاء التصنيف: {result[1] if isinstance(result, tuple) else result}")
 
@@ -106,7 +111,7 @@ def handle_delete_by_ids_input(message, bot):
         bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
 
 def handle_move_by_id_input(message, bot):
-    """معالج النقل الفردي والجماعي للفيديوهات - تم تحديثه"""
+    """معالج النقل الفردي والجماعي للفيديوهات - محدث بالشجرة الهرمية"""
     if check_cancel(message, bot): 
         return
 
@@ -139,41 +144,21 @@ def handle_move_by_id_input(message, bot):
         # حفظ أرقام الفيديوهات في admin_steps
         admin_steps[message.chat.id] = {"video_ids": valid_videos}
 
-        # عرض التصنيفات للاختيار
-        all_categories = get_categories_tree()
-        if not all_categories:
-            bot.reply_to(message, "❌ لا توجد تصنيفات لنقل الفيديوهات إليها.")
-            return
-
-        move_keyboard = InlineKeyboardMarkup(row_width=1)
-        for cat in all_categories:
-            move_keyboard.add(
-                InlineKeyboardButton(
-                    cat['name'], 
-                    callback_data=f"admin::move_confirm::{cat['id']}"
-                )
-            )
-            # إضافة التصنيفات الفرعية
-            child_cats = get_child_categories(cat['id'])
-            for child in child_cats:
-                move_keyboard.add(
-                    InlineKeyboardButton(
-                        f"  └─ {child['name']}", 
-                        callback_data=f"admin::move_confirm::{child['id']}"
-                    )
-                )
+        # 🌟 استخدام الكيبورد الهرمي الجديد بدلاً من البناء اليدوي
+        move_keyboard = create_hierarchical_category_keyboard("admin::move_confirm", add_back_button=False)
+        move_keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
 
         # رسالة مختلفة للنقل الفردي أو الجماعي
         if len(valid_videos) == 1:
-            message_text = f"✅ تم اختيار الفيديو رقم {valid_videos[0]}\n\nاختر التصنيف الجديد:"
+            message_text = f"✅ تم اختيار الفيديو رقم {valid_videos[0]}\n\n🎯 اختر التصنيف الجديد:"
         else:
             message_text = (
                 f"✅ تم اختيار {len(valid_videos)} فيديو للنقل\n\n"
-                f"الأرقام: {', '.join(map(str, valid_videos))}\n\n"
+                f"📝 الأرقام: {', '.join(map(str, valid_videos))}\n\n"
             )
             if invalid_ids:
                 message_text += f"⚠️ أرقام غير موجودة (تم تجاهلها): {', '.join(map(str, invalid_ids))}\n\n"
-            message_text += "اختر التصنيف الجديد:"
+            message_text += "🎯 اختر التصنيف الجديد:"
 
         bot.reply_to(message, message_text, reply_markup=move_keyboard)
 
@@ -222,7 +207,7 @@ def register(bot, admin_ids):
     @bot.message_handler(commands=["admin"])
     @check_admin
     def admin_panel(message):
-        bot.send_message(message.chat.id, "أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:", reply_markup=generate_admin_panel())
+        bot.send_message(message.chat.id, "🎛️ أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:", reply_markup=generate_admin_panel())
 
     @bot.message_handler(commands=["cancel"])
     @check_admin
