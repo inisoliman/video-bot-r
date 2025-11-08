@@ -8,7 +8,7 @@ import logging
 from db_manager import (
     get_child_categories, get_category_by_id, get_user_video_rating,
     get_video_rating_stats, VIDEOS_PER_PAGE, CALLBACK_DELIMITER,
-    get_required_channels, is_video_favorite # [تعديل] إضافة is_video_favorite للتحقق من المفضلة
+    get_required_channels, is_video_favorite, get_categories_tree
 )
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,67 @@ logger = logging.getLogger(__name__)
 # القواميس المشتركة لتخزين حالة المستخدمين
 admin_steps = {}
 user_last_search = {}
+
+
+# ============================================
+# 🌟 دالة جديدة: بناء شجرة التصنيفات الهرمية
+# ============================================
+def build_category_tree(categories):
+    """
+    تنظم التصنيفات بشكل شجري هرمي مع إضافة رموز وإيموجي
+    
+    Args:
+        categories: قائمة جميع التصنيفات من قاعدة البيانات
+    
+    Returns:
+        list: قائمة منظمة بشكل شجري مع الرموز والإيموجي
+    """
+    tree = []
+    cats_by_parent = {}
+    
+    # تجميع التصنيفات حسب parent_id
+    for cat in categories:
+        parent_id = cat.get('parent_id')
+        if parent_id not in cats_by_parent:
+            cats_by_parent[parent_id] = []
+        cats_by_parent[parent_id].append(cat)
+    
+    def insert_cats(parent_id, prefix="", level=0):
+        """دالة مساعدة لإدراج التصنيفات بشكل متداخل"""
+        children = cats_by_parent.get(parent_id, [])
+        
+        for child in sorted(children, key=lambda x: x['name']):
+            # اختيار الإيموجي والرمز حسب المستوى
+            if level == 0:
+                # تصنيف رئيسي
+                emoji = "📂"
+                display_name = f"{emoji} {child['name']}"
+            elif level == 1:
+                # تصنيف فرعي مستوى أول
+                emoji = "🌿"
+                display_name = f"{prefix}└─ {emoji} {child['name']}"
+            else:
+                # تصنيفات فرعية أعمق
+                emoji = "🔸"
+                display_name = f"{prefix}└─ {emoji} {child['name']}"
+            
+            tree.append({
+                'id': child['id'],
+                'name': display_name,
+                'original_name': child['name'],
+                'level': level,
+                'parent_id': parent_id
+            })
+            
+            # إضافة التصنيفات الفرعية بشكل متداخل
+            next_prefix = prefix + ("    " if level == 0 else "  ")
+            insert_cats(child['id'], next_prefix, level + 1)
+    
+    # البدء من التصنيفات الرئيسية (parent_id = None)
+    insert_cats(None, "", 0)
+    
+    return tree
+
 
 def check_subscription(bot, user_id):
     """
@@ -49,6 +110,7 @@ def check_subscription(bot, user_id):
     
     return not unsubscribed, unsubscribed
 
+
 def list_videos(bot, message, edit_message=None, parent_id=None):
     """
     Displays the category selection menu.
@@ -74,6 +136,7 @@ def main_menu():
     markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
     return markup
 
+
 def create_categories_keyboard(parent_id=None):
     keyboard = InlineKeyboardMarkup(row_width=2)
     categories = get_child_categories(parent_id)
@@ -87,12 +150,56 @@ def create_categories_keyboard(parent_id=None):
             keyboard.add(InlineKeyboardButton("🔙 رجوع للتصنيفات الرئيسية", callback_data="back_to_cats"))
     return keyboard
 
+
+# ============================================
+# 🌟 دالة جديدة: إنشاء كيبورد هرمي للتصنيفات
+# ============================================
+def create_hierarchical_category_keyboard(callback_prefix, add_back_button=True):
+    """
+    تنشئ لوحة مفاتيح منظمة بشكل شجري لجميع التصنيفات
+    
+    Args:
+        callback_prefix: البادئة المستخدمة في callback_data (مثل: "admin::move_confirm")
+        add_back_button: إضافة زر رجوع أم لا
+    
+    Returns:
+        InlineKeyboardMarkup: لوحة المفاتيح المنظمة
+    """
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    
+    # جلب جميع التصنيفات
+    all_categories = get_categories_tree()
+    
+    if not all_categories:
+        keyboard.add(InlineKeyboardButton("❌ لا توجد تصنيفات", callback_data="noop"))
+        return keyboard
+    
+    # بناء الشجرة
+    tree = build_category_tree(all_categories)
+    
+    # إضافة أزرار التصنيفات
+    for cat in tree:
+        keyboard.add(
+            InlineKeyboardButton(
+                cat['name'], 
+                callback_data=f"{callback_prefix}::{cat['id']}"
+            )
+        )
+    
+    # إضافة زر الرجوع إذا كان مطلوباً
+    if add_back_button:
+        keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+    
+    return keyboard
+
+
 def format_duration(seconds):
     if not seconds or not isinstance(seconds, (int, float)): return ""
     secs = int(seconds)
     mins, secs = divmod(secs, 60)
     hours, mins = divmod(mins, 60)
     return f"{hours:02}:{mins:02}:{secs:02}" if hours > 0 else f"{mins:02}:{secs:02}"
+
 
 def format_video_display_info(video):
     metadata = video.get('metadata') or {}
@@ -116,6 +223,7 @@ def format_video_display_info(video):
     rating_text = f" ⭐ {rating_value:.1f}/5" if rating_value is not None and rating_value != 0 else ""
     views_text = f" 👁️ {video.get('view_count', 0)}"
     return f"{title}{info_line}{rating_text}{views_text}"
+
 
 def create_paginated_keyboard(videos, total_count, current_page, action_prefix, context_id):
     keyboard = InlineKeyboardMarkup(row_width=1)
@@ -151,6 +259,7 @@ def create_paginated_keyboard(videos, total_count, current_page, action_prefix, 
 
     keyboard.add(InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="back_to_main"))
     return keyboard
+
 
 def create_combined_keyboard(child_categories, videos, total_video_count, current_page, parent_category_id):
     keyboard = InlineKeyboardMarkup()
@@ -189,6 +298,7 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
         keyboard.add(InlineKeyboardButton("🔙 رجوع للتصنيفات الرئيسية", callback_data="back_to_cats"), row_width=1)
     return keyboard
 
+
 def create_video_action_keyboard(video_id, user_id):
     keyboard = InlineKeyboardMarkup(row_width=5)
     user_rating = get_user_video_rating(video_id, user_id)
@@ -207,6 +317,7 @@ def create_video_action_keyboard(video_id, user_id):
     if stats and stats.get('avg') is not None:
         keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"), row_width=1)
     return keyboard
+
 
 def generate_grouping_key(metadata, caption, file_name):
     series_name = metadata.get('series_name')
