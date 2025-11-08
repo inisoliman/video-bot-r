@@ -1,5 +1,3 @@
-# handlers/callback_handlers.py
-
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
@@ -357,15 +355,26 @@ def register(bot, admin_ids):
                     bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
 
                 elif sub_action == "move_confirm":
-                    video_id = int(data[2])
-                    new_category_id = int(data[3])
-                    result = move_video_to_category(video_id, new_category_id)
-                    if result:
-                        category = get_category_by_id(new_category_id)
-                        bot.edit_message_text(f"✅ تم نقل الفيديو رقم {video_id} بنجاح إلى تصنيف \"{category['name']}\".", call.message.chat.id, call.message.message_id)
-                    else:
-                        bot.edit_message_text(f"❌ حدث خطأ أثناء نقل الفيديو رقم {video_id}.", call.message.chat.id, call.message.message_id)
-
+                    # [الإصلاح] تصحيح استخراج البيانات
+                    # data[0] = "admin"
+                    # data[1] = "move_confirm"
+                    # data[2] = category_id (التصنيف الجديد)
+                    
+                    # التحقق من وجود البيانات المطلوبة
+                    if len(data) < 3:
+                        bot.edit_message_text(
+                            "❌ خطأ: بيانات النقل غير كاملة.", 
+                            call.message.chat.id, 
+                            call.message.message_id
+                        )
+                        return
+                    
+                    new_category_id = int(data[2])  # [الإصلاح] تغيير من data[3] إلى data[2]
+                    
+                    # استرجاع أرقام الفيديوهات من admin_steps
+                    step_data = admin_steps.get(call.message.chat.id, {})
+                    video_ids = step_data.get("video_ids", [])
+                    
                     if not video_ids:
                         bot.edit_message_text(
                             "❌ خطأ: لم يتم العثور على أرقام الفيديوهات.", 
@@ -375,8 +384,8 @@ def register(bot, admin_ids):
                         return
 
                     # نقل الفيديوهات (فردي أو جماعي)
-                    moved_count = move_videos_bulk(video_ids, int(new_category_id))
-                    category = get_category_by_id(int(new_category_id))
+                    moved_count = move_videos_bulk(video_ids, new_category_id)
+                    category = get_category_by_id(new_category_id)
 
                     # رسالة مختلفة للنقل الفردي أو الجماعي
                     if len(video_ids) == 1:
@@ -388,6 +397,10 @@ def register(bot, admin_ids):
                         )
 
                     bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id)
+                    
+                    # تنظيف البيانات المؤقتة
+                    if call.message.chat.id in admin_steps:
+                        del admin_steps[call.message.chat.id]
 
                 elif sub_action == "update_metadata":
                     msg = bot.edit_message_text("تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
