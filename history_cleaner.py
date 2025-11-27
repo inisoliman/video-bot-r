@@ -35,7 +35,7 @@ class HistoryCleanupManager:
         جلب إعدادات التنظيف من قاعدة البيانات
         """
         settings = {
-            'days_to_keep': 15,           # الأيام المحفوظة
+            'days_to_keep': 10,           # الأيام المحفوظة
             'max_records_per_user': 100,  # الحد الأقصى لكل مستخدم
             'cleanup_interval_hours': 24, # فترة التنظيف بالساعات
             'enabled': True               # تفعيل النظام

@@ -14,6 +14,7 @@ from telebot.types import Update
 from db_manager import verify_and_repair_schema
 from handlers import register_all_handlers
 from state_manager import state_manager
+from history_cleaner import start_history_cleanup
 
 # --- إعداد نظام التسجيل ---
 logging.basicConfig(
@@ -234,6 +235,10 @@ def init_bot():
         # لا نتوقف هنا، سيتم إعداده لاحقاً
     
     logger.info("🚀 Bot initialization completed!")
+    
+    # بدء تنظيف السجل
+    start_history_cleanup()
+    
     return True
 
 # --- تشغيل التطبيق ---
