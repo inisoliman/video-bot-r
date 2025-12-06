@@ -147,70 +147,67 @@ def get_db_connection():
 
 def verify_and_repair_schema():
     logger.info("Verifying and repairing database schema...")
-    conn = get_db_connection()
-    if not conn:
-        logger.critical("Cannot verify schema, no DB connection.")
-        return
-
+    
     try:
-        with conn.cursor() as c:
-            for table_name, columns in EXPECTED_SCHEMA.items():
-                create_table_query = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY)")
-                try:
-                    c.execute(create_table_query)
-                except psycopg2.ProgrammingError:
-                    pass 
+        with get_db_connection() as conn:
+            with conn.cursor() as c:
+                for table_name, columns in EXPECTED_SCHEMA.items():
+                    create_table_query = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY)")
+                    try:
+                        c.execute(create_table_query)
+                    except psycopg2.ProgrammingError:
+                        pass 
 
-                logger.info(f"Checking table: {table_name}")
-                for column_name, column_definition in columns.items():
-                    if column_name.startswith('_'):
-                        continue 
+                    logger.info(f"Checking table: {table_name}")
+                    for column_name, column_definition in columns.items():
+                        if column_name.startswith('_'):
+                            continue 
+                            
+                        c.execute("""
+                            SELECT 1 FROM information_schema.columns 
+                            WHERE table_name = %s AND column_name = %s
+                        """, (table_name, column_name))
                         
-                    c.execute("""
-                        SELECT 1 FROM information_schema.columns 
-                        WHERE table_name = %s AND column_name = %s
-                    """, (table_name, column_name))
+                        if c.fetchone() is None:
+                            logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
+                            if 'PRIMARY KEY' in column_definition or column_name == 'id':
+                                logger.warning(f"Skipping redundant creation of {column_name} in {table_name}.")
+                                continue
+
+                            alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
+                                sql.Identifier(table_name),
+                                sql.Identifier(column_name),
+                                sql.SQL(column_definition)
+                            )
+                            try:
+                                c.execute(alter_query)
+                                logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
+                            except Exception as add_err:
+                                logger.error(f"Error adding column {column_name} to {table_name}: {add_err}")
                     
-                    if c.fetchone() is None:
-                        logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-                        if 'PRIMARY KEY' in column_definition or column_name == 'id':
-                            logger.warning(f"Skipping redundant creation of {column_name} in {table_name}.")
-                            continue
+                    # إضافة قيود UNIQUE إذا كانت محددة
+                    if '_UNIQUE_CONSTRAINT' in columns:
+                        constraint_definition = columns['_UNIQUE_CONSTRAINT']
+                        constraint_name = f"{table_name}_unique_constraint"
+                        c.execute("""
+                            SELECT 1 FROM information_schema.table_constraints 
+                            WHERE table_name = %s AND constraint_name = %s
+                        """, (table_name, constraint_name))
+                        if c.fetchone() is None:
+                            logger.info(f"Adding UNIQUE constraint to {table_name}")
+                            try:
+                                c.execute(sql.SQL(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {constraint_definition}"))
+                            except Exception as const_err:
+                                logger.error(f"Error adding constraint to {table_name}: {const_err}")
 
-                        alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                            sql.Identifier(table_name),
-                            sql.Identifier(column_name),
-                            sql.SQL(column_definition)
-                        )
-                        try:
-                            c.execute(alter_query)
-                            logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
-                        except Exception as add_err:
-                            logger.error(f"Error adding column {column_name} to {table_name}: {add_err}")
-                
-                # إضافة قيود UNIQUE إذا كانت محددة
-                if '_UNIQUE_CONSTRAINT' in columns:
-                    constraint_definition = columns['_UNIQUE_CONSTRAINT']
-                    constraint_name = f"{table_name}_unique_constraint"
-                    c.execute("""
-                        SELECT 1 FROM information_schema.table_constraints 
-                        WHERE table_name = %s AND constraint_name = %s
-                    """, (table_name, constraint_name))
-                    if c.fetchone() is None:
-                        logger.info(f"Adding UNIQUE constraint to {table_name}")
-                        try:
-                            c.execute(sql.SQL(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {constraint_definition}"))
-                        except Exception as const_err:
-                            logger.error(f"Error adding constraint to {table_name}: {const_err}")
-
-
-            conn.commit()
-            logger.info("Schema verification and repair process completed successfully.")
+                conn.commit()
+                logger.info("Schema verification and repair process completed successfully.")
     except psycopg2.Error as e:
         logger.error(f"Schema verification error: {e}", exc_info=True)
-        if conn: conn.rollback()
-    finally:
-        if conn: conn.close()
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in schema verification: {e}", exc_info=True)
+        raise
 
 
 def execute_query(query, params=None, fetch=None, commit=False):
