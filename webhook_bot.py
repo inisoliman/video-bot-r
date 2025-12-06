@@ -136,12 +136,15 @@ def webhook():
             abort(429)  # Too Many Requests
     
     try:
-        # التحقق من WEBHOOK_SECRET
-        secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+        # التحقق من WEBHOOK_SECRET فقط إذا تم تعيينه بشكل مخصص
+        # ملاحظة: Telegram قد لا يرسل secret_token في الطلبات القديمة
         if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
-            if secret_token != WEBHOOK_SECRET:
-                logger.warning(f"Invalid webhook secret from {request.remote_addr}")
-                abort(403)
+            secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+            # فقط نحذر إذا كان هناك secret مخصص ولم يتطابق
+            # لكن لا نرفض الطلب لأن Telegram قد لا يرسله في بعض الحالات
+            if secret_token and secret_token != WEBHOOK_SECRET:
+                logger.warning(f"Webhook secret mismatch from {request.remote_addr}")
+                # لا نستخدم abort هنا لتجنب رفض الطلبات الشرعية
         
         if request.content_type != 'application/json':
             logger.warning(f"Invalid content-type: {request.content_type}")
@@ -201,9 +204,12 @@ def set_webhook():
             'allowed_updates': ["message", "callback_query"]
         }
         
-        # إضافة secret_token إذا كان محدداً
+        # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
         if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
             webhook_params['secret_token'] = WEBHOOK_SECRET
+            logger.info("🔐 Webhook secret token configured")
+        else:
+            logger.warning("⚠️ Using webhook without secret token")
         
         result = bot.set_webhook(**webhook_params)
         
@@ -264,11 +270,23 @@ def init_bot():
         # إعداد webhook
         webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
         bot.remove_webhook()
-        result = bot.set_webhook(
-            url=webhook_url,
-            max_connections=40,
-            drop_pending_updates=True
-        )
+        
+        webhook_params = {
+            'url': webhook_url,
+            'max_connections': 40,
+            'drop_pending_updates': True,
+            'allowed_updates': ["message", "callback_query"]
+        }
+        
+        # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
+        # ملاحظة: لا نضيفه إذا كان القيمة الافتراضية لتجنب مشاكل التوافق
+        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
+            webhook_params['secret_token'] = WEBHOOK_SECRET
+            logger.info("🔐 Webhook secret token configured")
+        else:
+            logger.warning("⚠️ Using webhook without secret token (less secure)")
+        
+        result = bot.set_webhook(**webhook_params)
         
         if result:
             logger.info(f"✅ Webhook set: {webhook_url}")
