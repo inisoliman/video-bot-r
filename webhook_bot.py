@@ -89,11 +89,9 @@ try:
         app=app,
         key_func=get_remote_address,
         default_limits=["200 per day", "50 per hour"],
-        storage_uri="memory://",
-        # استثناء health check endpoints من rate limiting
-        exempt_when=lambda: request.endpoint in ['health_check', 'health']
+        storage_uri="memory://"
     )
-    logger.info("✅ Rate limiting enabled (health checks exempted)")
+    logger.info("✅ Rate limiting enabled")
 except ImportError:
     logger.warning("⚠️ Flask-Limiter not installed. Rate limiting disabled.")
     limiter = None
@@ -101,12 +99,17 @@ except ImportError:
 # --- Routes ---
 @app.route("/", methods=["GET"])
 def health_check():
+    # استثناء من rate limiting لأن Render يستخدمه للـ health checks
     return jsonify({
         "status": "healthy",
         "bot": "video-bot-webhook",
         "version": "2.0.0",
         "webhook_configured": bool(APP_URL)
     })
+
+# استثناء health endpoint من rate limiting
+if limiter:
+    limiter.exempt(health_check)
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -126,6 +129,10 @@ def health():
         "bot_token": "configured" if BOT_TOKEN else "missing",
         "webhook_configured": bool(APP_URL)
     })
+
+# استثناء health endpoint من rate limiting
+if limiter:
+    limiter.exempt(health)
 
 @app.route(f"/bot{BOT_TOKEN}", methods=["POST"])
 def webhook():
