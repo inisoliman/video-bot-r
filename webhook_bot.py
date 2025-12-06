@@ -89,9 +89,11 @@ try:
         app=app,
         key_func=get_remote_address,
         default_limits=["200 per day", "50 per hour"],
-        storage_uri="memory://"
+        storage_uri="memory://",
+        # استثناء health check endpoints من rate limiting
+        exempt_when=lambda: request.endpoint in ['health_check', 'health']
     )
-    logger.info("✅ Rate limiting enabled")
+    logger.info("✅ Rate limiting enabled (health checks exempted)")
 except ImportError:
     logger.warning("⚠️ Flask-Limiter not installed. Rate limiting disabled.")
     limiter = None
