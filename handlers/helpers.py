@@ -8,7 +8,8 @@ import logging
 from db_manager import (
     get_child_categories, get_category_by_id, get_user_video_rating,
     get_video_rating_stats, VIDEOS_PER_PAGE, CALLBACK_DELIMITER,
-    get_required_channels, is_video_favorite, get_categories_tree
+    get_required_channels, is_video_favorite, get_categories_tree,
+    get_videos_ratings_bulk  # إضافة الدالة الجديدة
 )
 
 logger = logging.getLogger(__name__)
@@ -228,19 +229,19 @@ def format_video_display_info(video):
 def create_paginated_keyboard(videos, total_count, current_page, action_prefix, context_id):
     keyboard = InlineKeyboardMarkup(row_width=1)
 
-    # [الإصلاح الجذري لـ KeyError: 'avg_rating']
-    # يجب تحويل كائن DictRow إلى قاموس عادي قبل محاولة تعديله/إضافة مفاتيح جديدة.
+    # تحويل كائن DictRow إلى قاموس عادي
     mutable_videos = [dict(v) for v in videos] 
     
+    # جلب جميع التقييمات دفعة واحدة (حل N+1)
+    video_ids = [v['id'] for v in mutable_videos]
+    ratings_dict = get_videos_ratings_bulk(video_ids)
+    
     for video in mutable_videos:
-        # 1. جلب إحصائيات التقييم
-        stats = get_video_rating_stats(video['id'])
-        
-        # 2. إضافة avg_rating إلى القاموس القابل للتعديل
-        # تحديد avg_rating لإضافته إلى العرض
-        video['avg_rating'] = stats.get('avg') if stats and stats.get('avg') is not None else 0 
+        # إضافة avg_rating من القاموس
+        rating_info = ratings_dict.get(video['id'], {'avg': 0, 'count': 0})
+        video['avg_rating'] = rating_info['avg']
 
-        # 3. عرض معلومات الفيديو
+        # عرض معلومات الفيديو
         display_title = format_video_display_info(video)
         keyboard.add(InlineKeyboardButton(display_title, callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"))
 
@@ -272,13 +273,17 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
         if child_categories:
             keyboard.add(InlineKeyboardButton("🎬--- الفيديوهات ---🎬", callback_data="noop"), row_width=1)
         
-        # [تعديل] يجب أيضاً تحويل كائنات DictRow هنا
+        # تحويل كائنات DictRow
         mutable_videos = [dict(v) for v in videos] 
 
+        # جلب جميع التقييمات دفعة واحدة (حل N+1)
+        video_ids = [v['id'] for v in mutable_videos]
+        ratings_dict = get_videos_ratings_bulk(video_ids)
+
         for video in mutable_videos:
-            # جلب إحصائيات التقييم وإضافتها للقاموس
-            stats = get_video_rating_stats(video['id'])
-            video['avg_rating'] = stats.get('avg') if stats and stats.get('avg') is not None else 0 
+            # إضافة avg_rating من القاموس
+            rating_info = ratings_dict.get(video['id'], {'avg': 0, 'count': 0})
+            video['avg_rating'] = rating_info['avg']
 
             display_title = format_video_display_info(video)
             keyboard.add(InlineKeyboardButton(display_title, callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"), row_width=1)

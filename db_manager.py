@@ -1,76 +1,8 @@
-# (الكود كامل مدمج من كل التعديلات السابقة - مصحح)
-
-
-# إضافة في أعلى db_manager.py
-import psycopg2.pool
-from contextlib import contextmanager
-import threading
-from urllib.parse import urlparse
-
-# إنشاء connection pool
-_connection_pool = None
-_pool_lock = threading.Lock()
-
-def get_connection_pool():
-    """إنشاء أو إرجاع connection pool"""
-    global _connection_pool
-    if _connection_pool is None:
-        with _pool_lock:
-            if _connection_pool is None:
-                try:
-                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                        1, 20,  # min and max connections
-                        **DB_CONFIG
-                    )
-                    logger.info("Database connection pool created successfully")
-                except Exception as e:
-                    logger.error(f"Failed to create connection pool: {e}")
-                    raise
-    return _connection_pool
-
-@contextmanager
-def get_db_connection():
-    """Context manager للحصول على اتصال من pool"""
-    pool = get_connection_pool()
-    conn = None
-    try:
-        conn = pool.getconn()
-        if conn:
-            yield conn
-        else:
-            raise psycopg2.OperationalError("Could not get connection from pool")
-    except Exception as e:
-        logger.error(f"Database connection error: {e}")
-        if conn:
-            pool.putconn(conn)
-        raise
-    finally:
-        if conn:
-            pool.putconn(conn)
-
-# تحديث دالة execute_query لاستخدام connection pool
-def execute_query(query, params=None, fetch=None, commit=False):
-    result = None
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=DictCursor) as c:
-                c.execute(query, params)
-                if fetch == "one": 
-                    result = c.fetchone()
-                elif fetch == "all": 
-                    result = c.fetchall()
-                if commit:
-                    conn.commit()
-                    if fetch is None: 
-                        result = True
-    except psycopg2.Error as e:
-        logger.error(f"Database query failed. Error: {e}", exc_info=True)
-        if fetch == "all": 
-            return []
-        return None if fetch else False
-    return result
-
-
+#!/usr/bin/env python3
+# ==============================================================================
+# ملف: db_manager.py (محسّن ومصحح)
+# الوصف: إدارة قاعدة البيانات مع connection pooling
+# ==============================================================================
 
 import psycopg2
 from psycopg2 import sql
@@ -97,6 +29,14 @@ try:
 except Exception as e:
     logger.critical(f"FATAL: Could not parse DATABASE_URL. Error: {e}")
     exit()
+
+# إنشاء connection pool
+import psycopg2.pool
+import threading
+from contextlib import contextmanager
+
+_connection_pool = None
+_pool_lock = threading.Lock()
 
 VIDEOS_PER_PAGE = 10
 CALLBACK_DELIMITER = "::"
@@ -168,12 +108,42 @@ EXPECTED_SCHEMA = {
 }
 
 
+def get_connection_pool():
+    """إنشاء أو إرجاع connection pool"""
+    global _connection_pool
+    if _connection_pool is None:
+        with _pool_lock:
+            if _connection_pool is None:
+                try:
+                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                        1, 20,  # min and max connections
+                        **DB_CONFIG
+                    )
+                    logger.info("Database connection pool created successfully")
+                except Exception as e:
+                    logger.error(f"Failed to create connection pool: {e}")
+                    raise
+    return _connection_pool
+
+@contextmanager
 def get_db_connection():
+    """Context manager للحصول على اتصال من pool"""
+    pool = get_connection_pool()
+    conn = None
     try:
-        return psycopg2.connect(**DB_CONFIG)
-    except psycopg2.OperationalError as e:
-        logger.error(f"Database connection failed: {e}")
-        return None
+        conn = pool.getconn()
+        if conn:
+            yield conn
+        else:
+            raise psycopg2.OperationalError("Could not get connection from pool")
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        if conn:
+            pool.putconn(conn)
+        raise
+    finally:
+        if conn:
+            pool.putconn(conn)
 
 def verify_and_repair_schema():
     logger.info("Verifying and repairing database schema...")
@@ -244,27 +214,25 @@ def verify_and_repair_schema():
 
 
 def execute_query(query, params=None, fetch=None, commit=False):
-    conn = get_db_connection()
-    if not conn:
-        if fetch == "all": return []
-        return None if fetch else False
-
+    """تنفيذ استعلام SQL مع استخدام connection pool"""
     result = None
     try:
-        with conn.cursor(cursor_factory=DictCursor) as c:
-            c.execute(query, params)
-            if fetch == "one": result = c.fetchone()
-            elif fetch == "all": result = c.fetchall()
-            if commit:
-                conn.commit()
-                if fetch is None: result = True
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute(query, params)
+                if fetch == "one": 
+                    result = c.fetchone()
+                elif fetch == "all": 
+                    result = c.fetchall()
+                if commit:
+                    conn.commit()
+                    if fetch is None: 
+                        result = True
     except psycopg2.Error as e:
         logger.error(f"Database query failed. Error: {e}", exc_info=True)
-        if conn: conn.rollback()
-        if fetch == "all": return []
+        if fetch == "all": 
+            return []
         return None if fetch else False
-    finally:
-        if conn: conn.close()
     return result
 
 # ==============================================================================
@@ -390,6 +358,40 @@ def get_video_rating_stats(video_id):
 def get_user_video_rating(video_id, user_id):
     res = execute_query("SELECT rating FROM video_ratings WHERE video_id = %s AND user_id = %s", (video_id, user_id), fetch="one")
     return res['rating'] if res else None
+
+def get_videos_ratings_bulk(video_ids):
+    """
+    جلب تقييمات متعددة دفعة واحدة لتحسين الأداء (حل مشكلة N+1)
+    
+    Args:
+        video_ids: قائمة بأرقام الفيديوهات
+    
+    Returns:
+        dict: قاموس {video_id: avg_rating}
+    """
+    if not video_ids:
+        return {}
+    
+    query = """
+        SELECT video_id, AVG(rating) as avg_rating, COUNT(*) as count
+        FROM video_ratings
+        WHERE video_id = ANY(%s)
+        GROUP BY video_id
+    """
+    
+    results = execute_query(query, (video_ids,), fetch="all")
+    
+    if not results:
+        return {}
+    
+    return {
+        row['video_id']: {
+            'avg': float(row['avg_rating']) if row['avg_rating'] else 0,
+            'count': row['count']
+        }
+        for row in results
+    }
+
 
 # ============================================
 # [إصلاح] دالة get_popular_videos - إزالة القوس والـ r المكرر

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # ==============================================================================
 # ملف: webhook_bot.py (محدث للعمل مع Render)
 # الوصف: البوت الرئيسي باستخدام webhook - محسن لـ Render
@@ -61,6 +62,13 @@ if missing_vars:
     logger.critical("   APP_URL=https://your-app.onrender.com")
     exit(1)
 
+# التحقق من استخدام HTTPS
+if APP_URL and not APP_URL.startswith('https://'):
+    logger.critical("❌ APP_URL must use HTTPS for security!")
+    logger.critical(f"   Current: {APP_URL}")
+    logger.critical("   Required: https://your-app.onrender.com")
+    exit(1)
+
 try:
     ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(",") if x.strip()]
     logger.info(f"✅ ADMIN_IDS parsed: {len(ADMIN_IDS)} admins")
@@ -72,6 +80,22 @@ except ValueError as e:
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
+# --- إعداد Rate Limiting ---
+try:
+    from flask_limiter import Limiter
+    from flask_limiter.util import get_remote_address
+    
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        default_limits=["200 per day", "50 per hour"],
+        storage_uri="memory://"
+    )
+    logger.info("✅ Rate limiting enabled")
+except ImportError:
+    logger.warning("⚠️ Flask-Limiter not installed. Rate limiting disabled.")
+    limiter = None
+
 # --- Routes ---
 @app.route("/", methods=["GET"])
 def health_check():
@@ -79,19 +103,18 @@ def health_check():
         "status": "healthy",
         "bot": "video-bot-webhook",
         "version": "2.0.0",
-        "webhook_url": f"{APP_URL}/bot{BOT_TOKEN[:10]}..."
+        "webhook_configured": bool(APP_URL)
     })
 
 @app.route("/health", methods=["GET"])
 def health():
     try:
         from db_manager import get_db_connection
-        conn = get_db_connection()
-        if conn:
-            conn.close()
-            db_status = "connected"
-        else:
-            db_status = "disconnected"
+        with get_db_connection() as conn:
+            if conn:
+                db_status = "connected"
+            else:
+                db_status = "disconnected"
     except Exception as e:
         db_status = f"error: {str(e)}"
     
@@ -99,12 +122,27 @@ def health():
         "status": "ok",
         "database": db_status,
         "bot_token": "configured" if BOT_TOKEN else "missing",
-        "webhook_url": f"{APP_URL}/bot{BOT_TOKEN}"
+        "webhook_configured": bool(APP_URL)
     })
 
 @app.route(f"/bot{BOT_TOKEN}", methods=["POST"])
 def webhook():
+    # تطبيق rate limiting يدوياً إذا كان متاحاً
+    if limiter:
+        try:
+            limiter.check()
+        except Exception:
+            logger.warning(f"Rate limit exceeded from {request.remote_addr}")
+            abort(429)  # Too Many Requests
+    
     try:
+        # التحقق من WEBHOOK_SECRET
+        secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
+            if secret_token != WEBHOOK_SECRET:
+                logger.warning(f"Invalid webhook secret from {request.remote_addr}")
+                abort(403)
+        
         if request.content_type != 'application/json':
             logger.warning(f"Invalid content-type: {request.content_type}")
             abort(400)
@@ -156,12 +194,18 @@ def set_webhook():
         logger.info("🗑️ Old webhook removed")
         
         # تعيين webhook جديد
-        result = bot.set_webhook(
-            url=webhook_url,
-            max_connections=40,
-            drop_pending_updates=True,
-            allowed_updates=["message", "callback_query"]
-        )
+        webhook_params = {
+            'url': webhook_url,
+            'max_connections': 40,
+            'drop_pending_updates': True,
+            'allowed_updates': ["message", "callback_query"]
+        }
+        
+        # إضافة secret_token إذا كان محدداً
+        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
+            webhook_params['secret_token'] = WEBHOOK_SECRET
+        
+        result = bot.set_webhook(**webhook_params)
         
         if result:
             logger.info(f"✅ Webhook set: {webhook_url}")

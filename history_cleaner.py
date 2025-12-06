@@ -76,11 +76,12 @@ class HistoryCleanupManager:
         try:
             query = """
                 DELETE FROM user_history 
-                WHERE last_watched < CURRENT_TIMESTAMP - INTERVAL '%s days'
+                WHERE last_watched < CURRENT_TIMESTAMP - INTERVAL %s
                 RETURNING id
             """
             
-            deleted_records = execute_query(query % days_to_keep, fetch="all", commit=True)
+            # استخدام parameterized query بدلاً من string formatting
+            deleted_records = execute_query(query, (f'{days_to_keep} days',), fetch="all", commit=True)
             deleted_count = len(deleted_records) if deleted_records else 0
             
             logger.info(f"Cleaned up {deleted_count} old history records (older than {days_to_keep} days)")
@@ -159,12 +160,13 @@ class HistoryCleanupManager:
                         SELECT MAX(last_watched) 
                         FROM user_history h2 
                         WHERE h2.user_id = h.user_id
-                    ) < CURRENT_TIMESTAMP - INTERVAL '%s days'
+                    ) < CURRENT_TIMESTAMP - INTERVAL %s
                 )
                 RETURNING id
             """
             
-            deleted_records = execute_query(query % inactive_days, fetch="all", commit=True)
+            # استخدام parameterized query بدلاً من string formatting
+            deleted_records = execute_query(query, (f'{inactive_days} days',), fetch="all", commit=True)
             deleted_count = len(deleted_records) if deleted_records else 0
             
             logger.info(f"Cleaned up {deleted_count} history records for inactive users (inactive for {inactive_days}+ days)")
