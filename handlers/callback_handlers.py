@@ -9,6 +9,7 @@ from db_manager import *
 from db_manager import move_videos_bulk  # إضافة الدالة الجديدة بشكل صريح
 from . import helpers
 from . import admin_handlers
+from . import comment_handlers  # إضافة معالجات التعليقات
 from .helpers import admin_steps, create_hierarchical_category_keyboard  # إضافة استيراد الدالة الجديدة
 from update_metadata import run_update_and_report_progress
 from state_manager import States
@@ -620,6 +621,55 @@ def register(bot, admin_ids):
                 except Exception as e:
                     logger.error(f"Error handling category callback: {e}", exc_info=True)
                     bot.answer_callback_query(call.id, "❌ حدث خطأ أثناء تحميل التصنيف.")
+                
+            # --- معالجات التعليقات ---
+            elif action == "add_comment":
+                comment_handlers.handle_add_comment(bot, call)
+            
+            elif action == "my_comments":
+                page = int(data[1]) if len(data) > 1 else 0
+                comment_handlers.show_user_comments(bot, call.message, page)
+                bot.answer_callback_query(call.id)
+            
+            elif action == "admin_comments":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                page = int(data[1]) if len(data) > 1 else 0
+                comment_handlers.show_all_comments(bot, call.message, page, unread_only=False)
+                bot.answer_callback_query(call.id)
+            
+            elif action == "admin_comments_unread":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                page = int(data[1]) if len(data) > 1 else 0
+                comment_handlers.show_all_comments(bot, call.message, page, unread_only=True)
+                bot.answer_callback_query(call.id)
+            
+            elif action == "reply_comment":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.handle_reply_comment(bot, call)
+            
+            elif action == "mark_read":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.handle_mark_read(bot, call)
+            
+            elif action == "delete_comment":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.handle_delete_comment(bot, call)
+            
+            elif action == "confirm_delete_comment":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.confirm_delete_comment(bot, call)
                 
             elif action == "noop":
                 pass  # لا تفعل شيئاً

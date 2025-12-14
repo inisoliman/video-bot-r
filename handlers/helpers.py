@@ -321,6 +321,10 @@ def create_video_action_keyboard(video_id, user_id):
     stats = get_video_rating_stats(video_id)
     if stats and stats.get('avg') is not None:
         keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"), row_width=1)
+    
+    # [جديد] إضافة زر التعليق
+    keyboard.add(InlineKeyboardButton("💬 إضافة تعليق", callback_data=f"add_comment::{video_id}"), row_width=1)
+    
     return keyboard
 
 

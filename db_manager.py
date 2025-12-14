@@ -104,6 +104,17 @@ EXPECTED_SCHEMA = {
         'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
         'last_watched': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         '_UNIQUE_CONSTRAINT': 'UNIQUE(user_id, video_id)'
+    },
+    'video_comments': {
+        'id': 'SERIAL PRIMARY KEY',
+        'video_id': 'INTEGER REFERENCES video_archive(id) ON DELETE CASCADE',
+        'user_id': 'BIGINT NOT NULL',
+        'username': 'TEXT',
+        'comment_text': 'TEXT NOT NULL',
+        'admin_reply': 'TEXT',
+        'is_read': 'BOOLEAN DEFAULT FALSE',
+        'replied_at': 'TIMESTAMP',
+        'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
     }
 }
 
@@ -160,7 +171,8 @@ def verify_and_repair_schema():
 
                     logger.info(f"Checking table: {table_name}")
                     for column_name, column_definition in columns.items():
-                        if column_name.startswith('_'):
+                        # تجاهل الأعمدة الخاصة والـ id (يتم إنشاؤه تلقائياً)
+                        if column_name.startswith('_') or column_name == 'id':
                             continue 
                             
                         c.execute("""
@@ -170,9 +182,6 @@ def verify_and_repair_schema():
                         
                         if c.fetchone() is None:
                             logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-                            if 'PRIMARY KEY' in column_definition or column_name == 'id':
-                                logger.warning(f"Skipping redundant creation of {column_name} in {table_name}.")
-                                continue
 
                             alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
                                 sql.Identifier(table_name),
@@ -555,3 +564,168 @@ def move_videos_bulk(video_ids, new_category_id):
     query = "UPDATE video_archive SET category_id = %s WHERE id = ANY(%s) RETURNING id"
     result = execute_query(query, (new_category_id, video_ids), fetch='all', commit=True)
     return len(result) if isinstance(result, list) else 0
+
+# ==============================================================================
+# دوال نظام التعليقات الخاصة (Private Comments System)
+# ==============================================================================
+
+def add_comment(video_id, user_id, username, comment_text):
+    """
+    إضافة تعليق جديد من المستخدم على فيديو.
+    
+    Args:
+        video_id: رقم الفيديو
+        user_id: رقم المستخدم
+        username: اسم المستخدم
+        comment_text: نص التعليق
+    
+    Returns:
+        رقم التعليق إذا نجح، None إذا فشل
+    """
+    query = """
+        INSERT INTO video_comments (video_id, user_id, username, comment_text)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id
+    """
+    result = execute_query(query, (video_id, user_id, username, comment_text), fetch="one", commit=True)
+    return result['id'] if result else None
+
+def get_all_comments(page=0, unread_only=False):
+    """
+    جلب جميع التعليقات للأدمن (مع pagination).
+    
+    Args:
+        page: رقم الصفحة
+        unread_only: إذا كان True، يجلب التعليقات غير المقروءة فقط
+    
+    Returns:
+        tuple: (قائمة التعليقات، العدد الإجمالي)
+    """
+    offset = page * VIDEOS_PER_PAGE
+    
+    where_clause = "WHERE is_read = FALSE" if unread_only else ""
+    
+    comments_query = f"""
+        SELECT c.*, v.caption as video_caption, v.file_name as video_name
+        FROM video_comments c
+        JOIN video_archive v ON c.video_id = v.id
+        {where_clause}
+        ORDER BY c.created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    comments = execute_query(comments_query, (VIDEOS_PER_PAGE, offset), fetch="all")
+    
+    count_query = f"SELECT COUNT(*) as count FROM video_comments {where_clause}"
+    total = execute_query(count_query, fetch="one")
+    
+    return comments, total['count'] if total else 0
+
+def get_user_comments(user_id, page=0):
+    """
+    جلب تعليقات مستخدم معين (للمستخدم لرؤية تعليقاته والردود عليها).
+    
+    Args:
+        user_id: رقم المستخدم
+        page: رقم الصفحة
+    
+    Returns:
+        tuple: (قائمة التعليقات، العدد الإجمالي)
+    """
+    offset = page * VIDEOS_PER_PAGE
+    
+    comments_query = """
+        SELECT c.*, v.caption as video_caption, v.file_name as video_name
+        FROM video_comments c
+        JOIN video_archive v ON c.video_id = v.id
+        WHERE c.user_id = %s
+        ORDER BY c.created_at DESC
+        LIMIT %s OFFSET %s
+    """
+    comments = execute_query(comments_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
+    
+    total = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE user_id = %s", (user_id,), fetch="one")
+    
+    return comments, total['count'] if total else 0
+
+def get_comment_by_id(comment_id):
+    """
+    جلب تعليق بواسطة رقمه.
+    
+    Args:
+        comment_id: رقم التعليق
+    
+    Returns:
+        بيانات التعليق أو None
+    """
+    query = """
+        SELECT c.*, v.caption as video_caption, v.file_name as video_name
+        FROM video_comments c
+        JOIN video_archive v ON c.video_id = v.id
+        WHERE c.id = %s
+    """
+    return execute_query(query, (comment_id,), fetch="one")
+
+def reply_to_comment(comment_id, admin_reply):
+    """
+    الرد على تعليق من قبل الأدمن.
+    
+    Args:
+        comment_id: رقم التعليق
+        admin_reply: نص الرد
+    
+    Returns:
+        True إذا نجح، False إذا فشل
+    """
+    query = """
+        UPDATE video_comments 
+        SET admin_reply = %s, replied_at = CURRENT_TIMESTAMP, is_read = TRUE
+        WHERE id = %s
+    """
+    return execute_query(query, (admin_reply, comment_id), commit=True)
+
+def mark_comment_read(comment_id):
+    """
+    تعليم التعليق كمقروء.
+    
+    Args:
+        comment_id: رقم التعليق
+    
+    Returns:
+        True إذا نجح، False إذا فشل
+    """
+    return execute_query("UPDATE video_comments SET is_read = TRUE WHERE id = %s", (comment_id,), commit=True)
+
+def delete_comment(comment_id):
+    """
+    حذف تعليق (للأدمن فقط).
+    
+    Args:
+        comment_id: رقم التعليق
+    
+    Returns:
+        True إذا نجح، False إذا فشل
+    """
+    return execute_query("DELETE FROM video_comments WHERE id = %s", (comment_id,), commit=True)
+
+def get_unread_comments_count():
+    """
+    جلب عدد التعليقات غير المقروءة.
+    
+    Returns:
+        عدد التعليقات غير المقروءة
+    """
+    result = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE is_read = FALSE", fetch="one")
+    return result['count'] if result else 0
+
+def get_video_comments_count(video_id):
+    """
+    جلب عدد التعليقات على فيديو معين.
+    
+    Args:
+        video_id: رقم الفيديو
+    
+    Returns:
+        عدد التعليقات
+    """
+    result = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE video_id = %s", (video_id,), fetch="one")
+    return result['count'] if result else 0

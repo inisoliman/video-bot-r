@@ -7,13 +7,15 @@ import logging
 from db_manager import (
     add_bot_user, get_popular_videos, search_videos,
     get_random_video, increment_video_view_count, get_categories_tree, add_video,
-    get_active_category_id, get_user_favorites, get_user_history, add_to_history
+    get_active_category_id, get_user_favorites, get_user_history, add_to_history,
+    get_user_state, clear_user_state  # إضافة دوال الحالة
 )
 from .helpers import (
     main_menu, create_paginated_keyboard,
     create_video_action_keyboard, user_last_search, generate_grouping_key,
     check_subscription, list_videos
 )
+from . import comment_handlers  # إضافة معالجات التعليقات
 from utils import extract_video_metadata
 from state_manager import (
     set_user_waiting_for_input, States, get_user_waiting_context, 
@@ -194,6 +196,52 @@ def register(bot, channel_id, admin_ids):
             return
         keyboard = create_paginated_keyboard(videos, total_count, 0, "search_all", "all")
         bot.reply_to(message, f"نتائج البحث عن \"{query}\":", reply_markup=keyboard)
+
+    # --- معالجات التعليقات ---
+    @bot.message_handler(commands=["my_comments"])
+    def handle_my_comments_command(message):
+        """عرض تعليقات المستخدم"""
+        comment_handlers.show_user_comments(bot, message, page=0)
+    
+    @bot.message_handler(commands=["comments"])
+    def handle_admin_comments_command(message):
+        """عرض جميع التعليقات للأدمن"""
+        if message.from_user.id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        comment_handlers.show_all_comments(bot, message, page=0, unread_only=False)
+    
+    @bot.message_handler(commands=["cancel"])
+    def handle_cancel_command(message):
+        """إلغاء العملية الحالية"""
+        clear_user_state(message.from_user.id)
+        clear_user_waiting_state(message.from_user.id)
+        bot.reply_to(message, "✅ تم إلغاء العملية")
+    
+    # معالج النصوص للتعليقات والردود
+    @bot.message_handler(func=lambda message: message.text and message.chat.type == "private", content_types=["text"])
+    def handle_comment_text_states(message):
+        """معالج النصوص للتعليقات والردود"""
+        # التحقق من حالة المستخدم
+        state = get_user_state(message.from_user.id)
+        
+        if state:
+            state_name = state.get('state')
+            
+            # معالجة التعليق
+            if state_name == 'waiting_comment':
+                comment_handlers.process_comment_text(bot, message)
+                return
+            
+            # معالجة الرد (للأدمن)
+            elif state_name == 'replying_comment':
+                if message.from_user.id in admin_ids:
+                    comment_handlers.process_reply_text(bot, message)
+                    return
+        
+        # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي
+        if not message.text.startswith("/"):
+            handle_private_text_search_direct(message, bot)
 
     @bot.message_handler(content_types=["video"])
     def handle_new_video(message):
