@@ -369,6 +369,140 @@ def admin_update_thumbnails():
             "message": str(e)
         }), 500
 
+@app.route("/admin/extract_channel_thumbnails", methods=["GET", "POST"])
+def admin_extract_channel_thumbnails():
+    """
+    استخراج thumbnails من القناة للفيديوهات القديمة.
+    يعمل بدون shell access.
+    """
+    try:
+        import threading
+        import db_manager as db
+        
+        # التحقق من admin_id
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        def extract_thumbnails_background():
+            """استخراج thumbnails من القناة في الخلفية"""
+            try:
+                logger.info("🚀 Starting channel thumbnail extraction...")
+                
+                # جلب الفيديوهات بدون thumbnails
+                videos = db.get_videos_without_thumbnail(limit=500)
+                
+                if not videos:
+                    bot.send_message(
+                        admin_id,
+                        "✅ جميع الفيديوهات لديها thumbnails بالفعل!"
+                    )
+                    return
+                
+                bot.send_message(
+                    admin_id,
+                    f"🔄 بدء استخراج thumbnails لـ {len(videos)} فيديو..."
+                )
+                
+                total_updated = 0
+                failed_count = 0
+                
+                for video in videos:
+                    try:
+                        if not video.get('message_id') or not video.get('chat_id'):
+                            failed_count += 1
+                            continue
+                        
+                        # جلب الرسالة من القناة
+                        message = bot.forward_message(
+                            chat_id=video['chat_id'],
+                            from_chat_id=video['chat_id'],
+                            message_id=video['message_id']
+                        )
+                        
+                        # حذف الرسالة المعاد توجيهها
+                        try:
+                            bot.delete_message(video['chat_id'], message.message_id)
+                        except:
+                            pass
+                        
+                        # استخراج thumbnail
+                        if message.video and message.video.thumb:
+                            thumbnail_id = message.video.thumb.file_id
+                            
+                            if db.update_video_thumbnail(video['id'], thumbnail_id):
+                                total_updated += 1
+                                logger.info(f"✅ Updated video {video['id']}")
+                            else:
+                                failed_count += 1
+                        else:
+                            failed_count += 1
+                        
+                        import time
+                        time.sleep(0.5)
+                        
+                    except Exception as e:
+                        logger.error(f"Error extracting thumbnail for video {video['id']}: {e}")
+                        failed_count += 1
+                        continue
+                
+                # إرسال النتيجة
+                bot.send_message(
+                    admin_id,
+                    f"✅ *اكتمل استخراج Thumbnails!*\n\n"
+                    f"📊 الإحصائيات:\n"
+                    f"• نجح: {total_updated}\n"
+                    f"• فشل: {failed_count}\n"
+                    f"• المجموع: {len(videos)}",
+                    parse_mode="Markdown"
+                )
+                
+                logger.info(f"🎉 Channel thumbnail extraction completed! Success: {total_updated}, Failed: {failed_count}")
+                
+            except Exception as e:
+                logger.error(f"Error in channel thumbnail extraction: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ أثناء استخراج Thumbnails:\n{str(e)}"
+                    )
+                except:
+                    pass
+        
+        # تشغيل في thread منفصل
+        thread = threading.Thread(target=extract_thumbnails_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Channel thumbnail extraction started. You will receive a message when complete."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin extract channel thumbnails error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:

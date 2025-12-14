@@ -291,5 +291,19 @@ def register(bot, channel_id, admin_ids):
             )
             if video_db_id:
                 logger.info(f"Video {message.message_id} (DB ID: {video_db_id}) added to category {active_category_id}.")
+                
+                # استخراج وحفظ thumbnail تلقائياً
+                try:
+                    if message.video and message.video.thumb:
+                        thumbnail_file_id = message.video.thumb.file_id
+                        from db_manager import update_video_thumbnail
+                        if update_video_thumbnail(video_db_id, thumbnail_file_id):
+                            logger.info(f"✅ Thumbnail saved for video {video_db_id}")
+                        else:
+                            logger.warning(f"⚠️ Failed to save thumbnail for video {video_db_id}")
+                    else:
+                        logger.info(f"ℹ️ No thumbnail available for video {video_db_id}")
+                except Exception as e:
+                    logger.error(f"Error saving thumbnail for video {video_db_id}: {e}")
             else:
                 logger.error(f"Failed to add video {message.message_id} to the database.")
