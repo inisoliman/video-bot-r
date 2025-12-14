@@ -408,7 +408,7 @@ def admin_extract_channel_thumbnails():
                 logger.info("🚀 Starting channel thumbnail extraction...")
                 
                 # جلب الفيديوهات بدون thumbnails
-                videos = db.get_videos_without_thumbnail(limit=2000)  # زيادة الحد لمعالجة جميع الفيديوهات
+                videos = db.get_videos_without_thumbnail(limit=5000)  # زيادة الحد لمعالجة جميع الفيديوهات بسرعة
                 
                 if not videos:
                     bot.send_message(
