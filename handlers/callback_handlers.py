@@ -268,17 +268,17 @@ def register(bot, admin_ids):
                 # معالجات التعليقات من لوحة الأدمن
                 if sub_action == "view_comments":
                     bot.answer_callback_query(call.id)
-                    comment_handlers.show_all_comments(bot, call.message, admin_ids, page=0, unread_only=False)
+                    comment_handlers.show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False)
                     return
                 
                 elif sub_action == "comments_stats":
                     bot.answer_callback_query(call.id)
-                    comment_handlers.handle_comments_stats(bot, call.message, admin_ids)
+                    comment_handlers.handle_comments_stats(bot, user_id, admin_ids)
                     return
                 
                 elif sub_action == "delete_all_comments":
                     bot.answer_callback_query(call.id)
-                    comment_handlers.handle_delete_all_comments(bot, call.message, admin_ids)
+                    comment_handlers.handle_delete_all_comments(bot, user_id, admin_ids)
                     return
                 
                 elif sub_action == "delete_old_comments":
@@ -669,7 +669,7 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 page = int(data[1]) if len(data) > 1 else 0
-                comment_handlers.show_all_comments(bot, call.message, admin_ids, page, unread_only=False)
+                comment_handlers.show_all_comments(bot, user_id, admin_ids, page, unread_only=False)
                 bot.answer_callback_query(call.id)
             
             elif action == "admin_comments_unread":
@@ -677,7 +677,7 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 page = int(data[1]) if len(data) > 1 else 0
-                comment_handlers.show_all_comments(bot, call.message, admin_ids, page, unread_only=True)
+                comment_handlers.show_all_comments(bot, user_id, admin_ids, page, unread_only=True)
                 bot.answer_callback_query(call.id)
             
             elif action == "reply_comment":
@@ -732,7 +732,7 @@ def register(bot, admin_ids):
                         bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                         return
                     bot.answer_callback_query(call.id)
-                    comment_handlers.show_all_comments(bot, call.message, admin_ids, page=0, unread_only=False)
+                    comment_handlers.show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False)
                 
                 elif sub_action == "comments_stats":
                     if user_id not in admin_ids:

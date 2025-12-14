@@ -202,27 +202,27 @@ def register(bot, channel_id, admin_ids):
         if message.from_user.id not in admin_ids:
             bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
             return
-        comment_handlers.show_all_comments(bot, message, admin_ids, page=0, unread_only=False)
+        comment_handlers.show_all_comments(bot, message.from_user.id, admin_ids, page=0, unread_only=False)
     
     @bot.message_handler(commands=["delete_all_comments"])
     def handle_delete_all_comments_command(message):
         """حذف جميع التعليقات (أدمن فقط)"""
-        comment_handlers.handle_delete_all_comments(bot, message, admin_ids)
+        comment_handlers.handle_delete_all_comments(bot, message.from_user.id, admin_ids)
     
     @bot.message_handler(commands=["delete_user_comments"])
     def handle_delete_user_comments_command(message):
         """حذف تعليقات مستخدم معين (أدمن فقط)"""
-        comment_handlers.handle_delete_user_comments(bot, message, admin_ids)
+        comment_handlers.handle_delete_user_comments(bot, message.from_user.id, admin_ids, message.text)
     
     @bot.message_handler(commands=["delete_old_comments"])
     def handle_delete_old_comments_command(message):
         """حذف التعليقات القديمة (أدمن فقط)"""
-        comment_handlers.handle_delete_old_comments(bot, message, admin_ids)
+        comment_handlers.handle_delete_old_comments(bot, message.from_user.id, admin_ids, message.text)
     
     @bot.message_handler(commands=["comments_stats"])
     def handle_comments_stats_command(message):
         """عرض إحصائيات التعليقات (أدمن فقط)"""
-        comment_handlers.handle_comments_stats(bot, message, admin_ids)
+        comment_handlers.handle_comments_stats(bot, message.from_user.id, admin_ids)
     
     @bot.message_handler(commands=["cancel"])
     def handle_cancel_command(message):

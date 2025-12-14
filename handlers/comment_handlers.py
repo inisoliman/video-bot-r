@@ -153,11 +153,9 @@ def show_user_comments(bot, message, page=0):
 # معالجات الأدمن
 # ==============================================================================
 
-def show_all_comments(bot, message, admin_ids, page=0, unread_only=False):
+def show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False):
     """عرض جميع التعليقات للأدمن"""
     try:
-        user_id = message.from_user.id
-        
         if user_id not in admin_ids:
             bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
@@ -425,13 +423,11 @@ def confirm_delete_comment(bot, call, admin_ids):
 # معالجات الحذف الجماعي (للأدمن فقط)
 # ==============================================================================
 
-def handle_delete_all_comments(bot, message, admin_ids):
+def handle_delete_all_comments(bot, user_id, admin_ids):
     """حذف جميع التعليقات"""
     try:
-        user_id = message.from_user.id
-        
         if user_id not in admin_ids:
-            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
         
         # طلب تأكيد
@@ -456,7 +452,7 @@ def handle_delete_all_comments(bot, message, admin_ids):
         
     except Exception as e:
         logger.error(f"Error in handle_delete_all_comments: {e}", exc_info=True)
-        bot.reply_to(message, "❌ حدث خطأ")
+        bot.send_message(user_id, "❌ حدث خطأ")
 
 def confirm_delete_all_comments(bot, call, admin_ids):
     """تأكيد حذف جميع التعليقات"""
@@ -482,17 +478,26 @@ def confirm_delete_all_comments(bot, call, admin_ids):
         logger.error(f"Error in confirm_delete_all_comments: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
 
-def handle_delete_user_comments(bot, message, admin_ids):
+def handle_delete_user_comments(bot, user_id, admin_ids, target_user_id_str=None):
     """حذف تعليقات مستخدم معين"""
     try:
-        user_id = message.from_user.id
-        
         if user_id not in admin_ids:
-            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
         
-        # استخراج user_id من الأمر
-        parts = message.text.split()
+        # استخراج user_id من الأمر (إذا تم تمريره)
+        if target_user_id_str:
+            parts = target_user_id_str.split()
+        else:
+            bot.send_message(
+                user_id,
+                "❌ *الاستخدام الصحيح:*\n"
+                "`/delete_user_comments <user_id>`\n\n"
+                "مثال: `/delete_user_comments 123456789`",
+                parse_mode="Markdown"
+            )
+            return
+        
         if len(parts) < 2:
             bot.reply_to(
                 message,
@@ -526,7 +531,7 @@ def handle_delete_user_comments(bot, message, admin_ids):
         
     except Exception as e:
         logger.error(f"Error in handle_delete_user_comments: {e}", exc_info=True)
-        bot.reply_to(message, "❌ حدث خطأ")
+        bot.send_message(user_id, "❌ حدث خطأ")
 
 def confirm_delete_user_comments(bot, call, admin_ids):
     """تأكيد حذف تعليقات مستخدم"""
@@ -554,24 +559,23 @@ def confirm_delete_user_comments(bot, call, admin_ids):
         logger.error(f"Error in confirm_delete_user_comments: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
 
-def handle_delete_old_comments(bot, message, admin_ids):
+def handle_delete_old_comments(bot, user_id, admin_ids, days_str=None):
     """حذف التعليقات القديمة"""
     try:
-        user_id = message.from_user.id
-        
         if user_id not in admin_ids:
-            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
         
         # استخراج عدد الأيام من الأمر (افتراضي 30)
-        parts = message.text.split()
         days = 30
-        if len(parts) >= 2:
-            try:
-                days = int(parts[1])
-            except ValueError:
-                bot.reply_to(message, "❌ عدد الأيام غير صحيح")
-                return
+        if days_str:
+            parts = days_str.split()
+            if len(parts) >= 2:
+                try:
+                    days = int(parts[1])
+                except ValueError:
+                    bot.send_message(user_id, "❌ عدد الأيام غير صحيح")
+                    return
         
         # طلب تأكيد
         markup = types.InlineKeyboardMarkup()
@@ -590,7 +594,7 @@ def handle_delete_old_comments(bot, message, admin_ids):
         
     except Exception as e:
         logger.error(f"Error in handle_delete_old_comments: {e}", exc_info=True)
-        bot.reply_to(message, "❌ حدث خطأ")
+        bot.send_message(user_id, "❌ حدث خطأ")
 
 def confirm_delete_old_comments(bot, call, admin_ids):
     """تأكيد حذف التعليقات القديمة"""
@@ -618,19 +622,17 @@ def confirm_delete_old_comments(bot, call, admin_ids):
         logger.error(f"Error in confirm_delete_old_comments: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
 
-def handle_comments_stats(bot, message, admin_ids):
+def handle_comments_stats(bot, user_id, admin_ids):
     """عرض إحصائيات التعليقات"""
     try:
-        user_id = message.from_user.id
-        
         if user_id not in admin_ids:
-            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
         
         stats = db.get_comments_stats()
         
         if not stats:
-            bot.reply_to(message, "❌ فشل جلب الإحصائيات")
+            bot.send_message(user_id, "❌ فشل جلب الإحصائيات")
             return
         
         stats_text = (
@@ -645,4 +647,4 @@ def handle_comments_stats(bot, message, admin_ids):
         
     except Exception as e:
         logger.error(f"Error in handle_comments_stats: {e}", exc_info=True)
-        bot.reply_to(message, "❌ حدث خطأ")
+        bot.send_message(user_id, "❌ حدث خطأ")
