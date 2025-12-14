@@ -56,7 +56,8 @@ EXPECTED_SCHEMA = {
         'metadata': 'JSONB',
         'view_count': 'INTEGER DEFAULT 0',
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
-        'grouping_key': 'TEXT'
+        'grouping_key': 'TEXT',
+        'thumbnail_file_id': 'TEXT'
     },
     'required_channels': {
         'id': 'SERIAL PRIMARY KEY',
@@ -791,3 +792,92 @@ def get_comments_stats():
         FROM video_comments
     """
     return execute_query(query, fetch="one")
+
+# ==============================================================================
+# دوال Inline Query
+# ==============================================================================
+
+def search_videos_for_inline(query, limit=50):
+    """
+    بحث محسّن للـ inline query مع دعم البحث في العنوان والوصف والتصنيف.
+    
+    Args:
+        query: نص البحث
+        limit: عدد النتائج (افتراضي 50، حد Telegram الأقصى)
+    
+    Returns:
+        قائمة الفيديوهات مع المعلومات الكاملة
+    """
+    if not query or query.strip() == "":
+        # إذا كان البحث فارغاً، نعرض الفيديوهات الأكثر مشاهدة
+        sql = """
+            SELECT 
+                v.id, v.file_id, v.caption, v.file_name, v.view_count,
+                v.thumbnail_file_id, v.chat_id, v.message_id,
+                c.name as category_name,
+                COALESCE(AVG(r.rating), 0) as avg_rating,
+                COUNT(r.rating) as rating_count
+            FROM video_archive v
+            LEFT JOIN categories c ON v.category_id = c.id
+            LEFT JOIN video_ratings r ON v.id = r.video_id
+            GROUP BY v.id, c.name
+            ORDER BY v.view_count DESC, avg_rating DESC
+            LIMIT %s
+        """
+        return execute_query(sql, (limit,), fetch="all")
+    
+    # بحث في العنوان، اسم الملف، والتصنيف
+    sql = """
+        SELECT 
+            v.id, v.file_id, v.caption, v.file_name, v.view_count,
+            v.thumbnail_file_id, v.chat_id, v.message_id,
+            c.name as category_name,
+            COALESCE(AVG(r.rating), 0) as avg_rating,
+            COUNT(r.rating) as rating_count
+        FROM video_archive v
+        LEFT JOIN categories c ON v.category_id = c.id
+        LEFT JOIN video_ratings r ON v.id = r.video_id
+        WHERE 
+            v.caption ILIKE %s OR 
+            v.file_name ILIKE %s OR 
+            c.name ILIKE %s
+        GROUP BY v.id, c.name
+        ORDER BY v.view_count DESC, avg_rating DESC
+        LIMIT %s
+    """
+    search_pattern = f"%{query}%"
+    return execute_query(sql, (search_pattern, search_pattern, search_pattern, limit), fetch="all")
+
+def update_video_thumbnail(video_id, thumbnail_file_id):
+    """
+    تحديث thumbnail_file_id للفيديو.
+    
+    Args:
+        video_id: رقم الفيديو
+        thumbnail_file_id: معرف الصورة المصغرة من Telegram
+    
+    Returns:
+        True إذا نجح التحديث، False إذا فشل
+    """
+    sql = "UPDATE video_archive SET thumbnail_file_id = %s WHERE id = %s"
+    result = execute_query(sql, (thumbnail_file_id, video_id), commit=True)
+    return result is not None
+
+def get_videos_without_thumbnail(limit=20):
+    """
+    جلب الفيديوهات التي لا تملك thumbnail_file_id.
+    
+    Args:
+        limit: عدد الفيديوهات (افتراضي 20)
+    
+    Returns:
+        قائمة الفيديوهات
+    """
+    sql = """
+        SELECT id, file_id, caption, file_name, chat_id, message_id
+        FROM video_archive
+        WHERE thumbnail_file_id IS NULL
+        ORDER BY upload_date DESC
+        LIMIT %s
+    """
+    return execute_query(sql, (limit,), fetch="all")
