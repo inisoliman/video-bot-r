@@ -67,6 +67,10 @@ class StateManager:
         state = user_state['state']
         context = user_state.get('context', {})
         
+        # حالات التعليقات تُعالج في user_handlers مباشرة
+        if state in ['waiting_comment', 'replying_comment']:
+            return False  # Let user_handlers process these
+        
         if state in self.handlers:
             try:
                 # Call the appropriate handler
