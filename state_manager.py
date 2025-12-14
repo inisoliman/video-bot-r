@@ -36,7 +36,11 @@ class StateManager:
         """Get user state and context."""
         result = get_user_state(user_id)
         if result:
-            context = json.loads(result['context']) if result['context'] else None
+            # PostgreSQL JSONB returns dict directly, but handle string for compatibility
+            context = result['context']
+            if context and isinstance(context, str):
+                context = json.loads(context)
+            
             return {
                 'state': result['state'],
                 'context': context
