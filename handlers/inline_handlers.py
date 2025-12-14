@@ -50,6 +50,19 @@ def register(bot):
                     result = create_inline_result(video)
                     if result:
                         results.append(result)
+                
+                # إذا لم تكن هناك نتائج صالحة بعد التصفية
+                if not results:
+                    results = [
+                        InlineQueryResultArticle(
+                            id='no_valid_results',
+                            title='❌ لا توجد نتائج صالحة',
+                            description='جميع النتائج تحتوي على أخطاء',
+                            input_message_content=InputTextMessageContent(
+                                message_text='❌ لم يتم العثور على فيديوهات صالحة'
+                            )
+                        )
+                    ]
             
             # إرسال النتائج
             bot.answer_inline_query(
@@ -91,14 +104,18 @@ def create_inline_result(video):
         # التحقق من وجود file_id
         file_id = video.get('file_id')
         if not file_id:
-            logger.warning(f"Video {video.get('id')} has no file_id, skipping")
             return None
         
-        # التأكد أن file_id هو string
-        file_id = str(file_id)
+        # التأكد أن file_id هو string وصالح
+        file_id = str(file_id).strip()
+        if not file_id or len(file_id) < 10:  # file_id يجب أن يكون طويل
+            logger.warning(f"Video {video.get('id')} has invalid file_id: {file_id}")
+            return None
         
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
+        # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
+        title = title.replace('\n', ' ').replace('\r', ' ').strip()
         if len(title) > 100:
             title = title[:97] + '...'
         
@@ -121,7 +138,7 @@ def create_inline_result(video):
         # إنشاء النتيجة
         result = InlineQueryResultCachedVideo(
             id=str(video['id']),
-            video_file_id=file_id,  # استخدام file_id المحول لـ string
+            video_file_id=file_id,
             title=title,
             description=description
         )

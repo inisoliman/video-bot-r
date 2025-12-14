@@ -545,7 +545,7 @@ def init_bot():
             'url': webhook_url,
             'max_connections': 40,
             'drop_pending_updates': True,
-            'allowed_updates': ["message", "callback_query"]
+            'allowed_updates': ["message", "callback_query", "inline_query"]
         }
         
         # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
