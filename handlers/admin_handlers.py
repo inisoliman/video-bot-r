@@ -196,6 +196,13 @@ def register(bot, admin_ids):
                      InlineKeyboardButton("❌ حذف فيديوهات بالأرقام", callback_data="admin::delete_videos_by_ids"))
         keyboard.add(InlineKeyboardButton("🔘 تعيين التصنيف النشط", callback_data="admin::set_active"),
                      InlineKeyboardButton("🔄 تحديث بيانات الفيديوهات القديمة", callback_data="admin::update_metadata"))
+        
+        # أزرار إدارة التعليقات
+        keyboard.add(InlineKeyboardButton("💬 عرض التعليقات", callback_data="admin::view_comments"),
+                     InlineKeyboardButton("📊 إحصائيات التعليقات", callback_data="admin::comments_stats"))
+        keyboard.add(InlineKeyboardButton("🗑️ حذف جميع التعليقات", callback_data="admin::delete_all_comments"),
+                     InlineKeyboardButton("🧹 حذف التعليقات القديمة", callback_data="admin::delete_old_comments"))
+        
         keyboard.add(InlineKeyboardButton("➕ إضافة قناة اشتراك", callback_data="admin::add_channel"),
                      InlineKeyboardButton("➖ إزالة قناة اشتراك", callback_data="admin::remove_channel"))
         keyboard.add(InlineKeyboardButton("📋 عرض القنوات", callback_data="admin::list_channels"))

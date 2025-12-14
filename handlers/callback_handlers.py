@@ -689,6 +689,50 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 comment_handlers.confirm_delete_old_comments(bot, call, admin_ids)
+            
+            # معالجات أزرار لوحة الأدمن للتعليقات
+            elif action == "admin" and len(data) > 1:
+                sub_action = data[1]
+                
+                if sub_action == "view_comments":
+                    if user_id not in admin_ids:
+                        bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.show_all_comments(bot, call.message, admin_ids, page=0, unread_only=False)
+                
+                elif sub_action == "comments_stats":
+                    if user_id not in admin_ids:
+                        bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.handle_comments_stats(bot, call.message, admin_ids)
+                
+                elif sub_action == "delete_all_comments":
+                    if user_id not in admin_ids:
+                        bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.handle_delete_all_comments(bot, call.message, admin_ids)
+                
+                elif sub_action == "delete_old_comments":
+                    if user_id not in admin_ids:
+                        bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    # حذف التعليقات الأقدم من 30 يوم افتراضياً
+                    markup = types.InlineKeyboardMarkup()
+                    markup.row(
+                        types.InlineKeyboardButton("✅ نعم، احذف", callback_data="confirm_delete_old_comments::30"),
+                        types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+                    )
+                    bot.send_message(
+                        user_id,
+                        "⚠️ *تأكيد الحذف*\\n\\n"
+                        "هل أنت متأكد من حذف التعليقات الأقدم من *30 يوم*؟",
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
                 
             elif action == "noop":
                 pass  # لا تفعل شيئاً

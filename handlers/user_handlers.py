@@ -232,7 +232,7 @@ def register(bot, channel_id, admin_ids):
         bot.reply_to(message, "✅ تم إلغاء العملية")
     
     # معالج النصوص للتعليقات والردود
-    @bot.message_handler(func=lambda message: message.text and message.chat.type == "private", content_types=["text"])
+    @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private", content_types=["text"])
     def handle_comment_text_states(message):
         """معالج النصوص للتعليقات والردود"""
         # التحقق من حالة المستخدم
@@ -253,8 +253,7 @@ def register(bot, channel_id, admin_ids):
                     return
         
         # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي
-        if not message.text.startswith("/"):
-            handle_private_text_search_direct(message, bot)
+        handle_private_text_search_direct(message, bot)
 
     @bot.message_handler(content_types=["video"])
     def handle_new_video(message):
