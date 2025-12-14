@@ -68,7 +68,7 @@ def process_comment_text(bot, message):
                 user_id,
                 "✅ *تم إرسال تعليقك بنجاح!*\n\n"
                 "سيتم مراجعته من قبل الإدارة والرد عليك في أقرب وقت.\n"
-                "يمكنك متابعة تعليقاتك من خلال الأمر /my_comments",
+                "يمكنك متابعة تعليقاتك من خلال الأمر /my\_comments",
                 parse_mode="Markdown"
             )
             
@@ -308,7 +308,7 @@ def process_reply_text(bot, message, admin_ids):
                     f"📹 *الفيديو:* {comment['video_caption'] or comment['video_name']}\n\n"
                     f"💬 *تعليقك:*\n{comment['comment_text']}\n\n"
                     f"✅ *رد الإدارة:*\n{reply_text}\n\n"
-                    f"يمكنك مشاهدة جميع تعليقاتك من خلال /my_comments"
+                    f"يمكنك مشاهدة جميع تعليقاتك من خلال /my\_comments"
                 )
                 bot.send_message(comment['user_id'], notification_text, parse_mode="Markdown")
             except Exception as notify_error:
