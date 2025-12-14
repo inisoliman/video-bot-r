@@ -670,6 +670,25 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 comment_handlers.confirm_delete_comment(bot, call, admin_ids)
+            
+            # معالجات الحذف الجماعي
+            elif action == "confirm_delete_all_comments":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.confirm_delete_all_comments(bot, call, admin_ids)
+            
+            elif action == "confirm_delete_user_comments":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.confirm_delete_user_comments(bot, call, admin_ids)
+            
+            elif action == "confirm_delete_old_comments":
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.confirm_delete_old_comments(bot, call, admin_ids)
                 
             elif action == "noop":
                 pass  # لا تفعل شيئاً

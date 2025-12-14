@@ -729,3 +729,65 @@ def get_video_comments_count(video_id):
     """
     result = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE video_id = %s", (video_id,), fetch="one")
     return result['count'] if result else 0
+
+# ==============================================================================
+# دوال الحذف الجماعي للتعليقات
+# ==============================================================================
+
+def delete_all_comments():
+    """
+    حذف جميع التعليقات من قاعدة البيانات.
+    
+    Returns:
+        عدد التعليقات المحذوفة
+    """
+    result = execute_query("DELETE FROM video_comments RETURNING id", fetch="all", commit=True)
+    return len(result) if result else 0
+
+def delete_user_comments(user_id):
+    """
+    حذف جميع تعليقات مستخدم معين.
+    
+    Args:
+        user_id: رقم المستخدم
+    
+    Returns:
+        عدد التعليقات المحذوفة
+    """
+    result = execute_query("DELETE FROM video_comments WHERE user_id = %s RETURNING id", (user_id,), fetch="all", commit=True)
+    return len(result) if result else 0
+
+def delete_old_comments(days=30):
+    """
+    حذف التعليقات القديمة (أقدم من عدد معين من الأيام).
+    
+    Args:
+        days: عدد الأيام (افتراضي 30)
+    
+    Returns:
+        عدد التعليقات المحذوفة
+    """
+    query = """
+        DELETE FROM video_comments 
+        WHERE created_at < NOW() - INTERVAL '%s days'
+        RETURNING id
+    """
+    result = execute_query(query, (days,), fetch="all", commit=True)
+    return len(result) if result else 0
+
+def get_comments_stats():
+    """
+    جلب إحصائيات التعليقات.
+    
+    Returns:
+        dict مع الإحصائيات
+    """
+    query = """
+        SELECT 
+            COUNT(*) as total_comments,
+            COUNT(CASE WHEN is_read = FALSE THEN 1 END) as unread_comments,
+            COUNT(CASE WHEN admin_reply IS NOT NULL THEN 1 END) as replied_comments,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM video_comments
+    """
+    return execute_query(query, fetch="one")

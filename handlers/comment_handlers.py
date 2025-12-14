@@ -10,6 +10,18 @@ import db_manager as db
 
 logger = logging.getLogger(__name__)
 
+# دالة لـ escape أحرف Markdown الخاصة
+def markdown_escape(text):
+    """Escape special characters for Markdown"""
+    if not text:
+        return ""
+    text = str(text)
+    # الأحرف الخاصة في Markdown
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, '\\' + char)
+    return text
+
 # ==============================================================================
 # معالجات المستخدم
 # ==============================================================================
@@ -26,9 +38,9 @@ def handle_add_comment(bot, call):
         bot.answer_callback_query(call.id)
         bot.send_message(
             user_id,
-            "📝 *إضافة تعليق*\n\n"
-            "الرجاء كتابة تعليقك أو استفسارك عن هذا الفيديو.\n"
-            "سيتم إرساله للإدارة وسيتم الرد عليك في أقرب وقت.\n\n"
+            "📝 *إضافة تعليق*\\n\\n"
+            "الرجاء كتابة تعليقك أو استفسارك عن هذا الفيديو.\\n"
+            "سيتم إرساله للإدارة وسيتم الرد عليك في أقرب وقت.\\n\\n"
             "💡 _للإلغاء، اضغط /cancel_",
             parse_mode="Markdown"
         )
@@ -66,14 +78,11 @@ def process_comment_text(bot, message):
             # إرسال تأكيد للمستخدم
             bot.send_message(
                 user_id,
-                "✅ *تم إرسال تعليقك بنجاح!*\n\n"
-                "سيتم مراجعته من قبل الإدارة والرد عليك في أقرب وقت.\n"
-                "يمكنك متابعة تعليقاتك من خلال الأمر /my\_comments",
+                "✅ *تم إرسال تعليقك بنجاح!*\\n\\n"
+                "سيتم مراجعته من قبل الإدارة والرد عليك في أقرب وقت.\\n"
+                "يمكنك متابعة تعليقاتك من خلال الأمر /my\\_comments",
                 parse_mode="Markdown"
             )
-            
-            # إشعار الأدمن (اختياري - يمكن تفعيله لاحقاً)
-            # notify_admins_new_comment(bot, comment_id, video_id, username, comment_text)
         else:
             bot.send_message(user_id, "❌ فشل إرسال التعليق، حاول مرة أخرى")
             
@@ -90,8 +99,8 @@ def show_user_comments(bot, message, page=0):
         if not comments:
             bot.send_message(
                 user_id,
-                "📭 *لا توجد تعليقات*\n\n"
-                "لم تقم بإضافة أي تعليقات بعد.\n"
+                "📭 *لا توجد تعليقات*\\n\\n"
+                "لم تقم بإضافة أي تعليقات بعد.\\n"
                 "يمكنك إضافة تعليق على أي فيديو من خلال زر 'إضافة تعليق' 💬",
                 parse_mode="Markdown"
             )
@@ -99,22 +108,26 @@ def show_user_comments(bot, message, page=0):
         
         # عرض التعليقات
         for comment in comments:
-            comment_text = (
-                f"📹 *الفيديو:* {comment['video_caption'] or comment['video_name']}\n\n"
-                f"💬 *تعليقك:*\n{comment['comment_text']}\n\n"
-                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
+            video_title = markdown_escape(comment['video_caption'] or comment['video_name'])
+            comment_text_escaped = markdown_escape(comment['comment_text'])
+            
+            comment_msg = (
+                f"📹 *الفيديو:* {video_title}\\n\\n"
+                f"💬 *تعليقك:*\\n{comment_text_escaped}\\n\\n"
+                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\\n"
             )
             
             # إضافة الرد إذا كان موجوداً
             if comment['admin_reply']:
-                comment_text += (
-                    f"\n✅ *رد الإدارة:*\n{comment['admin_reply']}\n"
+                admin_reply_escaped = markdown_escape(comment['admin_reply'])
+                comment_msg += (
+                    f"\\n✅ *رد الإدارة:*\\n{admin_reply_escaped}\\n"
                     f"🕐 *تاريخ الرد:* {comment['replied_at'].strftime('%Y-%m-%d %H:%M')}"
                 )
             else:
-                comment_text += "\n⏳ *الحالة:* في انتظار الرد"
+                comment_msg += "\\n⏳ *الحالة:* في انتظار الرد"
             
-            bot.send_message(user_id, comment_text, parse_mode="Markdown")
+            bot.send_message(user_id, comment_msg, parse_mode="Markdown")
         
         # أزرار التنقل
         if total > db.VIDEOS_PER_PAGE:
@@ -163,24 +176,30 @@ def show_all_comments(bot, message, admin_ids, page=0, unread_only=False):
         
         # عرض عدد التعليقات غير المقروءة
         unread_count = db.get_unread_comments_count()
-        header = f"📬 *التعليقات {filter_text}*\n🔔 غير المقروءة: {unread_count}\n\n"
+        header = f"📬 *التعليقات {filter_text}*\\n🔔 غير المقروءة: {unread_count}\\n\\n"
         bot.send_message(user_id, header, parse_mode="Markdown")
         
         # عرض التعليقات
         for comment in comments:
             status_icon = "🔴" if not comment['is_read'] else "✅"
             
-            comment_text = (
-                f"{status_icon} *تعليق #{comment['id']}*\n\n"
-                f"👤 *المستخدم:* @{comment['username']} (ID: {comment['user_id']})\n"
-                f"📹 *الفيديو:* {comment['video_caption'] or comment['video_name']}\n\n"
-                f"💬 *التعليق:*\n{comment['comment_text']}\n\n"
-                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
+            # Escape جميع النصوص
+            username = markdown_escape(comment['username'])
+            video_title = markdown_escape(comment['video_caption'] or comment['video_name'])
+            comment_text_escaped = markdown_escape(comment['comment_text'])
+            
+            comment_msg = (
+                f"{status_icon} *تعليق #{comment['id']}*\\n\\n"
+                f"👤 *المستخدم:* @{username} (ID: {comment['user_id']})\\n"
+                f"📹 *الفيديو:* {video_title}\\n\\n"
+                f"💬 *التعليق:*\\n{comment_text_escaped}\\n\\n"
+                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\\n"
             )
             
             # إضافة الرد إذا كان موجوداً
             if comment['admin_reply']:
-                comment_text += f"\n✅ *تم الرد:* {comment['admin_reply']}"
+                admin_reply_escaped = markdown_escape(comment['admin_reply'])
+                comment_msg += f"\\n✅ *تم الرد:* {admin_reply_escaped}"
             
             # أزرار الإجراءات
             markup = types.InlineKeyboardMarkup()
@@ -196,7 +215,7 @@ def show_all_comments(bot, message, admin_ids, page=0, unread_only=False):
             
             markup.row(*buttons)
             
-            bot.send_message(user_id, comment_text, parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(user_id, comment_msg, parse_mode="Markdown", reply_markup=markup)
         
         # أزرار التنقل والفلترة
         if total > db.VIDEOS_PER_PAGE or not unread_only:
@@ -247,9 +266,9 @@ def handle_reply_comment(bot, call, admin_ids):
         bot.answer_callback_query(call.id)
         bot.send_message(
             user_id,
-            f"✍️ *الرد على التعليق #{comment_id}*\n\n"
-            "الرجاء كتابة ردك على هذا التعليق.\n"
-            "سيتم إرساله للمستخدم مباشرة.\n\n"
+            f"✍️ *الرد على التعليق #{comment_id}*\\n\\n"
+            "الرجاء كتابة ردك على هذا التعليق.\\n"
+            "سيتم إرساله للمستخدم مباشرة.\\n\\n"
             "💡 _للإلغاء، اضغط /cancel_",
             parse_mode="Markdown"
         )
@@ -296,19 +315,23 @@ def process_reply_text(bot, message, admin_ids):
             # إرسال تأكيد للأدمن
             bot.send_message(
                 user_id,
-                f"✅ *تم إرسال الرد بنجاح!*\n\n"
+                f"✅ *تم إرسال الرد بنجاح!*\\n\\n"
                 f"تم إرسال ردك على التعليق #{comment_id}",
                 parse_mode="Markdown"
             )
             
             # إرسال إشعار للمستخدم
             try:
+                video_title = markdown_escape(comment['video_caption'] or comment['video_name'])
+                comment_text_escaped = markdown_escape(comment['comment_text'])
+                reply_escaped = markdown_escape(reply_text)
+                
                 notification_text = (
-                    f"📬 *رد جديد على تعليقك!*\n\n"
-                    f"📹 *الفيديو:* {comment['video_caption'] or comment['video_name']}\n\n"
-                    f"💬 *تعليقك:*\n{comment['comment_text']}\n\n"
-                    f"✅ *رد الإدارة:*\n{reply_text}\n\n"
-                    f"يمكنك مشاهدة جميع تعليقاتك من خلال /my\_comments"
+                    f"📬 *رد جديد على تعليقك!*\\n\\n"
+                    f"📹 *الفيديو:* {video_title}\\n\\n"
+                    f"💬 *تعليقك:*\\n{comment_text_escaped}\\n\\n"
+                    f"✅ *رد الإدارة:*\\n{reply_escaped}\\n\\n"
+                    f"يمكنك مشاهدة جميع تعليقاتك من خلال /my\\_comments"
                 )
                 bot.send_message(comment['user_id'], notification_text, parse_mode="Markdown")
             except Exception as notify_error:
@@ -363,7 +386,7 @@ def handle_delete_comment(bot, call, admin_ids):
         bot.answer_callback_query(call.id)
         bot.send_message(
             user_id,
-            f"⚠️ *تأكيد الحذف*\n\nهل أنت متأكد من حذف التعليق #{comment_id}؟",
+            f"⚠️ *تأكيد الحذف*\\n\\nهل أنت متأكد من حذف التعليق #{comment_id}؟",
             parse_mode="Markdown",
             reply_markup=markup
         )
@@ -397,3 +420,229 @@ def confirm_delete_comment(bot, call, admin_ids):
     except Exception as e:
         logger.error(f"Error in confirm_delete_comment: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
+
+# ==============================================================================
+# معالجات الحذف الجماعي (للأدمن فقط)
+# ==============================================================================
+
+def handle_delete_all_comments(bot, message, admin_ids):
+    """حذف جميع التعليقات"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        # طلب تأكيد
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("✅ نعم، احذف الكل", callback_data="confirm_delete_all_comments"),
+            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+        )
+        
+        stats = db.get_comments_stats()
+        total = stats['total_comments'] if stats else 0
+        
+        bot.send_message(
+            user_id,
+            f"⚠️ *تحذير!*\\n\\n"
+            f"أنت على وشك حذف *جميع التعليقات* ({total} تعليق)\\n"
+            f"هذا الإجراء لا يمكن التراجع عنه!\\n\\n"
+            f"هل أنت متأكد؟",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in handle_delete_all_comments: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ")
+
+def confirm_delete_all_comments(bot, call, admin_ids):
+    """تأكيد حذف جميع التعليقات"""
+    try:
+        user_id = call.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        deleted_count = db.delete_all_comments()
+        
+        bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
+        bot.edit_message_text(
+            f"🗑️ *تم حذف جميع التعليقات*\\n\\n"
+            f"عدد التعليقات المحذوفة: {deleted_count}",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in confirm_delete_all_comments: {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "❌ حدث خطأ")
+
+def handle_delete_user_comments(bot, message, admin_ids):
+    """حذف تعليقات مستخدم معين"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        # استخراج user_id من الأمر
+        parts = message.text.split()
+        if len(parts) < 2:
+            bot.reply_to(
+                message,
+                "❌ *الاستخدام الصحيح:*\\n"
+                "`/delete_user_comments <user_id>`\\n\\n"
+                "مثال: `/delete_user_comments 123456789`",
+                parse_mode="Markdown"
+            )
+            return
+        
+        try:
+            target_user_id = int(parts[1])
+        except ValueError:
+            bot.reply_to(message, "❌ رقم المستخدم غير صحيح")
+            return
+        
+        # طلب تأكيد
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_user_comments::{target_user_id}"),
+            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+        )
+        
+        bot.send_message(
+            user_id,
+            f"⚠️ *تأكيد الحذف*\\n\\n"
+            f"هل أنت متأكد من حذف جميع تعليقات المستخدم `{target_user_id}`؟",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in handle_delete_user_comments: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ")
+
+def confirm_delete_user_comments(bot, call, admin_ids):
+    """تأكيد حذف تعليقات مستخدم"""
+    try:
+        user_id = call.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        target_user_id = int(call.data.split("::")[1])
+        deleted_count = db.delete_user_comments(target_user_id)
+        
+        bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
+        bot.edit_message_text(
+            f"🗑️ *تم حذف تعليقات المستخدم*\\n\\n"
+            f"المستخدم: `{target_user_id}`\\n"
+            f"عدد التعليقات المحذوفة: {deleted_count}",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in confirm_delete_user_comments: {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "❌ حدث خطأ")
+
+def handle_delete_old_comments(bot, message, admin_ids):
+    """حذف التعليقات القديمة"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        # استخراج عدد الأيام من الأمر (افتراضي 30)
+        parts = message.text.split()
+        days = 30
+        if len(parts) >= 2:
+            try:
+                days = int(parts[1])
+            except ValueError:
+                bot.reply_to(message, "❌ عدد الأيام غير صحيح")
+                return
+        
+        # طلب تأكيد
+        markup = types.InlineKeyboardMarkup()
+        markup.row(
+            types.InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_old_comments::{days}"),
+            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+        )
+        
+        bot.send_message(
+            user_id,
+            f"⚠️ *تأكيد الحذف*\\n\\n"
+            f"هل أنت متأكد من حذف التعليقات الأقدم من *{days} يوم*؟",
+            parse_mode="Markdown",
+            reply_markup=markup
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in handle_delete_old_comments: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ")
+
+def confirm_delete_old_comments(bot, call, admin_ids):
+    """تأكيد حذف التعليقات القديمة"""
+    try:
+        user_id = call.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        days = int(call.data.split("::")[1])
+        deleted_count = db.delete_old_comments(days)
+        
+        bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
+        bot.edit_message_text(
+            f"🗑️ *تم حذف التعليقات القديمة*\\n\\n"
+            f"الأقدم من: {days} يوم\\n"
+            f"عدد التعليقات المحذوفة: {deleted_count}",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in confirm_delete_old_comments: {e}", exc_info=True)
+        bot.answer_callback_query(call.id, "❌ حدث خطأ")
+
+def handle_comments_stats(bot, message, admin_ids):
+    """عرض إحصائيات التعليقات"""
+    try:
+        user_id = message.from_user.id
+        
+        if user_id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        
+        stats = db.get_comments_stats()
+        
+        if not stats:
+            bot.reply_to(message, "❌ فشل جلب الإحصائيات")
+            return
+        
+        stats_text = (
+            f"📊 *إحصائيات التعليقات*\\n\\n"
+            f"📝 إجمالي التعليقات: {stats['total_comments']}\\n"
+            f"🔴 غير المقروءة: {stats['unread_comments']}\\n"
+            f"✅ تم الرد عليها: {stats['replied_comments']}\\n"
+            f"👥 عدد المستخدمين: {stats['unique_users']}"
+        )
+        
+        bot.send_message(user_id, stats_text, parse_mode="Markdown")
+        
+    except Exception as e:
+        logger.error(f"Error in handle_comments_stats: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ")
