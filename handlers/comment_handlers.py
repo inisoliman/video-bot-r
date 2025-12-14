@@ -112,20 +112,20 @@ def show_user_comments(bot, message, page=0):
             comment_text_escaped = markdown_escape(comment['comment_text'])
             
             comment_msg = (
-                f"📹 *الفيديو:* {video_title}\\n\\n"
-                f"💬 *تعليقك:*\\n{comment_text_escaped}\\n\\n"
-                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\\n"
+                f"📹 *الفيديو:* {video_title}\n\n"
+                f"💬 *تعليقك:*\n{comment_text_escaped}\n\n"
+                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
             )
             
             # إضافة الرد إذا كان موجوداً
             if comment['admin_reply']:
                 admin_reply_escaped = markdown_escape(comment['admin_reply'])
                 comment_msg += (
-                    f"\\n✅ *رد الإدارة:*\\n{admin_reply_escaped}\\n"
+                    f"\n✅ *رد الإدارة:*\n{admin_reply_escaped}\n"
                     f"🕐 *تاريخ الرد:* {comment['replied_at'].strftime('%Y-%m-%d %H:%M')}"
                 )
             else:
-                comment_msg += "\\n⏳ *الحالة:* في انتظار الرد"
+                comment_msg += "\n⏳ *الحالة:* في انتظار الرد"
             
             bot.send_message(user_id, comment_msg, parse_mode="Markdown")
         
@@ -189,17 +189,17 @@ def show_all_comments(bot, message, admin_ids, page=0, unread_only=False):
             comment_text_escaped = markdown_escape(comment['comment_text'])
             
             comment_msg = (
-                f"{status_icon} *تعليق #{comment['id']}*\\n\\n"
-                f"👤 *المستخدم:* @{username} (ID: {comment['user_id']})\\n"
-                f"📹 *الفيديو:* {video_title}\\n\\n"
-                f"💬 *التعليق:*\\n{comment_text_escaped}\\n\\n"
-                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\\n"
+                f"{status_icon} *تعليق #{comment['id']}*\n\n"
+                f"👤 *المستخدم:* @{username} (ID: {comment['user_id']})\n"
+                f"📹 *الفيديو:* {video_title}\n\n"
+                f"💬 *التعليق:*\n{comment_text_escaped}\n\n"
+                f"📅 *التاريخ:* {comment['created_at'].strftime('%Y-%m-%d %H:%M')}\n"
             )
             
             # إضافة الرد إذا كان موجوداً
             if comment['admin_reply']:
                 admin_reply_escaped = markdown_escape(comment['admin_reply'])
-                comment_msg += f"\\n✅ *تم الرد:* {admin_reply_escaped}"
+                comment_msg += f"\n✅ *تم الرد:* {admin_reply_escaped}"
             
             # أزرار الإجراءات
             markup = types.InlineKeyboardMarkup()
@@ -327,10 +327,10 @@ def process_reply_text(bot, message, admin_ids):
                 reply_escaped = markdown_escape(reply_text)
                 
                 notification_text = (
-                    f"📬 *رد جديد على تعليقك!*\\n\\n"
-                    f"📹 *الفيديو:* {video_title}\\n\\n"
-                    f"💬 *تعليقك:*\\n{comment_text_escaped}\\n\\n"
-                    f"✅ *رد الإدارة:*\\n{reply_escaped}\\n\\n"
+                    f"📬 *رد جديد على تعليقك!*\n\n"
+                    f"📹 *الفيديو:* {video_title}\n\n"
+                    f"💬 *تعليقك:*\n{comment_text_escaped}\n\n"
+                    f"✅ *رد الإدارة:*\n{reply_escaped}\n\n"
                     f"يمكنك مشاهدة جميع تعليقاتك من خلال /my\\_comments"
                 )
                 bot.send_message(comment['user_id'], notification_text, parse_mode="Markdown")
@@ -446,9 +446,9 @@ def handle_delete_all_comments(bot, message, admin_ids):
         
         bot.send_message(
             user_id,
-            f"⚠️ *تحذير!*\\n\\n"
-            f"أنت على وشك حذف *جميع التعليقات* ({total} تعليق)\\n"
-            f"هذا الإجراء لا يمكن التراجع عنه!\\n\\n"
+            f"⚠️ *تحذير!*\n\n"
+            f"أنت على وشك حذف *جميع التعليقات* ({total} تعليق)\n"
+            f"هذا الإجراء لا يمكن التراجع عنه!\n\n"
             f"هل أنت متأكد؟",
             parse_mode="Markdown",
             reply_markup=markup
@@ -471,7 +471,7 @@ def confirm_delete_all_comments(bot, call, admin_ids):
         
         bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
         bot.edit_message_text(
-            f"🗑️ *تم حذف جميع التعليقات*\\n\\n"
+            f"🗑️ *تم حذف جميع التعليقات*\n\n"
             f"عدد التعليقات المحذوفة: {deleted_count}",
             call.message.chat.id,
             call.message.message_id,
@@ -496,8 +496,8 @@ def handle_delete_user_comments(bot, message, admin_ids):
         if len(parts) < 2:
             bot.reply_to(
                 message,
-                "❌ *الاستخدام الصحيح:*\\n"
-                "`/delete_user_comments <user_id>`\\n\\n"
+                "❌ *الاستخدام الصحيح:*\n"
+                "`/delete_user_comments <user_id>`\n\n"
                 "مثال: `/delete_user_comments 123456789`",
                 parse_mode="Markdown"
             )
@@ -518,7 +518,7 @@ def handle_delete_user_comments(bot, message, admin_ids):
         
         bot.send_message(
             user_id,
-            f"⚠️ *تأكيد الحذف*\\n\\n"
+            f"⚠️ *تأكيد الحذف*\n\n"
             f"هل أنت متأكد من حذف جميع تعليقات المستخدم `{target_user_id}`؟",
             parse_mode="Markdown",
             reply_markup=markup
@@ -542,8 +542,8 @@ def confirm_delete_user_comments(bot, call, admin_ids):
         
         bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
         bot.edit_message_text(
-            f"🗑️ *تم حذف تعليقات المستخدم*\\n\\n"
-            f"المستخدم: `{target_user_id}`\\n"
+            f"🗑️ *تم حذف تعليقات المستخدم*\n\n"
+            f"المستخدم: `{target_user_id}`\n"
             f"عدد التعليقات المحذوفة: {deleted_count}",
             call.message.chat.id,
             call.message.message_id,
@@ -582,7 +582,7 @@ def handle_delete_old_comments(bot, message, admin_ids):
         
         bot.send_message(
             user_id,
-            f"⚠️ *تأكيد الحذف*\\n\\n"
+            f"⚠️ *تأكيد الحذف*\n\n"
             f"هل أنت متأكد من حذف التعليقات الأقدم من *{days} يوم*؟",
             parse_mode="Markdown",
             reply_markup=markup
@@ -606,8 +606,8 @@ def confirm_delete_old_comments(bot, call, admin_ids):
         
         bot.answer_callback_query(call.id, f"✅ تم حذف {deleted_count} تعليق")
         bot.edit_message_text(
-            f"🗑️ *تم حذف التعليقات القديمة*\\n\\n"
-            f"الأقدم من: {days} يوم\\n"
+            f"🗑️ *تم حذف التعليقات القديمة*\n\n"
+            f"الأقدم من: {days} يوم\n"
             f"عدد التعليقات المحذوفة: {deleted_count}",
             call.message.chat.id,
             call.message.message_id,
@@ -634,10 +634,10 @@ def handle_comments_stats(bot, message, admin_ids):
             return
         
         stats_text = (
-            f"📊 *إحصائيات التعليقات*\\n\\n"
-            f"📝 إجمالي التعليقات: {stats['total_comments']}\\n"
-            f"🔴 غير المقروءة: {stats['unread_comments']}\\n"
-            f"✅ تم الرد عليها: {stats['replied_comments']}\\n"
+            f"📊 *إحصائيات التعليقات*\n\n"
+            f"📝 إجمالي التعليقات: {stats['total_comments']}\n"
+            f"🔴 غير المقروءة: {stats['unread_comments']}\n"
+            f"✅ تم الرد عليها: {stats['replied_comments']}\n"
             f"👥 عدد المستخدمين: {stats['unique_users']}"
         )
         

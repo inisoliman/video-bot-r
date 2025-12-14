@@ -264,6 +264,39 @@ def register(bot, admin_ids):
                     return
 
                 sub_action = data[1]
+                
+                # معالجات التعليقات من لوحة الأدمن
+                if sub_action == "view_comments":
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.show_all_comments(bot, call.message, admin_ids, page=0, unread_only=False)
+                    return
+                
+                elif sub_action == "comments_stats":
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.handle_comments_stats(bot, call.message, admin_ids)
+                    return
+                
+                elif sub_action == "delete_all_comments":
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.handle_delete_all_comments(bot, call.message, admin_ids)
+                    return
+                
+                elif sub_action == "delete_old_comments":
+                    bot.answer_callback_query(call.id)
+                    # حذف التعليقات الأقدم من 30 يوم افتراضياً
+                    markup = types.InlineKeyboardMarkup()
+                    markup.row(
+                        types.InlineKeyboardButton("✅ نعم، احذف", callback_data="confirm_delete_old_comments::30"),
+                        types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+                    )
+                    bot.send_message(
+                        user_id,
+                        "⚠️ *تأكيد الحذف*\n\n"
+                        "هل أنت متأكد من حذف التعليقات الأقدم من *30 يوم*؟",
+                        parse_mode="Markdown",
+                        reply_markup=markup
+                    )
+                    return
 
                 if sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
