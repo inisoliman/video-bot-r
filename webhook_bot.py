@@ -282,9 +282,10 @@ def admin_update_thumbnails():
                 logger.info("🚀 Starting thumbnail extraction in background...")
                 
                 total_updated = 0
-                batch_size = 10  # دفعات صغيرة لتجنب timeout
+                batch_size = 20  # دفعات أكبر قليلاً
+                max_iterations = 100  # زيادة الحد الأقصى لـ 100 دفعة (2000 فيديو)
                 
-                for iteration in range(5):  # حد أقصى 5 دفعات (50 فيديو)
+                for iteration in range(max_iterations):
                     videos = db.get_videos_without_thumbnail(limit=batch_size)
                     
                     if not videos:

@@ -88,8 +88,17 @@ def create_inline_result(video):
         InlineQueryResultCachedVideo object أو None
     """
     try:
+        # التحقق من وجود file_id
+        file_id = video.get('file_id')
+        if not file_id:
+            logger.warning(f"Video {video.get('id')} has no file_id, skipping")
+            return None
+        
+        # التأكد أن file_id هو string
+        file_id = str(file_id)
+        
         # العنوان: caption أو file_name
-        title = video['caption'] or video['file_name'] or 'فيديو بدون عنوان'
+        title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
         if len(title) > 100:
             title = title[:97] + '...'
         
@@ -112,16 +121,10 @@ def create_inline_result(video):
         # إنشاء النتيجة
         result = InlineQueryResultCachedVideo(
             id=str(video['id']),
-            video_file_id=video['file_id'],
+            video_file_id=file_id,  # استخدام file_id المحول لـ string
             title=title,
             description=description
         )
-        
-        # إضافة thumbnail إذا كان متوفراً
-        if video.get('thumbnail_file_id'):
-            # Telegram لا يدعم thumb_file_id في InlineQueryResultCachedVideo
-            # لكن الفيديو نفسه يحتوي على thumbnail
-            pass
         
         return result
         
