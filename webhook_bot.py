@@ -431,29 +431,46 @@ def admin_extract_channel_thumbnails():
                             failed_count += 1
                             continue
                         
-                        # جلب الرسالة من القناة
-                        message = bot.forward_message(
-                            chat_id=video['chat_id'],
+                        # نسخ الرسالة للأدمن لاستخراج thumbnail
+                        # لا يمكن forward على نفس القناة!
+                        message = bot.copy_message(
+                            chat_id=admin_id,  # إرسال للأدمن
                             from_chat_id=video['chat_id'],
                             message_id=video['message_id']
                         )
                         
-                        # حذف الرسالة المعاد توجيهها
-                        try:
-                            bot.delete_message(video['chat_id'], message.message_id)
-                        except:
-                            pass
+                        # الآن نحتاج جلب الرسالة المنسوخة للحصول على thumbnail
+                        # لكن copy_message لا يعيد message object كامل!
+                        # الحل: نستخدم file_id الموجود ونرسله للأدمن
                         
-                        # استخراج thumbnail
-                        if message.video and message.video.thumb:
-                            thumbnail_id = message.video.thumb.file_id
+                        if video.get('file_id'):
+                            # إرسال الفيديو للأدمن باستخدام file_id
+                            sent = bot.send_video(
+                                chat_id=admin_id,
+                                video=video['file_id'],
+                                caption=f"🔄 استخراج thumbnail #{video['id']}"
+                            )
                             
-                            if db.update_video_thumbnail(video['id'], thumbnail_id):
-                                total_updated += 1
-                                logger.info(f"✅ Updated video {video['id']}")
+                            # استخراج thumbnail
+                            if sent.video and sent.video.thumb:
+                                thumbnail_id = sent.video.thumb.file_id
+                                
+                                if db.update_video_thumbnail(video['id'], thumbnail_id):
+                                    total_updated += 1
+                                    logger.info(f"✅ Updated video {video['id']}")
+                                else:
+                                    failed_count += 1
                             else:
+                                logger.warning(f"No thumbnail in sent message for video {video['id']}")
                                 failed_count += 1
+                            
+                            # حذف الرسالة
+                            try:
+                                bot.delete_message(admin_id, sent.message_id)
+                            except:
+                                pass
                         else:
+                            logger.warning(f"Video {video['id']} has no file_id")
                             failed_count += 1
                         
                         import time

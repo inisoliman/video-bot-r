@@ -56,10 +56,11 @@ def register(bot):
                     results = [
                         InlineQueryResultArticle(
                             id='no_valid_results',
-                            title='❌ لا توجد نتائج صالحة',
-                            description='جميع النتائج تحتوي على أخطاء',
+                            title=f'⚠️ وجدت {len(videos)} فيديو لكن بدون file_id صالح',
+                            description='يرجى تشغيل استخراج thumbnails أولاً',
                             input_message_content=InputTextMessageContent(
-                                message_text='❌ لم يتم العثور على فيديوهات صالحة'
+                                message_text=f'⚠️ تم العثور على {len(videos)} فيديو لكن جميعها بدون file_id صالح.\n\n'
+                                           'يرجى تشغيل استخراج thumbnails من خلال الأدمن أولاً.'
                             )
                         )
                     ]
@@ -109,7 +110,6 @@ def create_inline_result(video):
         # التأكد أن file_id هو string وصالح
         file_id = str(file_id).strip()
         if not file_id or len(file_id) < 10:  # file_id يجب أن يكون طويل
-            logger.warning(f"Video {video.get('id')} has invalid file_id: {file_id}")
             return None
         
         # العنوان: caption أو file_name
