@@ -209,7 +209,7 @@ def register(bot, channel_id, admin_ids):
         if message.from_user.id not in admin_ids:
             bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
             return
-        comment_handlers.show_all_comments(bot, message, page=0, unread_only=False)
+        comment_handlers.show_all_comments(bot, message, admin_ids, page=0, unread_only=False)
     
     @bot.message_handler(commands=["cancel"])
     def handle_cancel_command(message):
@@ -236,7 +236,7 @@ def register(bot, channel_id, admin_ids):
             # معالجة الرد (للأدمن)
             elif state_name == 'replying_comment':
                 if message.from_user.id in admin_ids:
-                    comment_handlers.process_reply_text(bot, message)
+                    comment_handlers.process_reply_text(bot, message, admin_ids)
                     return
         
         # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي

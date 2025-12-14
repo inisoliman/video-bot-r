@@ -636,7 +636,7 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 page = int(data[1]) if len(data) > 1 else 0
-                comment_handlers.show_all_comments(bot, call.message, page, unread_only=False)
+                comment_handlers.show_all_comments(bot, call.message, admin_ids, page, unread_only=False)
                 bot.answer_callback_query(call.id)
             
             elif action == "admin_comments_unread":
@@ -644,32 +644,32 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
                 page = int(data[1]) if len(data) > 1 else 0
-                comment_handlers.show_all_comments(bot, call.message, page, unread_only=True)
+                comment_handlers.show_all_comments(bot, call.message, admin_ids, page, unread_only=True)
                 bot.answer_callback_query(call.id)
             
             elif action == "reply_comment":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                comment_handlers.handle_reply_comment(bot, call)
+                comment_handlers.handle_reply_comment(bot, call, admin_ids)
             
             elif action == "mark_read":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                comment_handlers.handle_mark_read(bot, call)
+                comment_handlers.handle_mark_read(bot, call, admin_ids)
             
             elif action == "delete_comment":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                comment_handlers.handle_delete_comment(bot, call)
+                comment_handlers.handle_delete_comment(bot, call, admin_ids)
             
             elif action == "confirm_delete_comment":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                comment_handlers.confirm_delete_comment(bot, call)
+                comment_handlers.confirm_delete_comment(bot, call, admin_ids)
                 
             elif action == "noop":
                 pass  # لا تفعل شيئاً

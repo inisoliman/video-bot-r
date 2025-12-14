@@ -7,7 +7,6 @@
 import logging
 from telebot import types
 import db_manager as db
-from handlers.helpers import is_admin, format_video_info
 
 logger = logging.getLogger(__name__)
 
@@ -141,12 +140,12 @@ def show_user_comments(bot, message, page=0):
 # معالجات الأدمن
 # ==============================================================================
 
-def show_all_comments(bot, message, page=0, unread_only=False):
+def show_all_comments(bot, message, admin_ids, page=0, unread_only=False):
     """عرض جميع التعليقات للأدمن"""
     try:
         user_id = message.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             bot.send_message(user_id, "⛔ هذا الأمر للإدارة فقط")
             return
         
@@ -231,12 +230,12 @@ def show_all_comments(bot, message, page=0, unread_only=False):
         logger.error(f"Error in show_all_comments: {e}", exc_info=True)
         bot.send_message(message.from_user.id, "❌ حدث خطأ، حاول مرة أخرى")
 
-def handle_reply_comment(bot, call):
+def handle_reply_comment(bot, call, admin_ids):
     """معالج لبدء الرد على تعليق"""
     try:
         user_id = call.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
             return
         
@@ -258,12 +257,12 @@ def handle_reply_comment(bot, call):
         logger.error(f"Error in handle_reply_comment: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ، حاول مرة أخرى")
 
-def process_reply_text(bot, message):
+def process_reply_text(bot, message, admin_ids):
     """معالج لاستقبال نص الرد من الأدمن"""
     try:
         user_id = message.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             return
         
         state = db.get_user_state(user_id)
@@ -321,12 +320,12 @@ def process_reply_text(bot, message):
         logger.error(f"Error in process_reply_text: {e}", exc_info=True)
         bot.send_message(message.from_user.id, "❌ حدث خطأ، حاول مرة أخرى")
 
-def handle_mark_read(bot, call):
+def handle_mark_read(bot, call, admin_ids):
     """معالج لتعليم التعليق كمقروء"""
     try:
         user_id = call.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
             return
         
@@ -343,12 +342,12 @@ def handle_mark_read(bot, call):
         logger.error(f"Error in handle_mark_read: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
 
-def handle_delete_comment(bot, call):
+def handle_delete_comment(bot, call, admin_ids):
     """معالج لحذف تعليق"""
     try:
         user_id = call.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
             return
         
@@ -373,12 +372,12 @@ def handle_delete_comment(bot, call):
         logger.error(f"Error in handle_delete_comment: {e}", exc_info=True)
         bot.answer_callback_query(call.id, "❌ حدث خطأ")
 
-def confirm_delete_comment(bot, call):
+def confirm_delete_comment(bot, call, admin_ids):
     """تأكيد حذف التعليق"""
     try:
         user_id = call.from_user.id
         
-        if not is_admin(user_id):
+        if user_id not in admin_ids:
             bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط")
             return
         
