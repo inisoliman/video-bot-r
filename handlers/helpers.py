@@ -129,12 +129,23 @@ def list_videos(bot, message, edit_message=None, parent_id=None):
             logger.error(f"Error in list_videos: {e}")
 
 
-def main_menu():
+def main_menu(bot_username=None):
+    """
+    القائمة الرئيسية مع زر البحث السريع.
+    
+    Args:
+        bot_username: اسم البوت (اختياري) لإضافة زر switch inline
+    """
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     # [تعديل] إضافة أزرار المفضلة والسجل
     markup.add(KeyboardButton("🎬 عرض كل الفيديوهات"), KeyboardButton("🔥 الفيديوهات الشائعة"))
     markup.add(KeyboardButton("⭐ المفضلة"), KeyboardButton("📺 سجل المشاهدة"))
     markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
+    
+    # إضافة زر البحث السريع إذا تم توفير username
+    if bot_username:
+        markup.add(KeyboardButton(f"🔍 بحث سريع في أي محادثة"))
+    
     return markup
 
 

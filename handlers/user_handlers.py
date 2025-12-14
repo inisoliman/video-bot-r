@@ -83,6 +83,7 @@ def register(bot, channel_id, admin_ids):
             return
         
         # إذا كان المستخدم مشتركاً في جميع القنوات
+        bot_info = bot.get_me()
         welcome_text = (
             "🎬 أهلاً بك في بوت البحث عن الفيديوهات!\n\n"
             "يمكنك الآن:\n"
@@ -90,9 +91,19 @@ def register(bot, channel_id, admin_ids):
             "• 🔥 مشاهدة الفيديوهات الشائعة\n"
             "• 🍿 الحصول على اقتراح عشوائي\n"
             "• 🔍 البحث عن فيديوهات معينة\n\n"
+            f"🔍 *بحث سريع في أي محادثة:*\n"
+            f"اكتب: `@{bot_info.username} كلمة البحث`\n\n"
             "استمتع بوقتك! 😊"
         )
-        bot.reply_to(message, welcome_text, reply_markup=main_menu())
+        
+        # إضافة زر switch inline للبحث السريع
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton(
+            "🔍 ابحث الآن في أي محادثة",
+            switch_inline_query_current_chat=""
+        ))
+        
+        bot.reply_to(message, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):

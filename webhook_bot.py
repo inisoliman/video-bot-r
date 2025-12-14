@@ -242,6 +242,125 @@ def set_webhook():
             "message": str(e)
         }), 500
 
+@app.route("/admin/update_thumbnails", methods=["GET", "POST"])
+def admin_update_thumbnails():
+    """
+    مسار للأدمن لتحديث thumbnails للفيديوهات القديمة.
+    يعمل بدون الحاجة لـ shell access.
+    """
+    try:
+        import threading
+        import db_manager as db
+        
+        # التحقق من وجود admin_id في الطلب
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        # التحقق من أن المستخدم admin
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        def update_thumbnails_background():
+            """تحديث thumbnails في الخلفية"""
+            try:
+                logger.info("🚀 Starting thumbnail extraction in background...")
+                
+                total_updated = 0
+                batch_size = 10  # دفعات صغيرة لتجنب timeout
+                
+                for iteration in range(5):  # حد أقصى 5 دفعات (50 فيديو)
+                    videos = db.get_videos_without_thumbnail(limit=batch_size)
+                    
+                    if not videos:
+                        logger.info("✅ No more videos to process")
+                        break
+                    
+                    for video in videos:
+                        try:
+                            # إرسال الفيديو للأدمن
+                            sent_message = bot.send_video(
+                                chat_id=admin_id,
+                                video=video['file_id'],
+                                caption=f"🔄 استخراج thumbnail #{video['id']}"
+                            )
+                            
+                            # استخراج thumbnail
+                            if sent_message.video and sent_message.video.thumb:
+                                thumbnail_id = sent_message.video.thumb.file_id
+                                
+                                # حفظ في قاعدة البيانات
+                                if db.update_video_thumbnail(video['id'], thumbnail_id):
+                                    total_updated += 1
+                                    logger.info(f"✅ Updated video {video['id']}")
+                                
+                                # حذف الرسالة
+                                try:
+                                    bot.delete_message(admin_id, sent_message.message_id)
+                                except:
+                                    pass
+                            
+                            import time
+                            time.sleep(1)  # تأخير بسيط
+                            
+                        except Exception as e:
+                            logger.error(f"Error updating video {video['id']}: {e}")
+                    
+                    import time
+                    time.sleep(5)  # تأخير بين الدفعات
+                
+                # إرسال رسالة للأدمن بالنتيجة
+                bot.send_message(
+                    admin_id,
+                    f"✅ *تم تحديث Thumbnails*\n\n"
+                    f"📊 عدد الفيديوهات: {total_updated}\n"
+                    f"🎉 العملية مكتملة!",
+                    parse_mode="Markdown"
+                )
+                
+                logger.info(f"🎉 Thumbnail extraction completed! Total: {total_updated}")
+                
+            except Exception as e:
+                logger.error(f"Error in background thumbnail update: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ أثناء تحديث Thumbnails:\n{str(e)}"
+                    )
+                except:
+                    pass
+        
+        # تشغيل في thread منفصل
+        thread = threading.Thread(target=update_thumbnails_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Thumbnail update started in background. You will receive a message when complete."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin update thumbnails error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:
