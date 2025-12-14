@@ -294,6 +294,11 @@ def admin_update_thumbnails():
                     
                     for video in videos:
                         try:
+                            # التحقق من صحة file_id
+                            if not video.get('file_id'):
+                                logger.warning(f"Video {video['id']} has no file_id, skipping")
+                                continue
+                            
                             # إرسال الفيديو للأدمن
                             sent_message = bot.send_video(
                                 chat_id=admin_id,
@@ -321,6 +326,8 @@ def admin_update_thumbnails():
                             
                         except Exception as e:
                             logger.error(f"Error updating video {video['id']}: {e}")
+                            # متابعة مع الفيديو التالي
+                            continue
                     
                     import time
                     time.sleep(5)  # تأخير بين الدفعات

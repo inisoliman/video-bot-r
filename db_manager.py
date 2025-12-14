@@ -820,7 +820,8 @@ def search_videos_for_inline(query, limit=50):
             FROM video_archive v
             LEFT JOIN categories c ON v.category_id = c.id
             LEFT JOIN video_ratings r ON v.id = r.video_id
-            GROUP BY v.id, c.name
+            GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count, 
+                     v.thumbnail_file_id, v.chat_id, v.message_id, c.name
             ORDER BY v.view_count DESC, avg_rating DESC
             LIMIT %s
         """
@@ -841,7 +842,8 @@ def search_videos_for_inline(query, limit=50):
             v.caption ILIKE %s OR 
             v.file_name ILIKE %s OR 
             c.name ILIKE %s
-        GROUP BY v.id, c.name
+        GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count,
+                 v.thumbnail_file_id, v.chat_id, v.message_id, c.name
         ORDER BY v.view_count DESC, avg_rating DESC
         LIMIT %s
     """
