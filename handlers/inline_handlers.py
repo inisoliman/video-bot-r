@@ -3,6 +3,7 @@
 import telebot
 from telebot.types import (
     InlineQueryResultCachedVideo,
+    InlineQueryResultCachedDocument,
     InlineQueryResultArticle,
     InputTextMessageContent
 )
@@ -135,12 +136,18 @@ def create_inline_result(video):
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
         
-        # إنشاء النتيجة
-        result = InlineQueryResultCachedVideo(
+        description = " | ".join(description_parts) if description_parts else "فيديو"
+        
+        # [تعديل] استخدام InlineQueryResultCachedDocument بدلاً من Video
+        # لتجنب خطأ VIDEO_CONTENT_TYPE_INVALID إذا كان الملف مستند
+        # هذا أكثر أماناً لأن Telegram يقبل الفيديو كمستند
+        result = InlineQueryResultCachedDocument(
             id=str(video['id']),
-            video_file_id=file_id,
             title=title,
-            description=description
+            document_file_id=file_id,
+            description=description,
+            caption=f"{title}\n\n{description}",
+            mime_type='video/mp4' # افتراض أنه فيديو mp4
         )
         
         return result
