@@ -46,17 +46,10 @@ def register(bot):
             else:
                 # تحويل النتائج إلى InlineQueryResult
                 results = []
-                invalid_count = 0
-                
                 for video in videos:
                     result = create_inline_result(video)
                     if result:
                         results.append(result)
-                    else:
-                        invalid_count += 1
-                
-                # الحد الأقصى للنتائج (Telegram يدعم حتى 50)
-                results = results[:50]
                 
                 # إذا لم تكن هناك نتائج صالحة بعد التصفية
                 if not results:
@@ -71,8 +64,6 @@ def register(bot):
                             )
                         )
                     ]
-                
-                logger.info(f"Inline query results: {len(results)} valid, {invalid_count} invalid")
             
             # إرسال النتائج
             bot.answer_inline_query(
@@ -114,18 +105,12 @@ def create_inline_result(video):
         # التحقق من وجود file_id
         file_id = video.get('file_id')
         if not file_id:
-            logger.debug(f"Video {video.get('id')} has no file_id")
             return None
         
         # التأكد أن file_id هو string وصالح
         file_id = str(file_id).strip()
-        if not file_id or len(file_id) < 20:  # file_id يجب أن يكون طويل (عادة 50+ حرف)
-            logger.debug(f"Video {video.get('id')} has invalid file_id length: {len(file_id)}")
+        if not file_id or len(file_id) < 10:  # file_id يجب أن يكون طويل
             return None
-        
-        # ملاحظة: تم إزالة فحص البادئات (AgAC, BQA) لأنه قد يرفض file_id صالحة
-        # Telegram file_id يمكن أن يبدأ بأنماط مختلفة حسب نوع الملف والسيرفر
-        # نعتمد على فلترة SQL (LENGTH >= 20) والتحقق من الطول فقط
         
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
@@ -149,10 +134,6 @@ def create_inline_result(video):
             description_parts.append(f"📂 {category}")
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
-        
-        # الحصول على caption كامل للفيديو
-        # ملاحظة: InlineQueryResultCachedVideo لا يدعم caption parameter
-        # لكن عند إرسال الفيديو، سيظهر caption الأصلي من file_id
         
         # إنشاء النتيجة
         result = InlineQueryResultCachedVideo(
