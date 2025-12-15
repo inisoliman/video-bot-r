@@ -520,6 +520,107 @@ def admin_extract_channel_thumbnails():
             "message": str(e)
         }), 500
 
+@app.route('/admin/fix_videos_professional', methods=['GET'])
+def admin_fix_videos_professional():
+    """الحل الاحترافي: جلب file_id و thumbnail من القناة"""
+    try:
+        admin_id = request.args.get('admin_id')
+        
+        if not admin_id or int(admin_id) not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        admin_id = int(admin_id)
+        
+        def fix_videos_background():
+            """إصلاح الفيديوهات في الخلفية"""
+            try:
+                logger.info("🚀 Starting professional video fix...")
+                
+                sql = """
+                    SELECT id, message_id, chat_id, file_id, thumbnail_file_id
+                    FROM video_archive
+                    WHERE message_id IS NOT NULL 
+                      AND chat_id IS NOT NULL
+                      AND (file_id IS NULL OR thumbnail_file_id IS NULL)
+                    ORDER BY id ASC
+                    LIMIT 100
+                """
+                videos = db.execute_query(sql, fetch="all")
+                
+                if not videos:
+                    bot.send_message(admin_id, "✅ جميع الفيديوهات لديها file_id و thumbnail بالفعل!")
+                    return
+                
+                total_updated = 0
+                failed_count = 0
+                
+                for video in videos:
+                    try:
+                        forwarded = bot.forward_message(
+                            chat_id=admin_id,
+                            from_chat_id=video['chat_id'],
+                            message_id=video['message_id']
+                        )
+                        
+                        if forwarded.video:
+                            new_file_id = forwarded.video.file_id
+                            new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
+                            
+                            update_sql = """
+                                UPDATE video_archive
+                                SET file_id = COALESCE(%s, file_id),
+                                    thumbnail_file_id = COALESCE(%s, thumbnail_file_id)
+                                WHERE id = %s
+                            """
+                            db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']))
+                            total_updated += 1
+                            logger.info(f"✅ Updated video {video['id']}")
+                        else:
+                            failed_count += 1
+                        
+                        try:
+                            bot.delete_message(admin_id, forwarded.message_id)
+                        except:
+                            pass
+                        
+                        import time
+                        time.sleep(0.3)
+                        
+                    except Exception as e:
+                        logger.error(f"Error fixing video {video['id']}: {e}")
+                        failed_count += 1
+                        continue
+                
+                bot.send_message(
+                    admin_id,
+                    f"✅ *اكتمل الإصلاح الاحترافي!*\n\n"
+                    f"📊 الإحصائيات:\n"
+                    f"• نجح: {total_updated}\n"
+                    f"• فشل: {failed_count}\n"
+                    f"• المجموع: {len(videos)}\n\n"
+                    f"💡 شغّل المسار مرة أخرى لإصلاح المزيد",
+                    parse_mode='Markdown'
+                )
+                
+            except Exception as e:
+                logger.error(f"Error in fix videos background: {e}", exc_info=True)
+                try:
+                    bot.send_message(admin_id, f"❌ حدث خطأ أثناء الإصلاح:\n{str(e)}")
+                except:
+                    pass
+        
+        thread = threading.Thread(target=fix_videos_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Professional video fix started. You will receive a message when complete."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin fix videos error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:
