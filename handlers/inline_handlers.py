@@ -123,12 +123,9 @@ def create_inline_result(video):
             logger.debug(f"Video {video.get('id')} has invalid file_id length: {len(file_id)}")
             return None
         
-        # التحقق من أن file_id يبدأ بالبادئات الصحيحة للفيديوهات
-        # Telegram file_id للفيديوهات عادة يبدأ بـ BAA أو CgAC أو مشابه
-        # نتجنب file_id التي تبدأ بـ AgAC (صور) أو BQA (مستندات)
-        if file_id.startswith('AgAC') or file_id.startswith('BQA'):
-            logger.warning(f"Video {video.get('id')} has non-video file_id: {file_id[:10]}...")
-            return None
+        # ملاحظة: تم إزالة فحص البادئات (AgAC, BQA) لأنه قد يرفض file_id صالحة
+        # Telegram file_id يمكن أن يبدأ بأنماط مختلفة حسب نوع الملف والسيرفر
+        # نعتمد على فلترة SQL (LENGTH >= 20) والتحقق من الطول فقط
         
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
