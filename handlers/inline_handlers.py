@@ -46,10 +46,17 @@ def register(bot):
             else:
                 # تحويل النتائج إلى InlineQueryResult
                 results = []
+                invalid_count = 0
+                
                 for video in videos:
                     result = create_inline_result(video)
                     if result:
                         results.append(result)
+                    else:
+                        invalid_count += 1
+                
+                # الحد الأقصى للنتائج (Telegram يدعم حتى 50)
+                results = results[:50]
                 
                 # إذا لم تكن هناك نتائج صالحة بعد التصفية
                 if not results:
@@ -64,6 +71,8 @@ def register(bot):
                             )
                         )
                     ]
+                
+                logger.info(f"Inline query results: {len(results)} valid, {invalid_count} invalid")
             
             # إرسال النتائج
             bot.answer_inline_query(
@@ -105,11 +114,20 @@ def create_inline_result(video):
         # التحقق من وجود file_id
         file_id = video.get('file_id')
         if not file_id:
+            logger.debug(f"Video {video.get('id')} has no file_id")
             return None
         
         # التأكد أن file_id هو string وصالح
         file_id = str(file_id).strip()
-        if not file_id or len(file_id) < 10:  # file_id يجب أن يكون طويل
+        if not file_id or len(file_id) < 20:  # file_id يجب أن يكون طويل (عادة 50+ حرف)
+            logger.debug(f"Video {video.get('id')} has invalid file_id length: {len(file_id)}")
+            return None
+        
+        # التحقق من أن file_id يبدأ بالبادئات الصحيحة للفيديوهات
+        # Telegram file_id للفيديوهات عادة يبدأ بـ BAA أو CgAC أو مشابه
+        # نتجنب file_id التي تبدأ بـ AgAC (صور) أو BQA (مستندات)
+        if file_id.startswith('AgAC') or file_id.startswith('BQA'):
+            logger.warning(f"Video {video.get('id')} has non-video file_id: {file_id[:10]}...")
             return None
         
         # العنوان: caption أو file_name
