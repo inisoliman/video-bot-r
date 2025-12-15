@@ -8,8 +8,9 @@ from telebot.types import (
     InputTextMessageContent
 )
 import logging
+import os
 
-import db_manager as db
+import telebot_manager as db
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ def create_inline_result(video):
             description=description,
             caption=final_caption,
             parse_mode='HTML',
-            thumb_url=thumb_url  # إضافة الصورة المصغرة عبر الرابط
+            thumbnail_url=thumb_url  # المحاولة باستخدام thumbnail_url
         )
         
         return result
