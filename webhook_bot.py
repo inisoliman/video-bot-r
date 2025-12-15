@@ -679,6 +679,28 @@ def webhook_info():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/thumbnail/<file_id>", methods=["GET"])
+def get_thumbnail(file_id):
+    """
+    مسار لعرض الصور المصغرة.
+    يقوم بإعادة توجيه الطلب إلى رابط تيليجرام المباشر.
+    """
+    try:
+        # جلب مسار الملف من تيليجرام
+        file_info = bot.get_file(file_id)
+        
+        # رابط الملف المباشر (صالح لمدة ساعة)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+        
+        # إعادة توجيه (302)
+        from flask import redirect
+        return redirect(file_url)
+        
+    except Exception as e:
+        logger.error(f"Thumbnail fetch error for {file_id}: {e}")
+        # صورة افتراضية أو خطأ 404
+        abort(404)
+
 # --- تهيئة البوت ---
 def init_bot():
     logger.info("🤖 Initializing bot...")

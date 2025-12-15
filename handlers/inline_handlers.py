@@ -153,13 +153,22 @@ def create_inline_result(video):
         if len(final_caption) > 1024:
             final_caption = final_caption[:1021] + '...'
 
+        # إعداد رابط الصورة المصغرة (Proxy)
+        # نستخدم CachedDocument مع thumb_url لأن thumb_file_id غير مدعوم
+        thumb_url = None
+        if video.get('thumbnail_file_id'):
+            app_url = os.getenv('APP_URL')
+            if app_url:
+                thumb_url = f"{app_url}/thumbnail/{video['thumbnail_file_id']}"
+
         result = InlineQueryResultCachedDocument(
             id=str(video['id']),
             title=title,
             document_file_id=file_id,
             description=description,
             caption=final_caption,
-            parse_mode='HTML' # دعم تنسيق HTML
+            parse_mode='HTML',
+            thumb_url=thumb_url  # إضافة الصورة المصغرة عبر الرابط
         )
         
         return result
