@@ -10,7 +10,7 @@ from telebot.types import (
 import logging
 import os
 
-import telebot_manager as db
+import db_manager as db
 
 logger = logging.getLogger(__name__)
 
@@ -168,8 +168,8 @@ def create_inline_result(video):
             document_file_id=file_id,
             description=description,
             caption=final_caption,
-            parse_mode='HTML',
-            thumbnail_url=thumb_url  # المحاولة باستخدام thumbnail_url
+            parse_mode='HTML'
+            # thumbnail_url غير مدعوم في CachedDocument
         )
         
         return result
