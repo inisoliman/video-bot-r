@@ -146,8 +146,7 @@ def create_inline_result(video):
             title=title,
             document_file_id=file_id,
             description=description,
-            caption=f"{title}\n\n{description}",
-            mime_type='video/mp4' # افتراض أنه فيديو mp4
+            caption=f"{title}\n\n{description}"
         )
         
         return result
