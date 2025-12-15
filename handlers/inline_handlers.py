@@ -141,12 +141,25 @@ def create_inline_result(video):
         # [تعديل] استخدام InlineQueryResultCachedDocument بدلاً من Video
         # لتجنب خطأ VIDEO_CONTENT_TYPE_INVALID إذا كان الملف مستند
         # هذا أكثر أماناً لأن Telegram يقبل الفيديو كمستند
+        # [تعديل] استخدام الكابشن الكامل من قاعدة البيانات بدلاً من العنوان المقطوع
+        full_caption = video.get('caption') or title
+        
+        # إضافة الوصف للكابشن إذا لم يكن موجوداً
+        final_caption = full_caption
+        if description and description not in full_caption:
+             final_caption = f"{full_caption}\n\n{description}"
+        
+        # التأكد من حدود تليجرام (1024 حرف)
+        if len(final_caption) > 1024:
+            final_caption = final_caption[:1021] + '...'
+
         result = InlineQueryResultCachedDocument(
             id=str(video['id']),
             title=title,
             document_file_id=file_id,
             description=description,
-            caption=f"{title}\n\n{description}"
+            caption=final_caption,
+            parse_mode='HTML' # دعم تنسيق HTML
         )
         
         return result
