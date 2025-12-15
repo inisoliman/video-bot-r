@@ -7,6 +7,7 @@
 import os
 import json
 import logging
+import threading  # إضافة threading
 from flask import Flask, request, jsonify, abort
 import telebot
 from telebot.types import Update

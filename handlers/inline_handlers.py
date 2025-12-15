@@ -135,6 +135,10 @@ def create_inline_result(video):
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
         
+        # الحصول على caption كامل للفيديو
+        # ملاحظة: InlineQueryResultCachedVideo لا يدعم caption parameter
+        # لكن عند إرسال الفيديو، سيظهر caption الأصلي من file_id
+        
         # إنشاء النتيجة
         result = InlineQueryResultCachedVideo(
             id=str(video['id']),
