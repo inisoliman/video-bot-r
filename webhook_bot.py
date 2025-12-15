@@ -525,6 +525,8 @@ def admin_extract_channel_thumbnails():
 def admin_fix_videos_professional():
     """الحل الاحترافي: جلب file_id و thumbnail من القناة"""
     try:
+        import db_manager as db
+        
         admin_id = request.args.get('admin_id')
         
         if not admin_id or int(admin_id) not in ADMIN_IDS:
@@ -573,7 +575,7 @@ def admin_fix_videos_professional():
                                     thumbnail_file_id = COALESCE(%s, thumbnail_file_id)
                                 WHERE id = %s
                             """
-                            db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']))
+                            db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']), commit=True)
                             total_updated += 1
                             logger.info(f"✅ Updated video {video['id']}")
                         else:
