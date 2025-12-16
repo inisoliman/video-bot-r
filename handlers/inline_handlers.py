@@ -72,13 +72,13 @@ def register(bot):
                             if res: results_doc.append(res)
                         
                         # [تعديل] تقليل عدد النتائج في الوضع الآمن لتجنب مشاكل الحجم
-                        results_doc = results_doc[:20]
+                        results_doc = results_doc[:10]
                         
                         if results_doc:
                             bot.answer_inline_query(
                                 inline_query.id,
                                 results_doc,
-                                cache_time=60, # تقليل الكاش عند الخطأ
+                                cache_time=1, # إلغاء الكاش (1 ثانية) للتأكد من ظهور النتائج
                                 is_personal=True
                             )
                             logger.info(f"✅ Fallback (Document) success: Sent {len(results_doc)} results")
@@ -186,8 +186,9 @@ def create_inline_result(video, use_document=False):
         # التبديل بين Video و Document
         if use_document:
             # وضع الأمان: استخدام CachedDocument
+            # [تعديل] إضافة بادئة للـ ID لتجنب تضارب الكاش
             return InlineQueryResultCachedDocument(
-                id=str(video['id']),
+                id=f"doc_{video['id']}",
                 title=title,
                 document_file_id=file_id,
                 description=description,
