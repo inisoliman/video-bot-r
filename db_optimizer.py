@@ -30,10 +30,14 @@ def get_db_config():
 
 
 def connect(autocommit=False):
-    cfg = get_db_config()
-    conn = psycopg2.connect(**cfg)
-    conn.set_session(autocommit=autocommit)
-    return conn
+    try:
+        cfg = get_db_config()
+        conn = psycopg2.connect(**cfg)
+        conn.set_session(autocommit=autocommit)
+        return conn
+    except Exception as e:
+        logger.error(f"Failed to connect to DB: {e}")
+        return None
 
 
 def check_index_exists(conn, index_name: str) -> bool:
@@ -181,12 +185,27 @@ def optimize_database_performance():
     return ok > 0
 
 
+optimization_lock = False
+
 def main():
-    logger.info("🔧 بدء عملية تحسين أداء قاعدة البيانات...")
-    check_database_performance()
-    optimize_database_performance()
-    logger.info("\n📊 فحص الأداء بعد التحسين:")
-    check_database_performance()
+    global optimization_lock
+    if optimization_lock:
+        logger.warning("Optimization already running")
+        return False
+        
+    optimization_lock = True
+    try:
+        logger.info("🔧 بدء عملية تحسين أداء قاعدة البيانات...")
+        check_database_performance()
+        result = optimize_database_performance()
+        logger.info("\n📊 فحص الأداء بعد التحسين:")
+        check_database_performance()
+        return result
+    except Exception as e:
+        logger.error(f"Optimization failed: {e}")
+        return False
+    finally:
+        optimization_lock = False
 
 if __name__ == "__main__":
     main()

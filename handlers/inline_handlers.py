@@ -31,7 +31,8 @@ def register(bot):
             logger.info(f"Inline query from user {user_id}: '{query_text}'")
             
             # البحث في قاعدة البيانات
-            videos = db.search_videos_for_inline(query_text, limit=50)
+            # [تعديل] تقليل عدد النتائج لتجنب خطأ 431 (Header Too Large)
+            videos = db.search_videos_for_inline(query_text, limit=25)
             
             if not videos:
                 # لا توجد نتائج
@@ -117,9 +118,10 @@ def create_inline_result(video):
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
         # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
+        # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
         title = title.replace('\n', ' ').replace('\r', ' ').strip()
-        if len(title) > 100:
-            title = title[:97] + '...'
+        if len(title) > 60:  # [تعديل] تقليل طول العنوان
+            title = title[:57] + '...'
         
         # الوصف: التقييم، المشاهدات، التصنيف
         rating = round(video.get('avg_rating', 0), 1)
@@ -138,6 +140,9 @@ def create_inline_result(video):
         description = " | ".join(description_parts) if description_parts else "فيديو"
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
+        # [تعديل] التأكد من أنها ليست طويلة جداً
+        if len(description) > 60:
+            description = description[:57] + "..."
         
         # [تعديل] استخدام InlineQueryResultCachedDocument بدلاً من Video
         # لتجنب خطأ VIDEO_CONTENT_TYPE_INVALID إذا كان الملف مستند

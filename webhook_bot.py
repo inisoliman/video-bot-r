@@ -665,7 +665,86 @@ def admin_fix_videos_professional():
     except Exception as e:
         logger.error(f"Admin fix videos error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+@app.route("/admin/optimize_db", methods=["GET", "POST"])
+def admin_optimize_db():
+    """
+    تحسين قاعدة البيانات عبر الويب: إنشاء الفهارس.
+    """
+    try:
+        import threading
+        # import db_optimizer dynamically to avoid circular imports or early init
+        import db_optimizer
 
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter"
+            }), 400
+
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+
+        def optimize_background():
+            """تنفيذ التحسين في الخلفية"""
+            try:
+                logger.info("🚀 Starting database optimization from web...")
+                
+                bot.send_message(
+                    admin_id,
+                    "🔧 *بدء عملية تحسين قاعدة البيانات*...\n"
+                    "سيتم إنشاء الفهارس لزيادة سرعة البحث.\n"
+                    "قد تستغرق العملية دقيقة أو دقيقتين.",
+                    parse_mode="Markdown"
+                )
+                
+                result = db_optimizer.main()
+                
+                if result:
+                    msg = "✅ *تم تحسين قاعدة البيانات بنجاح!*\nأصبح البحث الآن أسرع."
+                else:
+                    msg = "⚠️ *انتهت العملية مع بعض الملاحظات*\nراجع السجلات للتفاصيل."
+                    
+                bot.send_message(admin_id, msg, parse_mode="Markdown")
+                logger.info(f"🎉 API Optimization completed! Result: {result}")
+                
+            except Exception as e:
+                logger.error(f"Error in background optimization: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ أثناء تحسين القاعدة:\n{str(e)}"
+                    )
+                except:
+                    pass
+
+        # تشغيل في thread منفصل
+        thread = threading.Thread(target=optimize_background, daemon=True)
+        thread.start()
+
+        return jsonify({
+            "status": "success",
+            "message": "Optimization started in background. You will receive a message when complete."
+        })
+
+    except Exception as e:
+        logger.error(f"Admin optimize db error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:
