@@ -64,21 +64,45 @@ def register(bot):
                 except Exception as e_first_attempt:
                     logger.warning(f"First attempt (Video) failed: {e_first_attempt}. Retrying with Document fallback...")
                     
-                    # المحاولة 2: عرض النتائج كملفات (الأمان) عند حدوث خطأ
-                    results_doc = []
-                    for video in videos:
-                        res = create_inline_result(video, use_document=True)
-                        if res: results_doc.append(res)
-                    
-                    if results_doc:
-                        bot.answer_inline_query(
-                            inline_query.id,
-                            results_doc,
-                            cache_time=60, # تقليل الكاش عند الخطأ
-                            is_personal=True
-                        )
-                    else:
-                        raise e_first_attempt # إذا فشل الاثنان، نرفع الخطأ الأصلي
+                    try:
+                        # المحاولة 2: عرض النتائج كملفات (الأمان) عند حدوث خطأ
+                        results_doc = []
+                        for video in videos:
+                            res = create_inline_result(video, use_document=True)
+                            if res: results_doc.append(res)
+                        
+                        # [تعديل] تقليل عدد النتائج في الوضع الآمن لتجنب مشاكل الحجم
+                        results_doc = results_doc[:20]
+                        
+                        if results_doc:
+                            bot.answer_inline_query(
+                                inline_query.id,
+                                results_doc,
+                                cache_time=60, # تقليل الكاش عند الخطأ
+                                is_personal=True
+                            )
+                            logger.info(f"✅ Fallback (Document) success: Sent {len(results_doc)} results")
+                        else:
+                            logger.error("❌ Fallback (Document) failed: No valid results to send")
+                            raise e_first_attempt # إذا فشل الاثنان، نرفع الخطأ الأصلي
+                            
+                    except Exception as e_second_attempt:
+                        logger.error(f"❌ Fallback (Document) ALSO failed: {e_second_attempt}")
+                        # محاولة أخيرة: إرسال نتائج فارغة لتجنب حالة "التحميل المستمر"
+                        try:
+                            error_result = [
+                                InlineQueryResultArticle(
+                                    id='error_fallback',
+                                    title='⚠️ عذراً',
+                                    description='حدث خطأ في عرض النتائج.',
+                                    input_message_content=InputTextMessageContent(
+                                        message_text='⚠️ لا يمكن عرض النتائج حالياً.'
+                                    )
+                                )
+                            ]
+                            bot.answer_inline_query(inline_query.id, error_result, cache_time=10)
+                        except:
+                            pass
             
         except Exception as e:
             logger.error(f"Error in inline query handler: {e}", exc_info=True)
