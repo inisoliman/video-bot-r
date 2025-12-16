@@ -21,8 +21,6 @@ def register(bot):
     def handle_inline_query(inline_query):
         """
         معالج الـ inline query الرئيسي.
-        
-        يسمح للمستخدمين بالبحث عن الفيديوهات ومشاركتها في أي محادثة.
         """
         try:
             query_text = inline_query.query.strip()
@@ -31,7 +29,6 @@ def register(bot):
             logger.info(f"Inline query from user {user_id}: '{query_text}'")
             
             # البحث في قاعدة البيانات
-            # [تعديل] تقليل عدد النتائج لتجنب خطأ 431 (Header Too Large)
             videos = db.search_videos_for_inline(query_text, limit=25)
             
             if not videos:
@@ -41,6 +38,52 @@ def register(bot):
                         id='no_results',
                         title='❌ لا توجد نتائج',
                         description=f'لم يتم العثور على فيديوهات تطابق "{query_text}"',
+                        input_message_content=InputTextMessageContent(
+                            message_text='❌ لم يتم العثور على نتائج'
+                        )
+                    )
+                ]
+                bot.answer_inline_query(inline_query.id, results, cache_time=1)
+            else:
+                # [وضع التشخيص] العودة لوضع "الملفات فقط" (Legacy Mode)
+                # لتحديد سبب اختفاء النتائج
+                logger.info("Diagnosis: Forcing Document Mode (Legacy)")
+                
+                results_doc = []
+                for video in videos:
+                    # use_document=True يجبر الدالة على استخدام CachedDocument
+                    res = create_inline_result(video, use_document=True)
+                    if res: results_doc.append(res)
+                
+                # تقليل العدد لتجنب مشاكل الحجم
+                results_doc = results_doc[:25]
+                
+                if results_doc:
+                    bot.answer_inline_query(
+                        inline_query.id,
+                        results_doc,
+                        cache_time=1, # إلغاء الكاش
+                        is_personal=True
+                    )
+                    logger.info(f"✅ Legacy Mode: Sent {len(results_doc)} results as Documents")
+                else:
+                    logger.warning("⚠️ Legacy Mode: No valid results generated")
+                    results = [
+                        InlineQueryResultArticle(
+                            id='no_valid_results_legacy',
+                            title=f'⚠️ لا يمكن عرض النتائج',
+                            description='تأكد من صلاحية الملفات',
+                            input_message_content=InputTextMessageContent(
+                                message_text='⚠️ لا يمكن عرض النتائج حالياً'
+                            )
+                        )
+                    ]
+                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
+            
+        except Exception as e:
+            logger.error(f"Error in inline query handler: {e}", exc_info=True)
+            try:
+                error_result = [
                     InlineQueryResultArticle(
                         id='error',
                         title='❌ حدث خطأ',
@@ -56,14 +99,7 @@ def register(bot):
 
 def create_inline_result(video, use_document=False):
     """
-    تحويل بيانات الفيديو إلى InlineQueryResultCachedVideo (أو Document كمحاولة بديلة).
-    
-    Args:
-        video: dict مع بيانات الفيديو
-        use_document: إذا كان True، يتم استخدام CachedDocument بدلاً من CachedVideo
-    
-    Returns:
-        InlineQueryResult object أو None
+    تحويل بيانات الفيديو إلى InlineQueryResult.
     """
     try:
         # التحقق من وجود file_id
@@ -73,54 +109,44 @@ def create_inline_result(video, use_document=False):
         
         # التأكد أن file_id هو string وصالح
         file_id = str(file_id).strip()
-        if not file_id or len(file_id) < 10:  # file_id يجب أن يكون طويل
+        if not file_id or len(file_id) < 10:
             return None
         
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
         
-        # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
+        # تنظيف العنوان
         title = title.replace('\n', ' ').replace('\r', ' ').strip()
-        if len(title) > 60:  # [تعديل] تقليل طول العنوان
+        if len(title) > 60:
             title = title[:57] + '...'
         
-        # الوصف: التقييم، المشاهدات، التصنيف
+        # الوصف
         rating = round(video.get('avg_rating', 0), 1)
         views = video.get('view_count', 0)
         category = video.get('category_name', 'غير مصنف')
         
-        # تنسيق الوصف
         description_parts = []
-        if rating > 0:
-            description_parts.append(f"⭐ {rating}")
-        if views > 0:
-            description_parts.append(f"👁️ {views:,}")
-        if category:
-            description_parts.append(f"📂 {category}")
+        if rating > 0: description_parts.append(f"⭐ {rating}")
+        if views > 0: description_parts.append(f"👁️ {views:,}")
+        if category: description_parts.append(f"📂 {category}")
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
-        # [تعديل] التأكد من أنها ليست طويلة جداً
         if len(description) > 60:
             description = description[:57] + "..."
         
-        # [تعديل] استخدام الكابشن الكامل من قاعدة البيانات بدلاً من العنوان المقطوع
+        # الكابشن الكامل
         full_caption = video.get('caption') or title
-        
-        # إضافة الوصف للكابشن إذا لم يكن موجوداً
         final_caption = full_caption
         if description and description not in full_caption:
              final_caption = f"{full_caption}\n\n{description}"
         
-        # التأكد من حدود تليجرام (1024 حرف)
         if len(final_caption) > 1024:
             final_caption = final_caption[:1021] + '...'
 
-        # التبديل بين Video و Document
         if use_document:
-            # وضع الأمان: استخدام CachedDocument
-            # [تعديل] إضافة بادئة للـ ID لتجنب تضارب الكاش
+            # وضع الأمان (وثيقة)
             return InlineQueryResultCachedDocument(
-                id=f"doc_{video['id']}",
+                id=f"doc_{video['id']}", # ID مميز لتجنب الكاش
                 title=title,
                 document_file_id=file_id,
                 description=description,
@@ -128,7 +154,7 @@ def create_inline_result(video, use_document=False):
                 parse_mode='HTML'
             )
         else:
-            # الوضع الطبيعي: استخدام CachedVideo
+            # الوضع الطبيعي (فيديو)
             return InlineQueryResultCachedVideo(
                 id=str(video['id']),
                 title=title,
@@ -141,4 +167,3 @@ def create_inline_result(video, use_document=False):
     except Exception as e:
         logger.error(f"Error creating inline result for video {video.get('id')}: {e}", exc_info=True)
         return None
-
