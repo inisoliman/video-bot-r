@@ -47,34 +47,38 @@ def register(bot):
                     )
                 ]
             else:
-                # تحويل النتائج إلى InlineQueryResult
-                results = []
+                # [تعديل] استراتيجية "المحاولة والبديل" (Smart Fallback)
+                # المحاولة 1: عرض النتائج كفيديوهات (جودة أفضل)
+                results_video = []
                 for video in videos:
-                    result = create_inline_result(video)
-                    if result:
-                        results.append(result)
+                    res = create_inline_result(video, use_document=False)
+                    if res: results_video.append(res)
                 
-                # إذا لم تكن هناك نتائج صالحة بعد التصفية
-                if not results:
-                    results = [
-                        InlineQueryResultArticle(
-                            id='no_valid_results',
-                            title=f'⚠️ وجدت {len(videos)} فيديو لكن بدون file_id صالح',
-                            description='يرجى تشغيل استخراج thumbnails أولاً',
-                            input_message_content=InputTextMessageContent(
-                                message_text=f'⚠️ تم العثور على {len(videos)} فيديو لكن جميعها بدون file_id صالح.\n\n'
-                                           'يرجى تشغيل استخراج thumbnails من خلال الأدمن أولاً.'
-                            )
+                try:
+                    bot.answer_inline_query(
+                        inline_query.id,
+                        results_video,
+                        cache_time=300,
+                        is_personal=True
+                    )
+                except Exception as e_first_attempt:
+                    logger.warning(f"First attempt (Video) failed: {e_first_attempt}. Retrying with Document fallback...")
+                    
+                    # المحاولة 2: عرض النتائج كملفات (الأمان) عند حدوث خطأ
+                    results_doc = []
+                    for video in videos:
+                        res = create_inline_result(video, use_document=True)
+                        if res: results_doc.append(res)
+                    
+                    if results_doc:
+                        bot.answer_inline_query(
+                            inline_query.id,
+                            results_doc,
+                            cache_time=60, # تقليل الكاش عند الخطأ
+                            is_personal=True
                         )
-                    ]
-            
-            # إرسال النتائج
-            bot.answer_inline_query(
-                inline_query.id,
-                results,
-                cache_time=300,  # 5 دقائق
-                is_personal=True
-            )
+                    else:
+                        raise e_first_attempt # إذا فشل الاثنان، نرفع الخطأ الأصلي
             
         except Exception as e:
             logger.error(f"Error in inline query handler: {e}", exc_info=True)
@@ -94,15 +98,16 @@ def register(bot):
             except Exception as e_inner:
                 logger.error(f"Failed to send error response: {e_inner}")
 
-def create_inline_result(video):
+def create_inline_result(video, use_document=False):
     """
-    تحويل بيانات الفيديو إلى InlineQueryResultCachedVideo.
+    تحويل بيانات الفيديو إلى InlineQueryResultCachedVideo (أو Document كمحاولة بديلة).
     
     Args:
         video: dict مع بيانات الفيديو
+        use_document: إذا كان True، يتم استخدام CachedDocument بدلاً من CachedVideo
     
     Returns:
-        InlineQueryResultCachedVideo object أو None
+        InlineQueryResult object أو None
     """
     try:
         # التحقق من وجود file_id
@@ -117,7 +122,7 @@ def create_inline_result(video):
         
         # العنوان: caption أو file_name
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
-        # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
+        
         # تنظيف العنوان من أي أحرف خاصة قد تسبب مشاكل
         title = title.replace('\n', ' ').replace('\r', ' ').strip()
         if len(title) > 60:  # [تعديل] تقليل طول العنوان
@@ -138,15 +143,10 @@ def create_inline_result(video):
             description_parts.append(f"📂 {category}")
         
         description = " | ".join(description_parts) if description_parts else "فيديو"
-        
-        description = " | ".join(description_parts) if description_parts else "فيديو"
         # [تعديل] التأكد من أنها ليست طويلة جداً
         if len(description) > 60:
             description = description[:57] + "..."
         
-        # [تعديل] استخدام InlineQueryResultCachedDocument بدلاً من Video
-        # لتجنب خطأ VIDEO_CONTENT_TYPE_INVALID إذا كان الملف مستند
-        # هذا أكثر أماناً لأن Telegram يقبل الفيديو كمستند
         # [تعديل] استخدام الكابشن الكامل من قاعدة البيانات بدلاً من العنوان المقطوع
         full_caption = video.get('caption') or title
         
@@ -159,26 +159,29 @@ def create_inline_result(video):
         if len(final_caption) > 1024:
             final_caption = final_caption[:1021] + '...'
 
-        # إعداد رابط الصورة المصغرة (Proxy)
-        # نستخدم CachedDocument مع thumb_url لأن thumb_file_id غير مدعوم
-        thumb_url = None
-        if video.get('thumbnail_file_id'):
-            app_url = os.getenv('APP_URL')
-            if app_url:
-                thumb_url = f"{app_url}/thumbnail/{video['thumbnail_file_id']}"
-
-        result = InlineQueryResultCachedDocument(
-            id=str(video['id']),
-            title=title,
-            document_file_id=file_id,
-            description=description,
-            caption=final_caption,
-            parse_mode='HTML'
-            # thumbnail_url غير مدعوم في CachedDocument
-        )
-        
-        return result
+        # التبديل بين Video و Document
+        if use_document:
+            # وضع الأمان: استخدام CachedDocument
+            return InlineQueryResultCachedDocument(
+                id=str(video['id']),
+                title=title,
+                document_file_id=file_id,
+                description=description,
+                caption=final_caption,
+                parse_mode='HTML'
+            )
+        else:
+            # الوضع الطبيعي: استخدام CachedVideo
+            return InlineQueryResultCachedVideo(
+                id=str(video['id']),
+                title=title,
+                video_file_id=file_id,
+                description=description,
+                caption=final_caption,
+                parse_mode='HTML'
+            )
         
     except Exception as e:
         logger.error(f"Error creating inline result for video {video.get('id')}: {e}", exc_info=True)
         return None
+
