@@ -539,12 +539,14 @@ def admin_fix_videos_professional():
             try:
                 logger.info("🚀 Starting professional video fix...")
                 
+                # نجلب فقط الفيديوهات بدون file_id (وليس thumbnail)
+                # لأن بعض الفيديوهات ليس لها thumbnails أصلاً
                 sql = """
                     SELECT id, message_id, chat_id, file_id, thumbnail_file_id
                     FROM video_archive
                     WHERE message_id IS NOT NULL 
                       AND chat_id IS NOT NULL
-                      AND (file_id IS NULL OR thumbnail_file_id IS NULL)
+                      AND file_id IS NULL
                     ORDER BY id ASC
                     LIMIT 100
                 """
