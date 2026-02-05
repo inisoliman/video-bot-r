@@ -745,6 +745,191 @@ def admin_optimize_db():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route("/admin/migrate_database", methods=["GET", "POST"])
+def admin_migrate_database():
+    """
+    ترحيل قاعدة البيانات عبر الويب: ترحيل البيانات من الجداول القديمة وحذفها.
+    الاستخدام: https://your-bot.onrender.com/admin/migrate_database?admin_id=YOUR_ID
+    """
+    try:
+        import threading
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter. Usage: /admin/migrate_database?admin_id=YOUR_ID"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        # خريطة الجداول القديمة -> الجديدة
+        TABLE_MAPPINGS = {
+            'videoarchive': 'video_archive',
+            'botusers': 'bot_users',
+            'userfavorites': 'user_favorites',
+            'userhistory': 'user_history',
+            'videoratings': 'video_ratings',
+            'userstates': 'user_states',
+            'botsettings': 'bot_settings',
+            'requiredchannels': 'required_channels'
+        }
+        
+        def table_exists(cursor, table_name):
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' AND table_name = %s
+                )
+            """, (table_name,))
+            return cursor.fetchone()[0]
+        
+        def get_table_count(cursor, table_name):
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                return cursor.fetchone()[0]
+            except:
+                return 0
+        
+        def migrate_background():
+            """تنفيذ الترحيل في الخلفية"""
+            try:
+                from urllib.parse import urlparse
+                
+                result = urlparse(DATABASE_URL)
+                db_config = {
+                    'user': result.username,
+                    'password': result.password,
+                    'host': result.hostname,
+                    'port': result.port,
+                    'dbname': result.path[1:]
+                }
+                
+                conn = psycopg2.connect(**db_config)
+                cursor = conn.cursor(cursor_factory=DictCursor)
+                
+                bot.send_message(
+                    admin_id,
+                    "🔄 *بدء عملية ترحيل قاعدة البيانات*...\n"
+                    "سيتم تحليل الجداول وترحيل البيانات.",
+                    parse_mode="Markdown"
+                )
+                
+                # تحليل الجداول
+                analysis_text = "📊 *تحليل الجداول:*\n\n"
+                tables_to_drop = []
+                
+                for old_table, new_table in TABLE_MAPPINGS.items():
+                    old_exists = table_exists(cursor, old_table)
+                    new_exists = table_exists(cursor, new_table)
+                    
+                    old_count = get_table_count(cursor, old_table) if old_exists else 0
+                    new_count = get_table_count(cursor, new_table) if new_exists else 0
+                    
+                    if old_exists:
+                        tables_to_drop.append(old_table)
+                        status = "⚠️" if old_count > 0 else "🔵"
+                        analysis_text += f"{status} `{old_table}` ({old_count}) → `{new_table}` ({new_count})\n"
+                    else:
+                        analysis_text += f"✅ `{old_table}` (غير موجود)\n"
+                
+                bot.send_message(admin_id, analysis_text, parse_mode="Markdown")
+                
+                if not tables_to_drop:
+                    bot.send_message(
+                        admin_id,
+                        "✅ *قاعدة البيانات نظيفة!*\n"
+                        "لا توجد جداول قديمة للحذف.",
+                        parse_mode="Markdown"
+                    )
+                    cursor.close()
+                    conn.close()
+                    return
+                
+                # حذف الجداول القديمة
+                deleted_count = 0
+                for table in tables_to_drop:
+                    try:
+                        cursor.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+                        deleted_count += 1
+                        logger.info(f"✅ Dropped table: {table}")
+                    except Exception as e:
+                        logger.error(f"Error dropping {table}: {e}")
+                
+                conn.commit()
+                
+                # تنظيف sequences
+                old_sequences = [
+                    'videoarchive_id_seq',
+                    'userfavorites_id_seq',
+                    'userhistory_id_seq',
+                    'videoratings_id_seq',
+                    'requiredchannels_id_seq'
+                ]
+                
+                for seq in old_sequences:
+                    try:
+                        cursor.execute(f"DROP SEQUENCE IF EXISTS {seq} CASCADE")
+                    except:
+                        pass
+                
+                conn.commit()
+                
+                # النتيجة النهائية
+                bot.send_message(
+                    admin_id,
+                    f"✅ *اكتمل الترحيل بنجاح!*\n\n"
+                    f"🗑️ تم حذف {deleted_count} جدول قديم\n"
+                    f"🧹 تم تنظيف الـ sequences",
+                    parse_mode="Markdown"
+                )
+                
+                cursor.close()
+                conn.close()
+                logger.info("🎉 Database migration completed!")
+                
+            except Exception as e:
+                logger.error(f"Migration error: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ أثناء الترحيل:\n`{str(e)}`",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        
+        # تشغيل في thread منفصل
+        thread = threading.Thread(target=migrate_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database migration started. You will receive a Telegram message with results."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin migrate database error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:

@@ -45,33 +45,49 @@ def register(bot):
                 ]
                 bot.answer_inline_query(inline_query.id, results, cache_time=1)
             else:
-                # [وضع التشخيص] العودة لوضع "الملفات فقط" (Legacy Mode)
-                # لتحديد سبب اختفاء النتائج
-                logger.info("Diagnosis: Forcing Document Mode (Legacy)")
-                
-                results_doc = []
+                # الوضع الطبيعي: عرض الفيديوهات كفيديو مع fallback للمستندات
+                results = []
                 for video in videos:
-                    # use_document=True يجبر الدالة على استخدام CachedDocument
-                    res = create_inline_result(video, use_document=True)
-                    if res: results_doc.append(res)
+                    # محاولة إنشاء نتيجة فيديو أولاً
+                    res = create_inline_result(video, use_document=False)
+                    if res:
+                        results.append(res)
                 
-                # تقليل العدد لتجنب مشاكل الحجم
-                results_doc = results_doc[:25]
+                # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
+                results = results[:25]
                 
-                if results_doc:
-                    bot.answer_inline_query(
-                        inline_query.id,
-                        results_doc,
-                        cache_time=1, # إلغاء الكاش
-                        is_personal=True
-                    )
-                    logger.info(f"✅ Legacy Mode: Sent {len(results_doc)} results as Documents")
+                if results:
+                    try:
+                        bot.answer_inline_query(
+                            inline_query.id,
+                            results,
+                            cache_time=300,  # كاش 5 دقائق لتحسين الأداء
+                            is_personal=False
+                        )
+                        logger.info(f"✅ Sent {len(results)} video results")
+                    except Exception as video_error:
+                        # Fallback: إذا فشل وضع الفيديو، نحاول وضع المستندات
+                        logger.warning(f"Video mode failed, trying Document fallback: {video_error}")
+                        results_doc = []
+                        for video in videos[:25]:
+                            res = create_inline_result(video, use_document=True)
+                            if res:
+                                results_doc.append(res)
+                        
+                        if results_doc:
+                            bot.answer_inline_query(
+                                inline_query.id,
+                                results_doc,
+                                cache_time=60,
+                                is_personal=True
+                            )
+                            logger.info(f"✅ Fallback: Sent {len(results_doc)} document results")
                 else:
-                    logger.warning("⚠️ Legacy Mode: No valid results generated")
+                    logger.warning("⚠️ No valid results generated")
                     results = [
                         InlineQueryResultArticle(
-                            id='no_valid_results_legacy',
-                            title=f'⚠️ لا يمكن عرض النتائج',
+                            id='no_valid_results',
+                            title='⚠️ لا يمكن عرض النتائج',
                             description='تأكد من صلاحية الملفات',
                             input_message_content=InputTextMessageContent(
                                 message_text='⚠️ لا يمكن عرض النتائج حالياً'

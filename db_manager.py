@@ -60,8 +60,7 @@ EXPECTED_SCHEMA = {
         'thumbnail_file_id': 'TEXT'
     },
     'required_channels': {
-        'id': 'SERIAL PRIMARY KEY',
-        'channel_id': 'TEXT UNIQUE',
+        'channel_id': 'BIGINT PRIMARY KEY',
         'channel_name': 'TEXT'
     },
     'categories': {
@@ -447,10 +446,10 @@ def get_bot_stats():
     return stats
 
 def add_required_channel(channel_id, channel_name):
-    return execute_query("INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT(channel_id) DO NOTHING", (str(channel_id), channel_name), commit=True)
+    return execute_query("INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT(channel_id) DO NOTHING", (int(channel_id), channel_name), commit=True)
 
 def remove_required_channel(channel_id):
-    return execute_query("DELETE FROM required_channels WHERE channel_id = %s", (str(channel_id),), commit=True)
+    return execute_query("DELETE FROM required_channels WHERE channel_id = %s", (int(channel_id),), commit=True)
 
 def get_required_channels():
     return execute_query("SELECT * FROM required_channels", fetch="all")
