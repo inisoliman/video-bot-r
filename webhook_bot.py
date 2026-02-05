@@ -950,6 +950,7 @@ def admin_force_refresh_all_file_ids():
         from psycopg2.extras import DictCursor
         
         admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        offset = int(request.args.get('offset', 0))  # إضافة offset للتصفح
         
         if not admin_id:
             return jsonify({
@@ -994,7 +995,7 @@ def admin_force_refresh_all_file_ids():
                     parse_mode="Markdown"
                 )
                 
-                # جلب جميع الفيديوهات (بغض النظر عن file_id)
+                # جلب جميع الفيديوهات (بغض النظر عن file_id) مع offset
                 cursor.execute("""
                     SELECT id, message_id, chat_id
                     FROM video_archive
@@ -1002,7 +1003,8 @@ def admin_force_refresh_all_file_ids():
                       AND chat_id IS NOT NULL
                     ORDER BY id ASC
                     LIMIT 100
-                """)
+                    OFFSET %s
+                """, (offset,))
                 videos = cursor.fetchall()
                 
                 if not videos:
@@ -1052,16 +1054,25 @@ def admin_force_refresh_all_file_ids():
                         logger.error(f"Error refreshing video {video['id']}: {e}")
                         failed_count += 1
                 
-                bot.send_message(
-                    admin_id,
+                # إنشاء رابط المرة التالية
+                next_offset = offset + 100
+                next_url = f"https://video-bot-r.onrender.com/admin/force_refresh_all_file_ids?admin_id={admin_id}&offset={next_offset}"
+                
+                message = (
                     f"✅ *اكتمل التحديث!*\n\n"
                     f"📊 الإحصائيات:\n"
                     f"• نجح: {total_updated}\n"
                     f"• فشل: {failed_count}\n"
-                    f"• المجموع: {len(videos)}\n\n"
-                    f"💡 شغّل المسار مرة أخرى للمزيد",
-                    parse_mode="Markdown"
+                    f"• المجموع: {len(videos)}\n"
+                    f"• Offset الحالي: {offset}\n\n"
                 )
+                
+                if len(videos) == 100:
+                    message += f"💡 للمتابعة، افتح:\n`{next_url}`"
+                else:
+                    message += "✅ *تم الانتهاء من جميع الفيديوهات!*"
+                
+                bot.send_message(admin_id, message, parse_mode="Markdown")
                 
                 cursor.close()
                 conn.close()
