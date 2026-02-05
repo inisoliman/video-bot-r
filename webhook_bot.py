@@ -938,6 +938,161 @@ def get_thumbnail(file_id):
         # صورة افتراضية أو خطأ 404
         abort(404)
 
+@app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
+def admin_force_refresh_all_file_ids():
+    """
+    إعادة جلب file_id لجميع الفيديوهات من القناة (حتى لو كان موجود)
+    هذا يصلح المشكلة: الفيديوهات لديها file_id لكنه Document وليس Video
+    """
+    try:
+        import threading
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        def refresh_background():
+            try:
+                from urllib.parse import urlparse
+                
+                result = urlparse(DATABASE_URL)
+                db_config = {
+                    'user': result.username,
+                    'password': result.password,
+                    'host': result.hostname,
+                    'port': result.port,
+                    'dbname': result.path[1:]
+                }
+                
+                conn = psycopg2.connect(**db_config)
+                cursor = conn.cursor(cursor_factory=DictCursor)
+                
+                bot.send_message(
+                    admin_id,
+                    "🔄 *بدء إعادة جلب file_id لجميع الفيديوهات*...\n"
+                    "⚠️ هذا سيستغرق وقتاً طويلاً!",
+                    parse_mode="Markdown"
+                )
+                
+                # جلب جميع الفيديوهات (بغض النظر عن file_id)
+                cursor.execute("""
+                    SELECT id, message_id, chat_id
+                    FROM video_archive
+                    WHERE message_id IS NOT NULL 
+                      AND chat_id IS NOT NULL
+                    ORDER BY id ASC
+                    LIMIT 100
+                """)
+                videos = cursor.fetchall()
+                
+                if not videos:
+                    bot.send_message(admin_id, "✅ لا توجد فيديوهات!")
+                    cursor.close()
+                    conn.close()
+                    return
+                
+                total_updated = 0
+                failed_count = 0
+                
+                for video in videos:
+                    try:
+                        forwarded = bot.forward_message(
+                            chat_id=admin_id,
+                            from_chat_id=video['chat_id'],
+                            message_id=video['message_id']
+                        )
+                        
+                        if forwarded.video:
+                            new_file_id = forwarded.video.file_id
+                            new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
+                            
+                            cursor.execute("""
+                                UPDATE video_archive
+                                SET file_id = %s,
+                                    thumbnail_file_id = %s
+                                WHERE id = %s
+                            """, (new_file_id, new_thumbnail_id, video['id']))
+                            conn.commit()
+                            total_updated += 1
+                            
+                            logger.info(f"✅ Refreshed file_id for video {video['id']}")
+                        else:
+                            failed_count += 1
+                            logger.warning(f"⚠️ No video in forwarded message {video['id']}")
+                        
+                        try:
+                            bot.delete_message(admin_id, forwarded.message_id)
+                        except:
+                            pass
+                        
+                        import time
+                        time.sleep(0.3)
+                        
+                    except Exception as e:
+                        logger.error(f"Error refreshing video {video['id']}: {e}")
+                        failed_count += 1
+                
+                bot.send_message(
+                    admin_id,
+                    f"✅ *اكتمل التحديث!*\n\n"
+                    f"📊 الإحصائيات:\n"
+                    f"• نجح: {total_updated}\n"
+                    f"• فشل: {failed_count}\n"
+                    f"• المجموع: {len(videos)}\n\n"
+                    f"💡 شغّل المسار مرة أخرى للمزيد",
+                    parse_mode="Markdown"
+                )
+                
+                cursor.close()
+                conn.close()
+                
+            except Exception as e:
+                logger.error(f"Refresh error: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ:\n`{str(e)}`",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        
+        thread = threading.Thread(target=refresh_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Refresh started. Check Telegram for results."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin force refresh error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
 # --- تهيئة البوت ---
 def init_bot():
     logger.info("🤖 Initializing bot...")
