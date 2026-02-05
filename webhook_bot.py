@@ -559,74 +559,45 @@ def admin_fix_videos_professional():
                 
                 for video in videos:
                     try:
-                        # التحقق: إذا كان file_id موجود، نحافظ عليه ونحدث thumbnail فقط
-                        # لأن file_id الأصلي صالح للاستخدام في inline queries
-                        if video.get('file_id') and len(str(video.get('file_id'))) > 20:
-                            # file_id موجود وصالح - نحدث thumbnail فقط
-                            try:
-                                sent = bot.send_video(
-                                    chat_id=admin_id,
-                                    video=video['file_id'],
-                                    caption=f"🔄 استخراج thumbnail #{video['id']}"
-                                )
+                        # دائماً نحتاج إعادة جلب file_id من القناة لأن الموجود قد يكون Document
+                        # وليس Video، لذلك نتجاهل file_id الموجود ونجلب الصحيح
+                        try:
+                            forwarded = bot.forward_message(
+                                chat_id=admin_id,
+                                from_chat_id=video['chat_id'],
+                                message_id=video['message_id']
+                            )
+                            
+                            if forwarded.video:
+                                new_file_id = forwarded.video.file_id
+                                new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
                                 
-                                if sent.video and sent.video.thumb:
-                                    new_thumbnail_id = sent.video.thumb.file_id
-                                    
-                                    update_sql = """
-                                        UPDATE video_archive
-                                        SET thumbnail_file_id = %s
-                                        WHERE id = %s
-                                    """
-                                    db.execute_query(update_sql, (new_thumbnail_id, video['id']), commit=True)
-                                    total_updated += 1
-                                    logger.info(f"✅ Updated thumbnail for video {video['id']}")
+                                # تحديث file_id و thumbnail (حتى لو كان thumbnail = NULL)
+                                update_sql = """
+                                    UPDATE video_archive
+                                    SET file_id = %s,
+                                        thumbnail_file_id = %s
+                                    WHERE id = %s
+                                """
+                                db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']), commit=True)
+                                total_updated += 1
+                                
+                                if new_thumbnail_id:
+                                    logger.info(f"✅ Updated file_id + thumbnail for video {video['id']}")
                                 else:
-                                    failed_count += 1
-                                    logger.warning(f"⚠️ No thumbnail for video {video['id']}")
-                                
-                                # حذف الرسالة
-                                try:
-                                    bot.delete_message(admin_id, sent.message_id)
-                                except:
-                                    pass
-                            except Exception as e:
-                                logger.error(f"Error updating thumbnail for video {video['id']}: {e}")
+                                    logger.info(f"✅ Updated file_id (no thumbnail) for video {video['id']}")
+                            else:
                                 failed_count += 1
-                        else:
-                            # file_id مفقود أو قصير - نحتاج جلبه من القناة
+                                logger.warning(f"⚠️ No video in forwarded message for video {video['id']}")
+                            
+                            # حذف الرسالة المُعاد توجيهها
                             try:
-                                forwarded = bot.forward_message(
-                                    chat_id=admin_id,
-                                    from_chat_id=video['chat_id'],
-                                    message_id=video['message_id']
-                                )
-                                
-                                if forwarded.video:
-                                    new_file_id = forwarded.video.file_id
-                                    new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
-                                    
-                                    update_sql = """
-                                        UPDATE video_archive
-                                        SET file_id = %s,
-                                            thumbnail_file_id = %s
-                                        WHERE id = %s
-                                    """
-                                    db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']), commit=True)
-                                    total_updated += 1
-                                    logger.info(f"✅ Updated file_id and thumbnail for video {video['id']}")
-                                else:
-                                    failed_count += 1
-                                    logger.warning(f"⚠️ No video in forwarded message for video {video['id']}")
-                                
-                                # حذف الرسالة المعاد توجيهها
-                                try:
-                                    bot.delete_message(admin_id, forwarded.message_id)
-                                except:
-                                    pass
-                            except Exception as e:
-                                logger.error(f"Error forwarding video {video['id']}: {e}")
-                                failed_count += 1
+                                bot.delete_message(admin_id, forwarded.message_id)
+                            except:
+                                pass
+                        except Exception as e:
+                            logger.error(f"Error forwarding video {video['id']}: {e}")
+                            failed_count += 1
                         
                         import time
                         time.sleep(0.3)
