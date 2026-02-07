@@ -938,6 +938,86 @@ def get_thumbnail(file_id):
         # صورة افتراضية أو خطأ 404
         abort(404)
 
+@app.route("/admin/diagnose_file_ids", methods=["GET", "POST"])
+def admin_diagnose_file_ids():
+    """
+    تشخيص مشكلة file_id - يفحص 5 فيديوهات ويُقارن file_id المحفوظ مع الفعلي
+    """
+    try:
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
+        
+        admin_id = int(admin_id)
+        if admin_id not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        # جلب 5 فيديوهات للتشخيص
+        videos = db.execute_query("""
+            SELECT id, message_id, chat_id, file_id, content_type, caption
+            FROM video_archive
+            WHERE message_id IS NOT NULL AND chat_id IS NOT NULL AND file_id IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 5
+        """, fetch="all")
+        
+        if not videos:
+            bot.send_message(admin_id, "❌ لا توجد فيديوهات للتشخيص!")
+            return jsonify({"status": "error", "message": "No videos found"}), 404
+        
+        report = "🔍 *تقرير التشخيص*\n\n"
+        
+        for v in videos:
+            try:
+                # إعادة توجيه الفيديو لفحص نوعه الحقيقي
+                forwarded = bot.forward_message(
+                    chat_id=admin_id,
+                    from_chat_id=v['chat_id'],
+                    message_id=v['message_id']
+                )
+                
+                actual_type = "UNKNOWN"
+                actual_file_id = None
+                
+                if forwarded.video:
+                    actual_type = "VIDEO"
+                    actual_file_id = forwarded.video.file_id
+                elif forwarded.document:
+                    actual_type = "DOCUMENT"
+                    actual_file_id = forwarded.document.file_id
+                
+                # مقارنة
+                stored_file_id = v['file_id']
+                match = "✅" if stored_file_id == actual_file_id else "❌"
+                
+                caption_short = (v['caption'] or "")[:30] + "..." if v['caption'] else "بدون عنوان"
+                
+                report += f"📹 *ID {v['id']}:* {caption_short}\n"
+                report += f"   النوع الفعلي: `{actual_type}`\n"
+                report += f"   النوع المحفوظ: `{v['content_type'] or 'NULL'}`\n"
+                report += f"   file_id متطابق: {match}\n\n"
+                
+                # حذف الرسالة المُعاد توجيهها
+                try:
+                    bot.delete_message(admin_id, forwarded.message_id)
+                except:
+                    pass
+                
+                import time
+                time.sleep(0.3)
+                
+            except Exception as e:
+                report += f"📹 *ID {v['id']}:* ❌ خطأ: {str(e)[:50]}\n\n"
+        
+        bot.send_message(admin_id, report, parse_mode="Markdown")
+        
+        return jsonify({"status": "success", "message": "Diagnosis sent to admin"})
+        
+    except Exception as e:
+        logger.error(f"Diagnosis error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
 def admin_force_refresh_all_file_ids():
     """
