@@ -954,7 +954,8 @@ def admin_diagnose_file_ids():
             return jsonify({"status": "error", "message": "Unauthorized"}), 403
         
         # جلب 5 فيديوهات للتشخيص
-        videos = db.execute_query("""
+        from db_manager import execute_query
+        videos = execute_query("""
             SELECT id, message_id, chat_id, file_id, content_type, caption
             FROM video_archive
             WHERE message_id IS NOT NULL AND chat_id IS NOT NULL AND file_id IS NOT NULL
