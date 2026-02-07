@@ -57,7 +57,8 @@ EXPECTED_SCHEMA = {
         'view_count': 'INTEGER DEFAULT 0',
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT',
-        'thumbnail_file_id': 'TEXT'
+        'thumbnail_file_id': 'TEXT',
+        'content_type': 'TEXT DEFAULT NULL'  # VIDEO or DOCUMENT
     },
     'required_channels': {
         'channel_id': 'BIGINT PRIMARY KEY',
@@ -812,7 +813,7 @@ def search_videos_for_inline(query, limit=50):
         sql = """
             SELECT 
                 v.id, v.file_id, v.caption, v.file_name, v.view_count,
-                v.thumbnail_file_id, v.chat_id, v.message_id,
+                v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type,
                 c.name as category_name,
                 COALESCE(AVG(r.rating), 0) as avg_rating,
                 COUNT(r.rating) as rating_count
@@ -822,7 +823,7 @@ def search_videos_for_inline(query, limit=50):
             WHERE v.file_id IS NOT NULL 
               AND LENGTH(v.file_id) >= 20
             GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count, 
-                     v.thumbnail_file_id, v.chat_id, v.message_id, c.name
+                     v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
             ORDER BY v.view_count DESC, avg_rating DESC
             LIMIT %s
         """
@@ -832,7 +833,7 @@ def search_videos_for_inline(query, limit=50):
     sql = """
         SELECT 
             v.id, v.file_id, v.caption, v.file_name, v.view_count,
-            v.thumbnail_file_id, v.chat_id, v.message_id,
+            v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type,
             c.name as category_name,
             COALESCE(AVG(r.rating), 0) as avg_rating,
             COUNT(r.rating) as rating_count
@@ -848,7 +849,7 @@ def search_videos_for_inline(query, limit=50):
                 c.name ILIKE %s
             )
         GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count,
-                 v.thumbnail_file_id, v.chat_id, v.message_id, c.name
+                 v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
         ORDER BY v.view_count DESC, avg_rating DESC
         LIMIT %s
     """

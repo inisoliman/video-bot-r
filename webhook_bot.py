@@ -1015,6 +1015,8 @@ def admin_force_refresh_all_file_ids():
                 
                 total_updated = 0
                 failed_count = 0
+                video_count = 0
+                doc_count = 0
                 
                 for video in videos:
                     try:
@@ -1027,20 +1029,41 @@ def admin_force_refresh_all_file_ids():
                         if forwarded.video:
                             new_file_id = forwarded.video.file_id
                             new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
+                            content_type = "VIDEO"
                             
                             cursor.execute("""
                                 UPDATE video_archive
                                 SET file_id = %s,
-                                    thumbnail_file_id = %s
+                                    thumbnail_file_id = %s,
+                                    content_type = %s
                                 WHERE id = %s
-                            """, (new_file_id, new_thumbnail_id, video['id']))
+                            """, (new_file_id, new_thumbnail_id, content_type, video['id']))
                             conn.commit()
                             total_updated += 1
+                            video_count += 1
                             
-                            logger.info(f"✅ Refreshed file_id for video {video['id']}")
+                            logger.info(f"✅ Refreshed file_id for video {video['id']} (as {content_type})")
+                        elif forwarded.document:
+                            # الرسالة هي document وليست video - نسجل ذلك للتشخيص
+                            new_file_id = forwarded.document.file_id
+                            new_thumbnail_id = forwarded.document.thumb.file_id if forwarded.document.thumb else None
+                            content_type = "DOCUMENT"
+                            
+                            cursor.execute("""
+                                UPDATE video_archive
+                                SET file_id = %s,
+                                    thumbnail_file_id = %s,
+                                    content_type = %s
+                                WHERE id = %s
+                            """, (new_file_id, new_thumbnail_id, content_type, video['id']))
+                            conn.commit()
+                            total_updated += 1
+                            doc_count += 1
+                            
+                            logger.warning(f"⚠️ Video {video['id']} is actually a DOCUMENT, not a video!")
                         else:
                             failed_count += 1
-                            logger.warning(f"⚠️ No video in forwarded message {video['id']}")
+                            logger.warning(f"⚠️ No video or document in forwarded message {video['id']}")
                         
                         try:
                             bot.delete_message(admin_id, forwarded.message_id)
@@ -1061,8 +1084,9 @@ def admin_force_refresh_all_file_ids():
                 message = (
                     f"✅ *اكتمل التحديث!*\n\n"
                     f"📊 الإحصائيات:\n"
-                    f"• نجح: {total_updated}\n"
-                    f"• فشل: {failed_count}\n"
+                    f"• 🎬 فيديوهات حقيقية: {video_count}\n"
+                    f"• 📄 مستندات (Documents): {doc_count}\n"
+                    f"• ❌ فشل: {failed_count}\n"
                     f"• المجموع: {len(videos)}\n"
                     f"• Offset الحالي: {offset}\n\n"
                 )
