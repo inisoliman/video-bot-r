@@ -293,16 +293,47 @@ def register(bot, channel_id, admin_ids):
                 logger.info(f"Video {message.message_id} (DB ID: {video_db_id}) added to category {active_category_id}.")
                 
                 # استخراج وحفظ thumbnail تلقائياً
+                # المشكلة: message.video.thumb غالباً يكون None عند إرسال الفيديو للقناة
+                # الحل: نعيد توجيه الفيديو للأدمن ونستخرج thumbnail من الرسالة المُعاد توجيهها
                 try:
-                    if message.video and message.video.thumb:
-                        thumbnail_file_id = message.video.thumb.file_id
-                        from db_manager import update_video_thumbnail
-                        if update_video_thumbnail(video_db_id, thumbnail_file_id):
-                            logger.info(f"✅ Thumbnail saved for video {video_db_id}")
+                    if message.video:
+                        # محاولة استخراج thumbnail مباشرة أولاً
+                        thumbnail_file_id = None
+                        if message.video.thumb:
+                            thumbnail_file_id = message.video.thumb.file_id
+                            logger.info(f"✅ Thumbnail found directly for video {video_db_id}")
                         else:
-                            logger.warning(f"⚠️ Failed to save thumbnail for video {video_db_id}")
+                            # إذا لم يتوفر thumbnail مباشرة، نعيد توجيه الفيديو للأدمن لاستخراجه
+                            try:
+                                admin_id = admin_ids[0] if admin_ids else None
+                                if admin_id:
+                                    forwarded = bot.forward_message(
+                                        chat_id=admin_id,
+                                        from_chat_id=message.chat.id,
+                                        message_id=message.message_id
+                                    )
+                                    if forwarded.video and forwarded.video.thumb:
+                                        thumbnail_file_id = forwarded.video.thumb.file_id
+                                        logger.info(f"✅ Thumbnail extracted via forward for video {video_db_id}")
+                                    # حذف الرسالة المُعاد توجيهها
+                                    try:
+                                        bot.delete_message(admin_id, forwarded.message_id)
+                                    except:
+                                        pass
+                            except Exception as e:
+                                logger.warning(f"Could not extract thumbnail via forward: {e}")
+                        
+                        # حفظ thumbnail إذا توفر
+                        if thumbnail_file_id:
+                            from db_manager import update_video_thumbnail
+                            if update_video_thumbnail(video_db_id, thumbnail_file_id):
+                                logger.info(f"💾 Thumbnail saved for video {video_db_id}")
+                            else:
+                                logger.warning(f"⚠️ Failed to save thumbnail for video {video_db_id}")
+                        else:
+                            logger.info(f"ℹ️ No thumbnail available for video {video_db_id}")
                     else:
-                        logger.info(f"ℹ️ No thumbnail available for video {video_db_id}")
+                        logger.warning(f"⚠️ No video object for message {message.message_id}")
                 except Exception as e:
                     logger.error(f"Error saving thumbnail for video {video_db_id}: {e}")
             else:

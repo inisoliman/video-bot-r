@@ -539,12 +539,14 @@ def admin_fix_videos_professional():
             try:
                 logger.info("🚀 Starting professional video fix...")
                 
+                # نجلب فقط الفيديوهات بدون file_id (وليس thumbnail)
+                # لأن بعض الفيديوهات ليس لها thumbnails أصلاً
                 sql = """
                     SELECT id, message_id, chat_id, file_id, thumbnail_file_id
                     FROM video_archive
                     WHERE message_id IS NOT NULL 
                       AND chat_id IS NOT NULL
-                      AND (file_id IS NULL OR thumbnail_file_id IS NULL)
+                      AND file_id IS NULL
                     ORDER BY id ASC
                     LIMIT 100
                 """
@@ -559,74 +561,45 @@ def admin_fix_videos_professional():
                 
                 for video in videos:
                     try:
-                        # التحقق: إذا كان file_id موجود، نحافظ عليه ونحدث thumbnail فقط
-                        # لأن file_id الأصلي صالح للاستخدام في inline queries
-                        if video.get('file_id') and len(str(video.get('file_id'))) > 20:
-                            # file_id موجود وصالح - نحدث thumbnail فقط
-                            try:
-                                sent = bot.send_video(
-                                    chat_id=admin_id,
-                                    video=video['file_id'],
-                                    caption=f"🔄 استخراج thumbnail #{video['id']}"
-                                )
+                        # دائماً نحتاج إعادة جلب file_id من القناة لأن الموجود قد يكون Document
+                        # وليس Video، لذلك نتجاهل file_id الموجود ونجلب الصحيح
+                        try:
+                            forwarded = bot.forward_message(
+                                chat_id=admin_id,
+                                from_chat_id=video['chat_id'],
+                                message_id=video['message_id']
+                            )
+                            
+                            if forwarded.video:
+                                new_file_id = forwarded.video.file_id
+                                new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
                                 
-                                if sent.video and sent.video.thumb:
-                                    new_thumbnail_id = sent.video.thumb.file_id
-                                    
-                                    update_sql = """
-                                        UPDATE video_archive
-                                        SET thumbnail_file_id = %s
-                                        WHERE id = %s
-                                    """
-                                    db.execute_query(update_sql, (new_thumbnail_id, video['id']), commit=True)
-                                    total_updated += 1
-                                    logger.info(f"✅ Updated thumbnail for video {video['id']}")
+                                # تحديث file_id و thumbnail (حتى لو كان thumbnail = NULL)
+                                update_sql = """
+                                    UPDATE video_archive
+                                    SET file_id = %s,
+                                        thumbnail_file_id = %s
+                                    WHERE id = %s
+                                """
+                                db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']), commit=True)
+                                total_updated += 1
+                                
+                                if new_thumbnail_id:
+                                    logger.info(f"✅ Updated file_id + thumbnail for video {video['id']}")
                                 else:
-                                    failed_count += 1
-                                    logger.warning(f"⚠️ No thumbnail for video {video['id']}")
-                                
-                                # حذف الرسالة
-                                try:
-                                    bot.delete_message(admin_id, sent.message_id)
-                                except:
-                                    pass
-                            except Exception as e:
-                                logger.error(f"Error updating thumbnail for video {video['id']}: {e}")
+                                    logger.info(f"✅ Updated file_id (no thumbnail) for video {video['id']}")
+                            else:
                                 failed_count += 1
-                        else:
-                            # file_id مفقود أو قصير - نحتاج جلبه من القناة
+                                logger.warning(f"⚠️ No video in forwarded message for video {video['id']}")
+                            
+                            # حذف الرسالة المُعاد توجيهها
                             try:
-                                forwarded = bot.forward_message(
-                                    chat_id=admin_id,
-                                    from_chat_id=video['chat_id'],
-                                    message_id=video['message_id']
-                                )
-                                
-                                if forwarded.video:
-                                    new_file_id = forwarded.video.file_id
-                                    new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
-                                    
-                                    update_sql = """
-                                        UPDATE video_archive
-                                        SET file_id = %s,
-                                            thumbnail_file_id = %s
-                                        WHERE id = %s
-                                    """
-                                    db.execute_query(update_sql, (new_file_id, new_thumbnail_id, video['id']), commit=True)
-                                    total_updated += 1
-                                    logger.info(f"✅ Updated file_id and thumbnail for video {video['id']}")
-                                else:
-                                    failed_count += 1
-                                    logger.warning(f"⚠️ No video in forwarded message for video {video['id']}")
-                                
-                                # حذف الرسالة المعاد توجيهها
-                                try:
-                                    bot.delete_message(admin_id, forwarded.message_id)
-                                except:
-                                    pass
-                            except Exception as e:
-                                logger.error(f"Error forwarding video {video['id']}: {e}")
-                                failed_count += 1
+                                bot.delete_message(admin_id, forwarded.message_id)
+                            except:
+                                pass
+                        except Exception as e:
+                            logger.error(f"Error forwarding video {video['id']}: {e}")
+                            failed_count += 1
                         
                         import time
                         time.sleep(0.3)
@@ -745,6 +718,191 @@ def admin_optimize_db():
             "status": "error",
             "message": str(e)
         }), 500
+
+@app.route("/admin/migrate_database", methods=["GET", "POST"])
+def admin_migrate_database():
+    """
+    ترحيل قاعدة البيانات عبر الويب: ترحيل البيانات من الجداول القديمة وحذفها.
+    الاستخدام: https://your-bot.onrender.com/admin/migrate_database?admin_id=YOUR_ID
+    """
+    try:
+        import threading
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter. Usage: /admin/migrate_database?admin_id=YOUR_ID"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        # خريطة الجداول القديمة -> الجديدة
+        TABLE_MAPPINGS = {
+            'videoarchive': 'video_archive',
+            'botusers': 'bot_users',
+            'userfavorites': 'user_favorites',
+            'userhistory': 'user_history',
+            'videoratings': 'video_ratings',
+            'userstates': 'user_states',
+            'botsettings': 'bot_settings',
+            'requiredchannels': 'required_channels'
+        }
+        
+        def table_exists(cursor, table_name):
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' AND table_name = %s
+                )
+            """, (table_name,))
+            return cursor.fetchone()[0]
+        
+        def get_table_count(cursor, table_name):
+            try:
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                return cursor.fetchone()[0]
+            except:
+                return 0
+        
+        def migrate_background():
+            """تنفيذ الترحيل في الخلفية"""
+            try:
+                from urllib.parse import urlparse
+                
+                result = urlparse(DATABASE_URL)
+                db_config = {
+                    'user': result.username,
+                    'password': result.password,
+                    'host': result.hostname,
+                    'port': result.port,
+                    'dbname': result.path[1:]
+                }
+                
+                conn = psycopg2.connect(**db_config)
+                cursor = conn.cursor(cursor_factory=DictCursor)
+                
+                bot.send_message(
+                    admin_id,
+                    "🔄 *بدء عملية ترحيل قاعدة البيانات*...\n"
+                    "سيتم تحليل الجداول وترحيل البيانات.",
+                    parse_mode="Markdown"
+                )
+                
+                # تحليل الجداول
+                analysis_text = "📊 *تحليل الجداول:*\n\n"
+                tables_to_drop = []
+                
+                for old_table, new_table in TABLE_MAPPINGS.items():
+                    old_exists = table_exists(cursor, old_table)
+                    new_exists = table_exists(cursor, new_table)
+                    
+                    old_count = get_table_count(cursor, old_table) if old_exists else 0
+                    new_count = get_table_count(cursor, new_table) if new_exists else 0
+                    
+                    if old_exists:
+                        tables_to_drop.append(old_table)
+                        status = "⚠️" if old_count > 0 else "🔵"
+                        analysis_text += f"{status} `{old_table}` ({old_count}) → `{new_table}` ({new_count})\n"
+                    else:
+                        analysis_text += f"✅ `{old_table}` (غير موجود)\n"
+                
+                bot.send_message(admin_id, analysis_text, parse_mode="Markdown")
+                
+                if not tables_to_drop:
+                    bot.send_message(
+                        admin_id,
+                        "✅ *قاعدة البيانات نظيفة!*\n"
+                        "لا توجد جداول قديمة للحذف.",
+                        parse_mode="Markdown"
+                    )
+                    cursor.close()
+                    conn.close()
+                    return
+                
+                # حذف الجداول القديمة
+                deleted_count = 0
+                for table in tables_to_drop:
+                    try:
+                        cursor.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+                        deleted_count += 1
+                        logger.info(f"✅ Dropped table: {table}")
+                    except Exception as e:
+                        logger.error(f"Error dropping {table}: {e}")
+                
+                conn.commit()
+                
+                # تنظيف sequences
+                old_sequences = [
+                    'videoarchive_id_seq',
+                    'userfavorites_id_seq',
+                    'userhistory_id_seq',
+                    'videoratings_id_seq',
+                    'requiredchannels_id_seq'
+                ]
+                
+                for seq in old_sequences:
+                    try:
+                        cursor.execute(f"DROP SEQUENCE IF EXISTS {seq} CASCADE")
+                    except:
+                        pass
+                
+                conn.commit()
+                
+                # النتيجة النهائية
+                bot.send_message(
+                    admin_id,
+                    f"✅ *اكتمل الترحيل بنجاح!*\n\n"
+                    f"🗑️ تم حذف {deleted_count} جدول قديم\n"
+                    f"🧹 تم تنظيف الـ sequences",
+                    parse_mode="Markdown"
+                )
+                
+                cursor.close()
+                conn.close()
+                logger.info("🎉 Database migration completed!")
+                
+            except Exception as e:
+                logger.error(f"Migration error: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ أثناء الترحيل:\n`{str(e)}`",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        
+        # تشغيل في thread منفصل
+        thread = threading.Thread(target=migrate_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Database migration started. You will receive a Telegram message with results."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin migrate database error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 @app.route("/webhook_info", methods=["GET"])
 def webhook_info():
     try:
@@ -779,6 +937,172 @@ def get_thumbnail(file_id):
         logger.error(f"Thumbnail fetch error for {file_id}: {e}")
         # صورة افتراضية أو خطأ 404
         abort(404)
+
+@app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
+def admin_force_refresh_all_file_ids():
+    """
+    إعادة جلب file_id لجميع الفيديوهات من القناة (حتى لو كان موجود)
+    هذا يصلح المشكلة: الفيديوهات لديها file_id لكنه Document وليس Video
+    """
+    try:
+        import threading
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id') or request.form.get('admin_id')
+        offset = int(request.args.get('offset', 0))  # إضافة offset للتصفح
+        
+        if not admin_id:
+            return jsonify({
+                "status": "error",
+                "message": "Missing admin_id parameter"
+            }), 400
+        
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({
+                "status": "error",
+                "message": "Invalid admin_id"
+            }), 400
+        
+        if admin_id not in ADMIN_IDS:
+            return jsonify({
+                "status": "error",
+                "message": "Unauthorized"
+            }), 403
+        
+        def refresh_background():
+            try:
+                from urllib.parse import urlparse
+                
+                result = urlparse(DATABASE_URL)
+                db_config = {
+                    'user': result.username,
+                    'password': result.password,
+                    'host': result.hostname,
+                    'port': result.port,
+                    'dbname': result.path[1:]
+                }
+                
+                conn = psycopg2.connect(**db_config)
+                cursor = conn.cursor(cursor_factory=DictCursor)
+                
+                bot.send_message(
+                    admin_id,
+                    "🔄 *بدء إعادة جلب file_id لجميع الفيديوهات*...\n"
+                    "⚠️ هذا سيستغرق وقتاً طويلاً!",
+                    parse_mode="Markdown"
+                )
+                
+                # جلب جميع الفيديوهات (بغض النظر عن file_id) مع offset
+                cursor.execute("""
+                    SELECT id, message_id, chat_id
+                    FROM video_archive
+                    WHERE message_id IS NOT NULL 
+                      AND chat_id IS NOT NULL
+                    ORDER BY id ASC
+                    LIMIT 100
+                    OFFSET %s
+                """, (offset,))
+                videos = cursor.fetchall()
+                
+                if not videos:
+                    bot.send_message(admin_id, "✅ لا توجد فيديوهات!")
+                    cursor.close()
+                    conn.close()
+                    return
+                
+                total_updated = 0
+                failed_count = 0
+                
+                for video in videos:
+                    try:
+                        forwarded = bot.forward_message(
+                            chat_id=admin_id,
+                            from_chat_id=video['chat_id'],
+                            message_id=video['message_id']
+                        )
+                        
+                        if forwarded.video:
+                            new_file_id = forwarded.video.file_id
+                            new_thumbnail_id = forwarded.video.thumb.file_id if forwarded.video.thumb else None
+                            
+                            cursor.execute("""
+                                UPDATE video_archive
+                                SET file_id = %s,
+                                    thumbnail_file_id = %s
+                                WHERE id = %s
+                            """, (new_file_id, new_thumbnail_id, video['id']))
+                            conn.commit()
+                            total_updated += 1
+                            
+                            logger.info(f"✅ Refreshed file_id for video {video['id']}")
+                        else:
+                            failed_count += 1
+                            logger.warning(f"⚠️ No video in forwarded message {video['id']}")
+                        
+                        try:
+                            bot.delete_message(admin_id, forwarded.message_id)
+                        except:
+                            pass
+                        
+                        import time
+                        time.sleep(0.3)
+                        
+                    except Exception as e:
+                        logger.error(f"Error refreshing video {video['id']}: {e}")
+                        failed_count += 1
+                
+                # إنشاء رابط المرة التالية
+                next_offset = offset + 100
+                next_url = f"https://video-bot-r.onrender.com/admin/force_refresh_all_file_ids?admin_id={admin_id}&offset={next_offset}"
+                
+                message = (
+                    f"✅ *اكتمل التحديث!*\n\n"
+                    f"📊 الإحصائيات:\n"
+                    f"• نجح: {total_updated}\n"
+                    f"• فشل: {failed_count}\n"
+                    f"• المجموع: {len(videos)}\n"
+                    f"• Offset الحالي: {offset}\n\n"
+                )
+                
+                if len(videos) == 100:
+                    message += f"💡 للمتابعة، افتح:\n`{next_url}`"
+                else:
+                    message += "✅ *تم الانتهاء من جميع الفيديوهات!*"
+                
+                bot.send_message(admin_id, message, parse_mode="Markdown")
+                
+                cursor.close()
+                conn.close()
+                
+            except Exception as e:
+                logger.error(f"Refresh error: {e}", exc_info=True)
+                try:
+                    bot.send_message(
+                        admin_id,
+                        f"❌ حدث خطأ:\n`{str(e)}`",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    pass
+        
+        thread = threading.Thread(target=refresh_background, daemon=True)
+        thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": "Refresh started. Check Telegram for results."
+        })
+        
+    except Exception as e:
+        logger.error(f"Admin force refresh error: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
 
 # --- تهيئة البوت ---
 def init_bot():
