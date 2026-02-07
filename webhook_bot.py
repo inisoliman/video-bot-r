@@ -992,11 +992,13 @@ def admin_diagnose_file_ids():
                 stored_file_id = v['file_id']
                 match = "✅" if stored_file_id == actual_file_id else "❌"
                 
-                caption_short = (v['caption'] or "")[:30] + "..." if v['caption'] else "بدون عنوان"
+                # تنظيف caption من الأحرف الخاصة
+                caption_raw = (v['caption'] or "بدون عنوان")[:30]
+                caption_short = caption_raw.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
                 
-                report += f"📹 *ID {v['id']}:* {caption_short}\n"
-                report += f"   النوع الفعلي: `{actual_type}`\n"
-                report += f"   النوع المحفوظ: `{v['content_type'] or 'NULL'}`\n"
+                report += f"📹 ID {v['id']}: {caption_short}\n"
+                report += f"   النوع الفعلي: {actual_type}\n"
+                report += f"   النوع المحفوظ: {v['content_type'] or 'NULL'}\n"
                 report += f"   file_id متطابق: {match}\n\n"
                 
                 # حذف الرسالة المُعاد توجيهها
@@ -1009,9 +1011,9 @@ def admin_diagnose_file_ids():
                 time.sleep(0.3)
                 
             except Exception as e:
-                report += f"📹 *ID {v['id']}:* ❌ خطأ: {str(e)[:50]}\n\n"
+                report += f"📹 ID {v['id']}: ❌ خطأ: {str(e)[:50]}\n\n"
         
-        bot.send_message(admin_id, report, parse_mode="Markdown")
+        bot.send_message(admin_id, report)  # بدون parse_mode
         
         return jsonify({"status": "success", "message": "Diagnosis sent to admin"})
         
