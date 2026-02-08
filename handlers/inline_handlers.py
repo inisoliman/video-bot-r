@@ -112,9 +112,10 @@ def register(bot):
                                     inline_query.id,
                                     doc_results,
                                     cache_time=60,
-                                    is_personal=False
+                                    is_personal=False,
+                                    next_offset=next_offset # تفعيل الـ pagination في الـ fallback أيضاً
                                 )
-                                logger.info(f"✅ Fallback: Sent {len(doc_results)} document results")
+                                logger.info(f"✅ Fallback: Sent {len(doc_results)} document results (Next offset: {next_offset})")
                             except Exception as e2:
                                 logger.error(f"❌ Fallback also failed: {e2}")
                 else:

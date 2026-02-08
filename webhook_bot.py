@@ -1123,6 +1123,7 @@ def admin_fix_content_types():
         
         admin_id = request.args.get('admin_id')
         limit = int(request.args.get('limit', 10000))
+        query_text = request.args.get('q')  # بحث مخصص
         
         if not admin_id:
             return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
@@ -1131,22 +1132,36 @@ def admin_fix_content_types():
         if admin_id not in ADMIN_IDS:
             return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
-        def fix_task(admin_id, limit):
+        def fix_task(admin_id, limit, query_text):
             conn = None
             try:
                 conn = psycopg2.connect(DATABASE_URL)
                 cursor = conn.cursor()
                 
-                # جلب الفيديوهات التي لم يتم التحقق منها أو المسجلة كفيديو
-                # نبدأ بالأحدث لأنها الأهم
-                cursor.execute("""
-                    SELECT id, file_id, caption, content_type 
-                    FROM video_archive 
-                    WHERE file_id IS NOT NULL 
-                      AND LENGTH(file_id) >= 20
-                    ORDER BY id DESC 
-                    LIMIT %s
-                """, (limit,))
+                if query_text:
+                    # فحص نتائج بحث معينة فقط
+                    search_pattern = f"%{query_text}%"
+                    cursor.execute("""
+                        SELECT id, file_id, caption, content_type 
+                        FROM video_archive 
+                        WHERE file_id IS NOT NULL 
+                          AND LENGTH(file_id) >= 20
+                          AND (caption ILIKE %s OR file_name ILIKE %s)
+                        ORDER BY id DESC 
+                        LIMIT %s
+                    """, (search_pattern, search_pattern, limit))
+                    bot.send_message(admin_id, f"🔍 جاري فحص الفيديوهات التي تحتوي على '{query_text}'...")
+                else:
+                    # فحص الكل
+                    cursor.execute("""
+                        SELECT id, file_id, caption, content_type 
+                        FROM video_archive 
+                        WHERE file_id IS NOT NULL 
+                          AND LENGTH(file_id) >= 20
+                        ORDER BY id DESC 
+                        LIMIT %s
+                    """, (limit,))
+                
                 videos = cursor.fetchall()
                 
                 total = len(videos)
@@ -1239,7 +1254,7 @@ def admin_fix_content_types():
                 if conn: conn.close()
         
         # تشغيل في الخلفية
-        thread = threading.Thread(target=fix_task, args=(admin_id, limit))
+        thread = threading.Thread(target=fix_task, args=(admin_id, limit, query_text))
         thread.daemon = True
         thread.start()
         
