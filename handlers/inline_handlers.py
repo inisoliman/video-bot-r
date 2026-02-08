@@ -51,66 +51,45 @@ def register(bot):
                 ]
                 bot.answer_inline_query(inline_query.id, results, cache_time=1)
             else:
-                # استراتيجية ذكية للحصول على أفضل عرض:
-                # - content_type = 'VIDEO' → نحاول Video mode أولاً (للحصول على الصورة المصغرة)
-                # - content_type = 'DOCUMENT' أو NULL → نستخدم Document mode مباشرة
-                logger.info(f"🔄 Processing {len(videos)} videos...")
+                # استخدام Document mode مباشرة
+                # الوثائق التي هي فيديوهات ستُظهر الصور المصغرة المضمنة تلقائياً
+                logger.info(f"🔄 Processing {len(videos)} videos as Documents...")
                 
-                video_results = []  # نتائج Video mode
-                doc_results = []    # نتائج Document mode (fallback)
-                
+                results = []
                 for video in videos:
-                    content_type = video.get('content_type')
-                    
-                    if content_type == 'VIDEO':
-                        # نحاول Video mode للحصول على الصورة المصغرة
-                        res = create_inline_result(video, use_document=False)
-                        if res:
-                            video_results.append(res)
-                    else:
-                        # Document أو NULL → Document mode مباشرة
-                        res = create_inline_result(video, use_document=True)
-                        if res:
-                            doc_results.append(res)
+                    res = create_inline_result(video, use_document=True)
+                    if res:
+                        results.append(res)
                 
-                logger.info(f"📦 Created {len(video_results)} video + {len(doc_results)} doc results")
+                logger.info(f"📦 Created {len(results)}/{len(videos)} document results")
                 
-                # تجميع النتائج
-                all_results = video_results + doc_results
-                all_results = all_results[:25]  # حد Telegram
+                # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
+                results = results[:25]
                 
-                if all_results:
+                if results:
                     try:
                         bot.answer_inline_query(
                             inline_query.id,
-                            all_results,
+                            results,
                             cache_time=30,
                             is_personal=False
                         )
-                        logger.info(f"✅ Sent {len(all_results)} results (V:{len(video_results)}, D:{len(doc_results)})")
+                        logger.info(f"✅ Sent {len(results)} document results")
                     except Exception as e:
-                        # إذا فشل بسبب VIDEO_CONTENT_TYPE_INVALID، نحاول Document فقط
-                        if "VIDEO_CONTENT_TYPE_INVALID" in str(e):
-                            logger.warning(f"⚠️ Video mode failed, retrying all as Documents...")
-                            doc_only_results = []
-                            for video in videos[:25]:
-                                res = create_inline_result(video, use_document=True)
-                                if res:
-                                    doc_only_results.append(res)
-                            
-                            if doc_only_results:
-                                try:
-                                    bot.answer_inline_query(
-                                        inline_query.id,
-                                        doc_only_results,
-                                        cache_time=30,
-                                        is_personal=False
-                                    )
-                                    logger.info(f"✅ Fallback: Sent {len(doc_only_results)} document results")
-                                except Exception as e2:
-                                    logger.error(f"❌ Fallback also failed: {e2}")
-                        else:
-                            logger.error(f"❌ Unexpected error: {e}", exc_info=True)
+                        logger.error(f"❌ Failed to send results: {e}", exc_info=True)
+                else:
+                    logger.warning("⚠️ No valid results generated")
+                    results = [
+                        InlineQueryResultArticle(
+                            id='no_valid_results',
+                            title='⚠️ لا توجد نتائج',
+                            description='جرب كلمة بحث أخرى',
+                            input_message_content=InputTextMessageContent(
+                                message_text='⚠️ لا توجد نتائج'
+                            )
+                        )
+                    ]
+                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
             
         except Exception as e:
             logger.error(f"Error in inline query handler: {e}", exc_info=True)
