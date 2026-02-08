@@ -1021,6 +1021,94 @@ def admin_diagnose_file_ids():
         logger.error(f"Diagnosis error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/admin/db_stats", methods=["GET"])
+def admin_db_stats():
+    """
+    إحصائيات شاملة لقاعدة البيانات - لفحص حالة الفيديوهات
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id')
+        
+        if not admin_id:
+            return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
+        
+        admin_id = int(admin_id)
+        if admin_id not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        
+        # إحصائيات مختلفة
+        stats = {}
+        
+        # إجمالي الفيديوهات
+        cursor.execute("SELECT COUNT(*) FROM video_archive")
+        stats['total_videos'] = cursor.fetchone()[0]
+        
+        # فيديوهات مع file_id صالح (أكثر من 20 حرف)
+        cursor.execute("SELECT COUNT(*) FROM video_archive WHERE file_id IS NOT NULL AND LENGTH(file_id) >= 20")
+        stats['valid_file_id'] = cursor.fetchone()[0]
+        
+        # فيديوهات بدون file_id
+        cursor.execute("SELECT COUNT(*) FROM video_archive WHERE file_id IS NULL")
+        stats['null_file_id'] = cursor.fetchone()[0]
+        
+        # فيديوهات مع file_id قصير
+        cursor.execute("SELECT COUNT(*) FROM video_archive WHERE file_id IS NOT NULL AND LENGTH(file_id) < 20")
+        stats['short_file_id'] = cursor.fetchone()[0]
+        
+        # فيديوهات حسب content_type
+        cursor.execute("SELECT content_type, COUNT(*) FROM video_archive GROUP BY content_type")
+        stats['by_content_type'] = {row[0] or 'NULL': row[1] for row in cursor.fetchall()}
+        
+        # أحدث 5 أخطاء في البحث (فيديوهات موجودة لكن بدون file_id صالح)
+        cursor.execute("""
+            SELECT id, caption, file_id, content_type 
+            FROM video_archive 
+            WHERE file_id IS NULL OR LENGTH(file_id) < 20
+            ORDER BY id DESC 
+            LIMIT 5
+        """)
+        stats['problem_videos'] = [dict(row) for row in cursor.fetchall()]
+        
+        cursor.close()
+        conn.close()
+        
+        # إرسال التقرير للأدمن
+        report = (
+            f"📊 إحصائيات قاعدة البيانات\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📹 إجمالي الفيديوهات: {stats['total_videos']:,}\n"
+            f"✅ file_id صالح: {stats['valid_file_id']:,}\n"
+            f"❌ file_id فارغ: {stats['null_file_id']:,}\n"
+            f"⚠️ file_id قصير: {stats['short_file_id']:,}\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"📂 حسب النوع:\n"
+        )
+        for ct, count in stats['by_content_type'].items():
+            report += f"  • {ct}: {count:,}\n"
+        
+        if stats['problem_videos']:
+            report += f"\n❗ فيديوهات بها مشكلة:\n"
+            for v in stats['problem_videos'][:3]:
+                caption = (v['caption'] or 'بدون عنوان')[:30]
+                report += f"  • ID {v['id']}: {caption}\n"
+        
+        bot.send_message(admin_id, report)
+        
+        return jsonify({
+            "status": "success",
+            "stats": stats
+        })
+        
+    except Exception as e:
+        logger.error(f"DB stats error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
 def admin_force_refresh_all_file_ids():
     """
