@@ -1109,6 +1109,101 @@ def admin_db_stats():
         logger.error(f"DB stats error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/admin/test_search", methods=["GET"])
+def admin_test_search():
+    """
+    فحص البحث - يظهر ماذا يحدث عند البحث عن كلمة معينة
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        
+        admin_id = request.args.get('admin_id')
+        query = request.args.get('q', '')
+        
+        if not admin_id:
+            return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
+        
+        if not query:
+            return jsonify({"status": "error", "message": "Missing q (query) parameter. Use ?q=كلمة"}), 400
+        
+        admin_id = int(admin_id)
+        if admin_id not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        
+        search_pattern = f"%{query}%"
+        
+        # البحث في caption
+        cursor.execute("""
+            SELECT id, caption, file_name, content_type 
+            FROM video_archive 
+            WHERE caption ILIKE %s 
+            LIMIT 10
+        """, (search_pattern,))
+        caption_results = cursor.fetchall()
+        
+        # البحث في file_name
+        cursor.execute("""
+            SELECT id, caption, file_name, content_type 
+            FROM video_archive 
+            WHERE file_name ILIKE %s 
+            LIMIT 10
+        """, (search_pattern,))
+        filename_results = cursor.fetchall()
+        
+        # البحث الكامل (مثل inline)
+        cursor.execute("""
+            SELECT id, caption, file_name, file_id, content_type 
+            FROM video_archive 
+            WHERE file_id IS NOT NULL 
+              AND LENGTH(file_id) >= 20
+              AND (caption ILIKE %s OR file_name ILIKE %s)
+            LIMIT 10
+        """, (search_pattern, search_pattern))
+        full_results = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # إرسال التقرير
+        report = f"🔍 فحص البحث عن: {query}\n"
+        report += "━━━━━━━━━━━━━━━━━━━\n"
+        
+        report += f"\n📝 نتائج في caption: {len(caption_results)}\n"
+        for r in caption_results[:3]:
+            caption = (r['caption'] or '')[:40]
+            report += f"  • ID {r['id']}: {caption}\n"
+        
+        report += f"\n📁 نتائج في file_name: {len(filename_results)}\n"
+        for r in filename_results[:3]:
+            fname = (r['file_name'] or '')[:40]
+            report += f"  • ID {r['id']}: {fname}\n"
+        
+        report += f"\n✅ نتائج البحث الكامل (inline): {len(full_results)}\n"
+        for r in full_results[:3]:
+            caption = (r['caption'] or r['file_name'] or '')[:40]
+            report += f"  • ID {r['id']}: {caption}\n"
+        
+        if not full_results:
+            report += "\n⚠️ لا نتائج! تحقق من أن الكلمة موجودة في عنوان الفيديو"
+        
+        bot.send_message(admin_id, report)
+        
+        return jsonify({
+            "status": "success",
+            "query": query,
+            "caption_results": len(caption_results),
+            "filename_results": len(filename_results),
+            "full_results": len(full_results)
+        })
+        
+    except Exception as e:
+        logger.error(f"Test search error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
 def admin_force_refresh_all_file_ids():
     """
