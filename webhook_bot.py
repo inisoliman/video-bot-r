@@ -1170,11 +1170,23 @@ def admin_fix_content_types():
                         )
                         
                         # نجح الإرسال كفيديو -> هو فيديو حقاً
-                        if current_type != 'VIDEO':
-                            cursor.execute("UPDATE video_archive SET content_type = 'VIDEO' WHERE id = %s", (vid,))
-                            conn.commit()
+                        # الأهم: نأخذ الـ file_id الجديد من الرسالة ونحفظه!
+                        # لأن الـ file_id القديم قد يكون Document ID وهذا يسبب فشل الـ Inline
+                        new_file_id = msg.video.file_id
                         
-                        confirmed_videos += 1
+                        if new_file_id != file_id or current_type != 'VIDEO':
+                            cursor.execute(
+                                "UPDATE video_archive SET content_type = 'VIDEO', file_id = %s WHERE id = %s", 
+                                (new_file_id, vid)
+                            )
+                            conn.commit()
+                            # إذا تغير الـ file_id نعتبره إصلاح
+                            if new_file_id != file_id:
+                                fixed_docs += 1 # نعده كإصلاح لأنه تم تحديث الـ ID
+                            else:
+                                confirmed_videos += 1
+                        else:
+                            confirmed_videos += 1
                         
                         # نحذف رسالة الاختبار فوراً
                         try:
@@ -1188,7 +1200,8 @@ def admin_fix_content_types():
                             if current_type != 'DOCUMENT':
                                 cursor.execute("UPDATE video_archive SET content_type = 'DOCUMENT' WHERE id = %s", (vid,))
                                 conn.commit()
-                                fixed_docs += 1
+                                # لا نزيد العداد هنا لأننا نركز على تحويل الـ IDs
+
                         else:
                             # خطأ آخر (مثل FloodWait)
                             logger.error(f"Error checking video {vid}: {e}")
