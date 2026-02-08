@@ -51,78 +51,66 @@ def register(bot):
                 ]
                 bot.answer_inline_query(inline_query.id, results, cache_time=1)
             else:
-                # الوضع الطبيعي: عرض الفيديوهات
-                # نستخدم content_type من قاعدة البيانات لتحديد طريقة العرض:
-                # - VIDEO → يظهر مع الصورة المصغرة
-                # - DOCUMENT → يظهر كملف
-                # - NULL → نستخدم Document كوضع آمن
-                logger.info(f"🔄 Processing {len(videos)} videos for results...")
-                results = []
-                video_modes = []
+                # استراتيجية ذكية للحصول على أفضل عرض:
+                # - content_type = 'VIDEO' → نحاول Video mode أولاً (للحصول على الصورة المصغرة)
+                # - content_type = 'DOCUMENT' أو NULL → نستخدم Document mode مباشرة
+                logger.info(f"🔄 Processing {len(videos)} videos...")
+                
+                video_results = []  # نتائج Video mode
+                doc_results = []    # نتائج Document mode (fallback)
+                
                 for video in videos:
                     content_type = video.get('content_type')
                     
-                    # تحديد الوضع بناءً على content_type
                     if content_type == 'VIDEO':
-                        # معروف أنه فيديو، نستخدم Video mode
-                        use_document = False
-                        video_modes.append('V')
+                        # نحاول Video mode للحصول على الصورة المصغرة
+                        res = create_inline_result(video, use_document=False)
+                        if res:
+                            video_results.append(res)
                     else:
-                        # DOCUMENT أو NULL، نستخدم Document mode للأمان
-                        use_document = True
-                        video_modes.append('D')
-                    
-                    res = create_inline_result(video, use_document=use_document)
-                    if res:
-                        results.append(res)
+                        # Document أو NULL → Document mode مباشرة
+                        res = create_inline_result(video, use_document=True)
+                        if res:
+                            doc_results.append(res)
                 
-                logger.info(f"📦 Created {len(results)}/{len(videos)} results. Modes: {''.join(video_modes[:10])}...")
+                logger.info(f"📦 Created {len(video_results)} video + {len(doc_results)} doc results")
                 
-                # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
-                results = results[:25]
+                # تجميع النتائج
+                all_results = video_results + doc_results
+                all_results = all_results[:25]  # حد Telegram
                 
-                if results:
+                if all_results:
                     try:
                         bot.answer_inline_query(
                             inline_query.id,
-                            results,
-                            cache_time=60,  # كاش دقيقة واحدة
+                            all_results,
+                            cache_time=30,
                             is_personal=False
                         )
-                        logger.info(f"✅ Sent {len(results)} results (mixed Video+Document)")
+                        logger.info(f"✅ Sent {len(all_results)} results (V:{len(video_results)}, D:{len(doc_results)})")
                     except Exception as e:
-                        # Fallback: إذا فشل أي فيديو، نحاول كل شيء كـ Documents
-                        logger.warning(f"Mixed mode failed, trying all Documents: {e}")
-                        results_doc = []
-                        for video in videos[:25]:
-                            res = create_inline_result(video, use_document=True)
-                            if res:
-                                results_doc.append(res)
-                        
-                        if results_doc:
-                            try:
-                                bot.answer_inline_query(
-                                    inline_query.id,
-                                    results_doc,
-                                    cache_time=60,
-                                    is_personal=False
-                                )
-                                logger.info(f"✅ Fallback: Sent {len(results_doc)} document results")
-                            except Exception as e2:
-                                logger.error(f"Fallback also failed: {e2}")
-                else:
-                    logger.warning("⚠️ No valid results generated")
-                    results = [
-                        InlineQueryResultArticle(
-                            id='no_valid_results',
-                            title='⚠️ لا يمكن عرض النتائج',
-                            description='تأكد من صلاحية الملفات',
-                            input_message_content=InputTextMessageContent(
-                                message_text='⚠️ لا يمكن عرض النتائج حالياً'
-                            )
-                        )
-                    ]
-                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                        # إذا فشل بسبب VIDEO_CONTENT_TYPE_INVALID، نحاول Document فقط
+                        if "VIDEO_CONTENT_TYPE_INVALID" in str(e):
+                            logger.warning(f"⚠️ Video mode failed, retrying all as Documents...")
+                            doc_only_results = []
+                            for video in videos[:25]:
+                                res = create_inline_result(video, use_document=True)
+                                if res:
+                                    doc_only_results.append(res)
+                            
+                            if doc_only_results:
+                                try:
+                                    bot.answer_inline_query(
+                                        inline_query.id,
+                                        doc_only_results,
+                                        cache_time=30,
+                                        is_personal=False
+                                    )
+                                    logger.info(f"✅ Fallback: Sent {len(doc_only_results)} document results")
+                                except Exception as e2:
+                                    logger.error(f"❌ Fallback also failed: {e2}")
+                        else:
+                            logger.error(f"❌ Unexpected error: {e}", exc_info=True)
             
         except Exception as e:
             logger.error(f"Error in inline query handler: {e}", exc_info=True)
