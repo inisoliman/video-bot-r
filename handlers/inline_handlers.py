@@ -51,17 +51,26 @@ def register(bot):
                 ]
                 bot.answer_inline_query(inline_query.id, results, cache_time=1)
             else:
-                # استخدام Document mode مباشرة
-                # الوثائق التي هي فيديوهات ستُظهر الصور المصغرة المضمنة تلقائياً
-                logger.info(f"🔄 Processing {len(videos)} videos as Documents...")
+                # استراتيجية ذكية للحصول على أفضل عرض (بعد إصلاح الـ content_types):
+                # - content_type = 'VIDEO' → عرض كفيديو مع صورة مصغرة
+                # - content_type = 'DOCUMENT' → عرض كملف
+                logger.info(f"🔄 Processing {len(videos)} results...")
                 
                 results = []
                 for video in videos:
-                    res = create_inline_result(video, use_document=True)
+                    content_type = video.get('content_type')
+                    
+                    if content_type == 'VIDEO':
+                        # فيديو مؤكد -> عرض مع صورة مصغرة
+                        res = create_inline_result(video, use_document=False)
+                    else:
+                        # وثيقة أو غير معروف -> عرض كملف
+                        res = create_inline_result(video, use_document=True)
+                    
                     if res:
                         results.append(res)
                 
-                logger.info(f"📦 Created {len(results)}/{len(videos)} document results")
+                logger.info(f"📦 Created {len(results)} results")
                 
                 # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
                 results = results[:25]
@@ -71,12 +80,30 @@ def register(bot):
                         bot.answer_inline_query(
                             inline_query.id,
                             results,
-                            cache_time=30,
+                            cache_time=300,  # كاش 5 دقائق (لأن البيانات الآن نظيفة)
                             is_personal=False
                         )
-                        logger.info(f"✅ Sent {len(results)} document results")
+                        logger.info(f"✅ Sent {len(results)} results successfully")
                     except Exception as e:
-                        logger.error(f"❌ Failed to send results: {e}", exc_info=True)
+                        # Fallback في حال حدوث خطأ غير متوقع
+                        logger.warning(f"⚠️ Primary send failed: {e}, retrying as Documents...")
+                        doc_results = []
+                        for video in videos[:25]:
+                            res = create_inline_result(video, use_document=True)
+                            if res:
+                                doc_results.append(res)
+                        
+                        if doc_results:
+                            try:
+                                bot.answer_inline_query(
+                                    inline_query.id,
+                                    doc_results,
+                                    cache_time=60,
+                                    is_personal=False
+                                )
+                                logger.info(f"✅ Fallback: Sent {len(doc_results)} document results")
+                            except Exception as e2:
+                                logger.error(f"❌ Fallback also failed: {e2}")
                 else:
                     logger.warning("⚠️ No valid results generated")
                     results = [
