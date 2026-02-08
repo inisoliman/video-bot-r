@@ -26,13 +26,19 @@ def register(bot):
             query_text = inline_query.query.strip()
             user_id = inline_query.from_user.id
             
-            logger.info(f"Inline query from user {user_id}: '{query_text}'")
+            logger.info(f"📥 Inline query from user {user_id}: '{query_text}'")
             
             # البحث في قاعدة البيانات
-            videos = db.search_videos_for_inline(query_text, limit=25)
+            try:
+                videos = db.search_videos_for_inline(query_text, limit=25)
+                logger.info(f"📊 DB returned {len(videos) if videos else 0} videos for query '{query_text}'")
+            except Exception as db_err:
+                logger.error(f"❌ DB search error: {db_err}", exc_info=True)
+                videos = None
             
             if not videos:
                 # لا توجد نتائج
+                logger.info(f"⚠️ No videos found for '{query_text}', sending no results message")
                 results = [
                     InlineQueryResultArticle(
                         id='no_results',
@@ -50,7 +56,9 @@ def register(bot):
                 # - VIDEO → يظهر مع الصورة المصغرة
                 # - DOCUMENT → يظهر كملف
                 # - NULL → نستخدم Document كوضع آمن
+                logger.info(f"🔄 Processing {len(videos)} videos for results...")
                 results = []
+                video_modes = []
                 for video in videos:
                     content_type = video.get('content_type')
                     
@@ -58,13 +66,17 @@ def register(bot):
                     if content_type == 'VIDEO':
                         # معروف أنه فيديو، نستخدم Video mode
                         use_document = False
+                        video_modes.append('V')
                     else:
                         # DOCUMENT أو NULL، نستخدم Document mode للأمان
                         use_document = True
+                        video_modes.append('D')
                     
                     res = create_inline_result(video, use_document=use_document)
                     if res:
                         results.append(res)
+                
+                logger.info(f"📦 Created {len(results)}/{len(videos)} results. Modes: {''.join(video_modes[:10])}...")
                 
                 # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
                 results = results[:25]
