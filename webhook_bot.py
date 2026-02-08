@@ -1204,6 +1204,132 @@ def admin_test_search():
         logger.error(f"Test search error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/admin/debug_search", methods=["GET"])
+def admin_debug_search():
+    """
+    فحص تفصيلي للبحث - يُقارن بين البحث البسيط والمعقد
+    """
+    try:
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        import time
+        
+        admin_id = request.args.get('admin_id')
+        query = request.args.get('q', '')
+        
+        if not admin_id:
+            return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
+        
+        if not query:
+            return jsonify({"status": "error", "message": "Missing q (query) parameter"}), 400
+        
+        admin_id = int(admin_id)
+        if admin_id not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor(cursor_factory=DictCursor)
+        
+        search_pattern = f"%{query}%"
+        results = {}
+        
+        # 1. بحث بسيط جداً (بدون JOINs)
+        start = time.time()
+        cursor.execute("""
+            SELECT id, caption, file_name, file_id, content_type,
+                   LENGTH(file_id) as file_id_len
+            FROM video_archive 
+            WHERE caption ILIKE %s OR file_name ILIKE %s
+            ORDER BY id DESC LIMIT 10
+        """, (search_pattern, search_pattern))
+        simple_results = cursor.fetchall()
+        results['simple_search'] = {
+            'count': len(simple_results),
+            'time_ms': round((time.time() - start) * 1000, 2),
+            'samples': []
+        }
+        for r in simple_results[:5]:
+            results['simple_search']['samples'].append({
+                'id': r['id'],
+                'caption': (r['caption'] or '')[:30],
+                'file_id_len': r['file_id_len'],
+                'content_type': r['content_type']
+            })
+        
+        # 2. بحث مع شرط file_id
+        start = time.time()
+        cursor.execute("""
+            SELECT id, caption, file_name, file_id, content_type
+            FROM video_archive 
+            WHERE (caption ILIKE %s OR file_name ILIKE %s)
+              AND file_id IS NOT NULL 
+              AND LENGTH(file_id) >= 20
+            ORDER BY id DESC LIMIT 10
+        """, (search_pattern, search_pattern))
+        filtered_results = cursor.fetchall()
+        results['filtered_search'] = {
+            'count': len(filtered_results),
+            'time_ms': round((time.time() - start) * 1000, 2)
+        }
+        
+        # 3. بحث كامل (مثل inline)
+        start = time.time()
+        cursor.execute("""
+            SELECT 
+                v.id, v.file_id, v.caption, v.file_name, v.view_count,
+                v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type,
+                c.name as category_name
+            FROM video_archive v
+            LEFT JOIN categories c ON v.category_id = c.id
+            WHERE 
+                v.file_id IS NOT NULL 
+                AND LENGTH(v.file_id) >= 20
+                AND (
+                    v.caption ILIKE %s OR 
+                    v.file_name ILIKE %s OR 
+                    c.name ILIKE %s
+                )
+            ORDER BY v.view_count DESC
+            LIMIT 25
+        """, (search_pattern, search_pattern, search_pattern))
+        full_results = cursor.fetchall()
+        results['inline_search'] = {
+            'count': len(full_results),
+            'time_ms': round((time.time() - start) * 1000, 2)
+        }
+        
+        cursor.close()
+        conn.close()
+        
+        # إرسال التقرير
+        report = f"🔬 فحص تفصيلي للبحث عن: {query}\n"
+        report += "━━━━━━━━━━━━━━━━━━━\n\n"
+        
+        report += f"📌 بحث بسيط: {results['simple_search']['count']} نتيجة ({results['simple_search']['time_ms']}ms)\n"
+        for s in results['simple_search']['samples'][:3]:
+            report += f"  • ID {s['id']}: len={s['file_id_len']}, type={s['content_type']}\n"
+        
+        report += f"\n📌 بحث مع فلتر file_id: {results['filtered_search']['count']} نتيجة ({results['filtered_search']['time_ms']}ms)\n"
+        
+        report += f"\n📌 بحث inline الكامل: {results['inline_search']['count']} نتيجة ({results['inline_search']['time_ms']}ms)\n"
+        
+        if results['simple_search']['count'] > 0 and results['inline_search']['count'] == 0:
+            report += "\n⚠️ الفيديوهات موجودة لكن file_id غير صالح أو قصير!"
+        elif results['simple_search']['count'] == 0:
+            report += "\n⚠️ الكلمة غير موجودة في أي caption أو file_name!"
+        
+        bot.send_message(admin_id, report)
+        
+        return jsonify({
+            "status": "success",
+            "query": query,
+            "results": results
+        })
+        
+    except Exception as e:
+        logger.error(f"Debug search error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
 def admin_force_refresh_all_file_ids():
     """
