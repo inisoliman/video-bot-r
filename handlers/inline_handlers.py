@@ -46,12 +46,23 @@ def register(bot):
                 bot.answer_inline_query(inline_query.id, results, cache_time=1)
             else:
                 # الوضع الطبيعي: عرض الفيديوهات
-                # ⚠️ نستخدم Document mode دائماً لأن Video mode في Inline Query
-                # غير مستقر مع file_ids المُعاد توجيهها
                 results = []
                 for video in videos:
-                    # استخدام Document mode دائماً للاستقرار
-                    res = create_inline_result(video, use_document=True)
+                    # استخدام content_type من قاعدة البيانات إذا كان متاحاً
+                    content_type = video.get('content_type')
+                    
+                    if content_type == 'DOCUMENT':
+                        # نعرف أنه document، نستخدمه مباشرة
+                        use_document = True
+                    elif content_type == 'VIDEO':
+                        # نعرف أنه video، نستخدمه مباشرة  
+                        use_document = False
+                    else:
+                        # content_type غير محدد (NULL) - نستخدم Document كوضع آمن
+                        # هذا يضمن عمل البحث حتى لو لم يتم تحديث الـ file_ids بعد
+                        use_document = True
+                    
+                    res = create_inline_result(video, use_document=use_document)
                     if res:
                         results.append(res)
                 
@@ -59,13 +70,34 @@ def register(bot):
                 results = results[:25]
                 
                 if results:
-                    bot.answer_inline_query(
-                        inline_query.id,
-                        results,
-                        cache_time=60,  # كاش دقيقة واحدة
-                        is_personal=False
-                    )
-                    logger.info(f"✅ Sent {len(results)} document results")
+                    try:
+                        bot.answer_inline_query(
+                            inline_query.id,
+                            results,
+                            cache_time=60,  # كاش دقيقة واحدة
+                            is_personal=False
+                        )
+                        logger.info(f"✅ Sent {len(results)} results")
+                    except Exception as e:
+                        # Fallback: إذا فشل، نحاول كـ Documents
+                        logger.warning(f"Primary mode failed, trying Document fallback: {e}")
+                        results_doc = []
+                        for video in videos[:25]:
+                            res = create_inline_result(video, use_document=True)
+                            if res:
+                                results_doc.append(res)
+                        
+                        if results_doc:
+                            try:
+                                bot.answer_inline_query(
+                                    inline_query.id,
+                                    results_doc,
+                                    cache_time=60,
+                                    is_personal=True
+                                )
+                                logger.info(f"✅ Fallback: Sent {len(results_doc)} document results")
+                            except Exception as e2:
+                                logger.error(f"Fallback also failed: {e2}")
                 else:
                     logger.warning("⚠️ No valid results generated")
                     results = [
@@ -112,7 +144,7 @@ def create_inline_result(video, use_document=False):
         if not file_id or len(file_id) < 10:
             return None
         
-        # العنوان: caption أو file_name
+        # العنوان: caption أو file_name.
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
         
         # تنظيف العنوان
