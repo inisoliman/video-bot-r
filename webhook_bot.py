@@ -1109,6 +1109,136 @@ def admin_db_stats():
         logger.error(f"DB stats error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
+@app.route("/admin/fix_content_types", methods=["GET", "POST"])
+def admin_fix_content_types():
+    """
+    إصلاح أنواع المحتوى (Video/Document) بشكل تلقائي
+    يقوم بالتحقق من كل فيديو عبر محاولة إرساله كفيديو
+    """
+    try:
+        import threading
+        import psycopg2
+        import time
+        from telebot.apihelper import ApiTelegramException
+        
+        admin_id = request.args.get('admin_id')
+        limit = int(request.args.get('limit', 10000))
+        
+        if not admin_id:
+            return jsonify({"status": "error", "message": "Missing admin_id parameter"}), 400
+        
+        admin_id = int(admin_id)
+        if admin_id not in ADMIN_IDS:
+            return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+        def fix_task(admin_id, limit):
+            conn = None
+            try:
+                conn = psycopg2.connect(DATABASE_URL)
+                cursor = conn.cursor()
+                
+                # جلب الفيديوهات التي لم يتم التحقق منها أو المسجلة كفيديو
+                # نبدأ بالأحدث لأنها الأهم
+                cursor.execute("""
+                    SELECT id, file_id, caption, content_type 
+                    FROM video_archive 
+                    WHERE file_id IS NOT NULL 
+                      AND LENGTH(file_id) >= 20
+                    ORDER BY id DESC 
+                    LIMIT %s
+                """, (limit,))
+                videos = cursor.fetchall()
+                
+                total = len(videos)
+                fixed_docs = 0
+                confirmed_videos = 0
+                errors = 0
+                
+                bot.send_message(admin_id, f"🛠️ بدأ فحص {total} فيديو... سيتم إعلامك عند الانتهاء.")
+                
+                for index, v in enumerate(videos):
+                    vid, file_id, caption, current_type = v
+                    
+                    try:
+                        # نحاول إرسال الفيديو كفيديو (بشكل صامت)
+                        # نرسله لنفس الأدمن
+                        msg = bot.send_video(
+                            admin_id, 
+                            file_id, 
+                            caption="Test", 
+                            disable_notification=True
+                        )
+                        
+                        # نجح الإرسال كفيديو -> هو فيديو حقاً
+                        if current_type != 'VIDEO':
+                            cursor.execute("UPDATE video_archive SET content_type = 'VIDEO' WHERE id = %s", (vid,))
+                            conn.commit()
+                        
+                        confirmed_videos += 1
+                        
+                        # نحذف رسالة الاختبار فوراً
+                        try:
+                            bot.delete_message(admin_id, msg.message_id)
+                        except:
+                            pass
+                            
+                    except ApiTelegramException as e:
+                        if "VIDEO_CONTENT_TYPE_INVALID" in str(e) or "Wrong file identifier/HTTP URL specified" in str(e):
+                            # فشل كفيديو -> هو وثيقة (Document)
+                            if current_type != 'DOCUMENT':
+                                cursor.execute("UPDATE video_archive SET content_type = 'DOCUMENT' WHERE id = %s", (vid,))
+                                conn.commit()
+                                fixed_docs += 1
+                        else:
+                            # خطأ آخر (مثل FloodWait)
+                            logger.error(f"Error checking video {vid}: {e}")
+                            errors += 1
+                            if "Retry in" in str(e):
+                                time.sleep(10) # انتظار طويل إذا كان FloodWait
+                    
+                    except Exception as e:
+                        logger.error(f"Unexpected error checking video {vid}: {e}")
+                        errors += 1
+                    
+                    # تجنب الـ Flood Limits
+                    time.sleep(0.5)
+                    
+                    # تحديث الحالة كل 50 فيديو
+                    if (index + 1) % 50 == 0:
+                        logger.info(f"Progress: {index + 1}/{total} (Fixed: {fixed_docs}, Confirmed: {confirmed_videos})")
+                
+                cursor.close()
+                conn.close()
+                
+                report = (
+                    f"✅ **تم انتهاء الفحص والإصلاح**\n\n"
+                    f"📊 الإجمالي: {total}\n"
+                    f"📹 فيديوهات مؤكدة: {confirmed_videos}\n"
+                    f"📄 تم تحويلها لوثائق: {fixed_docs}\n"
+                    f"❌ أخطاء: {errors}\n\n"
+                    f"الآن يمكنك إعادة تفعيل ميزة الصور المصغرة! 🖼️"
+                )
+                bot.send_message(admin_id, report, parse_mode="Markdown")
+                
+            except Exception as e:
+                logger.error(f"Fix task error: {e}", exc_info=True)
+                bot.send_message(admin_id, f"❌ حدث خطأ أثناء الفحص: {e}")
+                if conn: conn.close()
+        
+        # تشغيل في الخلفية
+        thread = threading.Thread(target=fix_task, args=(admin_id, limit))
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Task started in background. You will receive a report via Telegram."
+        })
+        
+    except Exception as e:
+        logger.error(f"Endpoint error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route("/admin/test_search", methods=["GET"])
 def admin_test_search():
     """
