@@ -25,65 +25,78 @@ def register(bot):
         try:
             query_text = inline_query.query.strip()
             user_id = inline_query.from_user.id
+            offset = inline_query.offset
             
-            logger.info(f"📥 Inline query from user {user_id}: '{query_text}'")
+            # تحديد الصفحة (offset)
+            if not offset:
+                offset_val = 0
+            else:
+                try:
+                    offset_val = int(offset)
+                except ValueError:
+                    offset_val = 0
+
+            logger.info(f"📥 Inline query user={user_id} q='{query_text}' offset={offset_val}")
             
-            # البحث في قاعدة البيانات
+            # البحث في قاعدة البيانات مع الـ offset
             try:
-                videos = db.search_videos_for_inline(query_text, limit=25)
-                logger.info(f"📊 DB returned {len(videos) if videos else 0} videos for query '{query_text}'")
+                # نطلب 25 نتيجة
+                videos = db.search_videos_for_inline(query_text, offset=offset_val, limit=25)
+                logger.info(f"📊 DB returned {len(videos) if videos else 0} videos")
             except Exception as db_err:
                 logger.error(f"❌ DB search error: {db_err}", exc_info=True)
                 videos = None
             
             if not videos:
-                # لا توجد نتائج
-                logger.info(f"⚠️ No videos found for '{query_text}', sending no results message")
-                results = [
-                    InlineQueryResultArticle(
-                        id='no_results',
-                        title='❌ لا توجد نتائج',
-                        description=f'لم يتم العثور على فيديوهات تطابق "{query_text}"',
-                        input_message_content=InputTextMessageContent(
-                            message_text='❌ لم يتم العثور على نتائج'
+                # إذا لم تكن هناك نتائج في الصفحة الأولى، نرسل رسالة "لا يوجد"
+                if offset_val == 0:
+                    logger.info(f"⚠️ No videos found for '{query_text}'")
+                    results = [
+                        InlineQueryResultArticle(
+                            id='no_results',
+                            title='❌ لا توجد نتائج',
+                            description=f'لم يتم العثور على فيديوهات تطابق "{query_text}"',
+                            input_message_content=InputTextMessageContent(
+                                message_text='❌ لم يتم العثور على نتائج'
+                            )
                         )
-                    )
-                ]
-                bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                    ]
+                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                else:
+                    # إذا كنا في صفحة تالية ولا توجد نتائج إضافية، نرسل قائمة فارغة (نهاية التمرير)
+                    bot.answer_inline_query(inline_query.id, [], cache_time=1, next_offset="")
             else:
-                # استراتيجية ذكية للحصول على أفضل عرض (بعد إصلاح الـ content_types):
-                # - content_type = 'VIDEO' → عرض كفيديو مع صورة مصغرة
-                # - content_type = 'DOCUMENT' → عرض كملف
-                logger.info(f"🔄 Processing {len(videos)} results...")
+                # استراتيجية العرض
+                logger.info(f"🔄 Processing results offset={offset_val}...")
                 
                 results = []
                 for video in videos:
                     content_type = video.get('content_type')
-                    
                     if content_type == 'VIDEO':
-                        # فيديو مؤكد -> عرض مع صورة مصغرة
                         res = create_inline_result(video, use_document=False)
                     else:
-                        # وثيقة أو غير معروف -> عرض كملف
                         res = create_inline_result(video, use_document=True)
-                    
                     if res:
                         results.append(res)
                 
-                logger.info(f"📦 Created {len(results)} results")
-                
-                # تقليل العدد لتجنب مشاكل الحجم (HTTP 431)
-                results = results[:25]
-                
+                # حساب الـ offset القادم
+                if len(videos) < 25:
+                    # أقل من الحد المطلوب، يعني وصلنا للنهاية
+                    next_offset = ""
+                else:
+                    # يوجد المزيد، نزيد الـ offset
+                    next_offset = str(offset_val + 25)
+
                 if results:
                     try:
                         bot.answer_inline_query(
                             inline_query.id,
                             results,
-                            cache_time=300,  # كاش 5 دقائق (لأن البيانات الآن نظيفة)
-                            is_personal=False
+                            cache_time=300,
+                            is_personal=False,
+                            next_offset=next_offset  # هذا ما يفعّل الـ pagination
                         )
-                        logger.info(f"✅ Sent {len(results)} results successfully")
+                        logger.info(f"✅ Sent {len(results)} results (Next offset: {next_offset})")
                     except Exception as e:
                         # Fallback في حال حدوث خطأ غير متوقع
                         logger.warning(f"⚠️ Primary send failed: {e}, retrying as Documents...")

@@ -852,13 +852,14 @@ def get_comments_stats():
 # دوال Inline Query
 # ==============================================================================
 
-def search_videos_for_inline(query, limit=50):
+def search_videos_for_inline(query, offset=0, limit=50):
     """
-    بحث محسّن للـ inline query مع دعم البحث في العنوان والوصف والتصنيف.
+    بحث محسّن للـ inline query مع دعم البحث في العنوان والوصف والتصنيف ودعم الصفحات (Pagination).
     
     Args:
         query: نص البحث
-        limit: عدد النتائج (افتراضي 50، حد Telegram الأقصى)
+        offset: بداية النتائج (للتمرير)
+        limit: عدد النتائج (افتراضي 50)
     
     Returns:
         قائمة الفيديوهات مع المعلومات الكاملة
@@ -880,11 +881,14 @@ def search_videos_for_inline(query, limit=50):
             GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count, 
                      v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
             ORDER BY v.view_count DESC, avg_rating DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
         """
-        return execute_query(sql, (limit,), fetch="all")
+        return execute_query(sql, (limit, offset), fetch="all")
     
-    # بحث في العنوان، اسم الملف، والتصنيف (مثل البحث في البوت تماماً)
+    # بحث في العنوان، اسم الملف، والتصنيف
+    # الترتيب:
+    # 1. النتائج التي تبدأ بكلمة البحث (في العنوان أو الملف)
+    # 2. الأكثر مشاهدة
     sql = """
         SELECT 
             v.id, v.file_id, v.caption, v.file_name, v.view_count,
@@ -905,11 +909,24 @@ def search_videos_for_inline(query, limit=50):
             )
         GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count,
                  v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
-        ORDER BY v.view_count DESC, avg_rating DESC
-        LIMIT %s
+        ORDER BY 
+            CASE 
+                WHEN v.caption ILIKE %s THEN 0 
+                WHEN v.file_name ILIKE %s THEN 0 
+                ELSE 1 
+            END,
+            v.view_count DESC, 
+            avg_rating DESC
+        LIMIT %s OFFSET %s
     """
     search_pattern = f"%{query}%"
-    return execute_query(sql, (search_pattern, search_pattern, search_pattern, limit), fetch="all")
+    start_pattern = f"{query}%"  # Starts with
+    
+    return execute_query(sql, (
+        search_pattern, search_pattern, search_pattern, # WHERE clause
+        start_pattern, start_pattern,                   # ORDER BY clause
+        limit, offset                                   # LIMIT & OFFSET
+    ), fetch="all")
 
 def update_video_thumbnail(video_id, thumbnail_file_id):
     """
