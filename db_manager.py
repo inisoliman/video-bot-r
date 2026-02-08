@@ -885,10 +885,11 @@ def search_videos_for_inline(query, offset=0, limit=50):
         """
         return execute_query(sql, (limit, offset), fetch="all")
     
-    # بحث في العنوان، اسم الملف، والتصنيف
-    # الترتيب:
-    # 1. النتائج التي تبدأ بكلمة البحث (في العنوان أو الملف)
-    # 2. الأكثر مشاهدة
+    # بحث ذكي (Smart Search) مع 4 مستويات للأهمية:
+    # 1. تطابق تام (Exact Match)
+    # 2. يبدأ بـ (Starts With)
+    # 3. كلمة كاملة (Full Word)
+    # 4. يحتوي على (Contains)
     sql = """
         SELECT 
             v.id, v.file_id, v.caption, v.file_name, v.view_count,
@@ -911,21 +912,36 @@ def search_videos_for_inline(query, offset=0, limit=50):
                  v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
         ORDER BY 
             CASE 
-                WHEN v.caption ILIKE %s THEN 0 
-                WHEN v.file_name ILIKE %s THEN 0 
-                ELSE 1 
+                WHEN v.caption ILIKE %s THEN 0       -- تطابق تام (الأهم)
+                WHEN v.file_name ILIKE %s THEN 0
+                
+                WHEN v.caption ILIKE %s THEN 1       -- يبدأ بـ
+                WHEN v.file_name ILIKE %s THEN 1
+                
+                WHEN v.caption ILIKE %s THEN 2       -- كلمة كاملة (محاطة بمسافات)
+                WHEN v.file_name ILIKE %s THEN 2
+                
+                ELSE 3                               -- مجرد احتواء (الأقل أهمية)
             END,
             v.view_count DESC, 
             avg_rating DESC
         LIMIT %s OFFSET %s
     """
-    search_pattern = f"%{query}%"
-    start_pattern = f"{query}%"  # Starts with
+    
+    # تحضير الأنماط
+    exact_pattern = query                   # يوسف
+    starts_with_pattern = f"{query}%"       # يوسف%
+    word_pattern = f"% {query} %"           # % يوسف %
+    contains_pattern = f"%{query}%"         # %يوسف%
     
     return execute_query(sql, (
-        search_pattern, search_pattern, search_pattern, # WHERE clause
-        start_pattern, start_pattern,                   # ORDER BY clause
-        limit, offset                                   # LIMIT & OFFSET
+        contains_pattern, contains_pattern, contains_pattern,  # WHERE (للفلترة العامة)
+        
+        exact_pattern, exact_pattern,           # Case 0: Exact
+        starts_with_pattern, starts_with_pattern, # Case 1: Starts With
+        word_pattern, word_pattern,             # Case 2: Word Match
+        
+        limit, offset                           # Limit & Offset
     ), fetch="all")
 
 def update_video_thumbnail(video_id, thumbnail_file_id):

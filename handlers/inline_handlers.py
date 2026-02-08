@@ -80,11 +80,11 @@ def register(bot):
                         results.append(res)
                 
                 # حساب الـ offset القادم
+                # إذا كان عدد النتائج أقل من الحد (25)، فهذا يعني أننا وصلنا للنهاية
                 if len(videos) < 25:
-                    # أقل من الحد المطلوب، يعني وصلنا للنهاية
                     next_offset = ""
                 else:
-                    # يوجد المزيد، نزيد الـ offset
+                    # يوجد احتمال لوجود المزيد، نزيد الـ offset
                     next_offset = str(offset_val + 25)
 
                 if results:
@@ -92,11 +92,11 @@ def register(bot):
                         bot.answer_inline_query(
                             inline_query.id,
                             results,
-                            cache_time=300,
+                            cache_time=30, # تقليل الكاش ليشعر المستخدم بالسرعة والتحديث
                             is_personal=False,
-                            next_offset=next_offset  # هذا ما يفعّل الـ pagination
+                            next_offset=next_offset
                         )
-                        logger.info(f"✅ Sent {len(results)} results (Next offset: {next_offset})")
+                        logger.info(f"✅ Sent {len(results)} results (Next offset: '{next_offset}')")
                     except Exception as e:
                         # Fallback في حال حدوث خطأ غير متوقع
                         logger.warning(f"⚠️ Primary send failed: {e}, retrying as Documents...")
