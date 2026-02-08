@@ -158,9 +158,8 @@ def register(bot, admin_ids):
                 if search_type == "normal":
                     # 🌟 استخدام الكيبورد الهرمي الجديد للبحث
                     keyboard = InlineKeyboardMarkup(row_width=1)
-                    keyboard.add(InlineKeyboardButton("🔍 بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
                     
-                    # استخدام الدالة الهرمية لعرض التصنيفات
+                    # استخدام الدالة الهرمية لعرض التصنيفات أولاً
                     categories = get_categories_tree()
                     tree = helpers.build_category_tree(categories)
                     
@@ -169,6 +168,9 @@ def register(bot, admin_ids):
                             f"🔍 {cat['name']}", 
                             callback_data=f"search_scope::{cat['id']}::0"
                         ))
+                    
+                    # زر "بحث في كل التصنيفات" يظهر أخيراً
+                    keyboard.add(InlineKeyboardButton("🔍 بحث في كل التصنيفات", callback_data=f"search_scope::all::0"))
 
                     bot.edit_message_text(f"🎯 أين تريد البحث عن \"{query}\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 

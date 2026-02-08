@@ -11,6 +11,8 @@ import os
 from urllib.parse import urlparse
 import logging
 import json
+import time
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +40,19 @@ from contextlib import contextmanager
 _connection_pool = None
 _pool_lock = threading.Lock()
 
+# إعدادات الـ Pool المحسنة
+DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN', '2'))  # زيادة الحد الأدنى
+DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX', '20'))
+
 VIDEOS_PER_PAGE = 10
 CALLBACK_DELIMITER = "::"
 admin_steps = {}
 user_last_search = {}
+
+# Cache للبحث السريع (يحفظ آخر 100 بحث لمدة 60 ثانية)
+_search_cache = {}
+_search_cache_ttl = 60  # ثانية
+
 
 # --- هيكل قاعدة البيانات المتوقع (مصدر الحقيقة) ---
 EXPECTED_SCHEMA = {
@@ -128,10 +139,10 @@ def get_connection_pool():
             if _connection_pool is None:
                 try:
                     _connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                        1, 20,  # min and max connections
+                        DB_POOL_MIN, DB_POOL_MAX,  # استخدام الإعدادات المرنة
                         **DB_CONFIG
                     )
-                    logger.info("Database connection pool created successfully")
+                    logger.info(f"Database connection pool created (min={DB_POOL_MIN}, max={DB_POOL_MAX})")
                 except Exception as e:
                     logger.error(f"Failed to create connection pool: {e}")
                     raise
@@ -243,9 +254,49 @@ def execute_query(query, params=None, fetch=None, commit=False):
     return result
 
 # ==============================================================================
-# دالة بحث مطورة لتدعم الفلاتر المتقدمة
+# دالة بحث مطورة لتدعم الفلاتر المتقدمة - مع Caching
 # ==============================================================================
+
+def _get_cache_key(query, page, category_id, quality, status):
+    """إنشاء مفتاح فريد للـ cache"""
+    return f"{query}:{page}:{category_id}:{quality}:{status}"
+
+def _get_cached_search(cache_key):
+    """جلب نتيجة البحث من الـ cache إذا كانت صالحة"""
+    if cache_key in _search_cache:
+        cached_result, cached_time = _search_cache[cache_key]
+        if time.time() - cached_time < _search_cache_ttl:
+            logger.debug(f"Cache hit for search: {cache_key[:30]}...")
+            return cached_result
+        else:
+            # انتهت صلاحية الـ cache
+            del _search_cache[cache_key]
+    return None
+
+def _set_cached_search(cache_key, result):
+    """حفظ نتيجة البحث في الـ cache"""
+    # تنظيف الـ cache إذا كبر جداً
+    if len(_search_cache) > 100:
+        # حذف أقدم نصف
+        oldest_keys = sorted(_search_cache.keys(), key=lambda k: _search_cache[k][1])[:50]
+        for key in oldest_keys:
+            del _search_cache[key]
+    
+    _search_cache[cache_key] = (result, time.time())
+
+def clear_search_cache():
+    """مسح كل الـ cache للبحث"""
+    global _search_cache
+    _search_cache = {}
+    logger.info("Search cache cleared")
+
 def search_videos(query, page=0, category_id=None, quality=None, status=None):
+    # التحقق من الـ cache أولاً
+    cache_key = _get_cache_key(query, page, category_id, quality, status)
+    cached = _get_cached_search(cache_key)
+    if cached:
+        return cached
+    
     offset = page * VIDEOS_PER_PAGE
     search_term = f"%{query}%"
 
@@ -277,7 +328,11 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
     final_params_count = tuple(params)
     total = execute_query(count_query, final_params_count, fetch="one")
 
-    return videos, total['count'] if total else 0
+    # حفظ النتيجة في الـ cache
+    result = (videos, total['count'] if total else 0)
+    _set_cached_search(cache_key, result)
+    
+    return result
 
 def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
     metadata_json = json.dumps(metadata)
