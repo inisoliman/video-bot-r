@@ -144,7 +144,7 @@ def create_inline_result(video, use_document=False):
         if not file_id or len(file_id) < 10:
             return None
         
-        # العنوان: caption أو file_name
+        # العنوان: caption أو file_name.
         title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
         
         # تنظيف العنوان
@@ -199,3 +199,4 @@ def create_inline_result(video, use_document=False):
     except Exception as e:
         logger.error(f"Error creating inline result for video {video.get('id')}: {e}", exc_info=True)
         return None
+
