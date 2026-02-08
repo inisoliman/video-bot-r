@@ -1162,7 +1162,7 @@ def admin_force_refresh_all_file_ids():
                 
                 # إنشاء رابط المرة التالية
                 next_offset = offset + 100
-                next_url = f"https://video-bot-r.onrender.com/admin/force_refresh_all_file_ids?admin_id={admin_id}&offset={next_offset}"
+                next_url = f"{APP_URL}/admin/force_refresh_all_file_ids?admin_id={admin_id}&offset={next_offset}"
                 
                 message = (
                     f"✅ *اكتمل التحديث!*\n\n"

@@ -58,8 +58,9 @@ def register(bot):
                         # نعرف أنه video، نستخدمه مباشرة  
                         use_document = False
                     else:
-                        # content_type غير محدد (NULL) - نفترض video
-                        use_document = False
+                        # content_type غير محدد (NULL) - نستخدم Document كوضع آمن
+                        # هذا يضمن عمل البحث حتى لو لم يتم تحديث الـ file_ids بعد
+                        use_document = True
                     
                     res = create_inline_result(video, use_document=use_document)
                     if res:
