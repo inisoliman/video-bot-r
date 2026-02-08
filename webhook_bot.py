@@ -1181,6 +1181,14 @@ def admin_force_refresh_all_file_ids():
                 
                 bot.send_message(admin_id, message, parse_mode="Markdown")
                 
+                # مسح الـ cache بعد التحديث
+                try:
+                    from db_manager import clear_search_cache
+                    clear_search_cache()
+                    logger.info("Search cache cleared after force refresh")
+                except Exception as cache_err:
+                    logger.warning(f"Could not clear search cache: {cache_err}")
+                
                 cursor.close()
                 conn.close()
                 
