@@ -1,414 +1,226 @@
-
 # handlers/admin_handlers.py
 
-import logging
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import logging
+import re
+import time
+from telebot.apihelper import ApiTelegramException
 
-from config.config import Config
-from config.constants import (
-    EMOJI_ADMIN, EMOJI_CHECK, EMOJI_ERROR, EMOJI_BACK, EMOJI_BROADCAST,
-    EMOJI_DELETE, EMOJI_MOVE, EMOJI_CLOCK, EMOJI_WARNING, EMOJI_FOLDER,
-    MSG_ADMIN_ONLY, MSG_BROADCAST_PROMPT, MSG_BROADCAST_CONFIRM, MSG_BROADCAST_SENT,
-    MSG_BROADCAST_CANCELLED, MSG_BROADCAST_NO_USERS, MSG_VIDEO_MOVE_PROMPT,
-    MSG_VIDEO_MOVE_CATEGORY_PROMPT, MSG_VIDEO_MOVE_CANCELLED, MSG_VIDEO_MOVE_INVALID_ID,
-    MSG_VIDEO_MOVE_NO_CATEGORY, MSG_VIDEO_MOVE_SAME_CATEGORY, MSG_UPDATE_METADATA_STARTED,
-    MSG_THUMBNAIL_UPDATE_STARTED, MSG_DB_OPTIMIZER_STARTED, MSG_HISTORY_CLEANER_STARTED,
-    MSG_RESET_FILE_IDS_STARTED, MSG_FIX_DATABASE_FILE_IDS_STARTED, MSG_CHECK_FILE_IDS_STARTED,
-    MSG_EXTRACT_CHANNEL_THUMBNAILS_STARTED, MSG_FIX_VIDEOS_PROFESSIONAL_STARTED,
-    MSG_MIGRATE_DATABASE_STARTED, CALLBACK_DELIMITER, PARSE_MODE_HTML
+from db_manager import (
+    add_category, get_all_user_ids, add_required_channel, remove_required_channel,
+    get_required_channels, get_subscriber_count, get_bot_stats, get_popular_videos,
+    delete_videos_by_ids, get_video_by_id, delete_bot_user,
+    delete_category_and_contents, move_videos_from_category, delete_category_by_id,
+    get_categories_tree, set_active_category_id, get_child_categories,
+    move_videos_bulk, get_category_by_id  # إضافة get_category_by_id
 )
-from services import (
-    user_service, video_service, category_service, required_channels_repository,
-    bot_settings_repository
-)
-from core.state_manager import States, state_manager, set_user_waiting_for_input, clear_user_waiting_state
-from utils.telegram_utils import create_hierarchical_category_keyboard
+
+from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER, create_hierarchical_category_keyboard
 
 logger = logging.getLogger(__name__)
 
-# Admin steps dictionary (can be replaced by state_manager context)
-admin_steps = {}
+# --- Top-level functions for callbacks and next_step_handlers ---
 
-def register_admin_handlers(bot, admin_ids):
+def handle_rich_broadcast(message, bot):
+    if check_cancel(message, bot): return
+    user_ids = get_all_user_ids()
+    sent_count, failed_count, removed_count = 0, 0, 0
+    bot.send_message(message.chat.id, f"بدء إرسال الرسالة إلى {len(user_ids)} مشترك...")
+    for user_id in user_ids:
+        try:
+            bot.copy_message(user_id, message.chat.id, message.message_id)
+            sent_count += 1
+        except ApiTelegramException as e:
+            if 'bot was blocked by the user' in e.description:
+                delete_bot_user(user_id)
+                removed_count += 1
+                logger.warning(f"Failed to send broadcast to {user_id}: Bot was blocked. User deleted.")
+            else:
+                failed_count += 1
+                logger.warning(f"Failed to send broadcast to {user_id}: {e}")
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Unexpected error broadcasting to {user_id}: {e}")
+        time.sleep(0.1)
+    bot.send_message(message.chat.id,
+                     f"✅ اكتمل البث!\n\n- رسائل ناجحة: {sent_count}\n- رسائل فاشلة (لم يتم إرسالها): {failed_count}\n- مشتركين محذوفين (لأنهم حظروا البوت): {removed_count}")
+
+def handle_add_new_category(message, bot):
+    if check_cancel(message, bot): return
+    category_name = message.text.strip()
+    step_data = admin_steps.pop(message.chat.id, {})
+    parent_id = step_data.get("parent_id")
+    success, result = add_category(category_name, parent_id=parent_id)
+    if success:
+        parent_info = ""
+        if parent_id:
+            parent_cat = get_category_by_id(parent_id)
+            if parent_cat:
+                parent_info = f" تحت التصنيف 📂 \"{parent_cat['name']}\""
+        bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\"{parent_info}.")
+    else:
+        bot.reply_to(message, f"❌ خطأ في إنشاء التصنيف: {result[1] if isinstance(result, tuple) else result}")
+
+def handle_add_channel_step1(message, bot):
+    if check_cancel(message, bot): return
+    channel_id = message.text.strip()
+    admin_steps[message.chat.id] = {"channel_id": channel_id}
+    msg = bot.send_message(message.chat.id, "الآن أرسل اسم القناة (مثال: قناة الأفلام). (أو /cancel)")
+    bot.register_next_step_handler(msg, handle_add_channel_step2, bot)
+
+def handle_add_channel_step2(message, bot):
+    if check_cancel(message, bot): return
+    channel_name = message.text.strip()
+    channel_id = admin_steps.pop(message.chat.id, {}).get("channel_id")
+    if not channel_id: return
+    if add_required_channel(channel_id, channel_name):
+        bot.send_message(message.chat.id, f"✅ تم إضافة القناة \"{channel_name}\" (ID: `{channel_id}`).", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "❌ حدث خطأ أثناء إضافة القناة. تأكد من أن المعرف صحيح.")
+
+def handle_remove_channel_step(message, bot):
+    if check_cancel(message, bot): return
+    channel_id = message.text.strip()
+    if remove_required_channel(channel_id):
+        bot.send_message(message.chat.id, f"✅ تم إزالة القناة (ID: `{channel_id}`) من القنوات المطلوبة.", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "❌ حدث خطأ أو القناة غير موجودة.")
+
+def handle_list_channels(message, bot):
+    channels = get_required_channels()
+    if channels:
+        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)" for ch in channels])
+        bot.send_message(message.chat.id, response, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "لا توجد قنوات مطلوبة حالياً.")
+
+def handle_delete_by_ids_input(message, bot):
+    if check_cancel(message, bot): return
+    try:
+        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
+        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
+        if not video_ids:
+            msg = bot.reply_to(message, "لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
+            bot.register_next_step_handler(msg, handle_delete_by_ids_input, bot)
+            return
+        deleted_count = delete_videos_by_ids(video_ids)
+        bot.reply_to(message, f"✅ تم حذف {deleted_count} فيديو بنجاح.")
+    except Exception as e:
+        logger.error(f"Error in handle_delete_by_ids_input: {e}", exc_info=True)
+        bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
+
+def handle_move_by_id_input(message, bot):
+    """معالج النقل الفردي والجماعي للفيديوهات - محدث بالشجرة الهرمية"""
+    if check_cancel(message, bot): 
+        return
+
+    try:
+        # قراءة الأرقام المدخلة (يدعم رقم واحد أو أرقام متعددة)
+        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
+        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
+
+        if not video_ids:
+            msg = bot.reply_to(message, "❌ لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
+            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
+            return
+
+        # التحقق من وجود الفيديوهات
+        valid_videos = []
+        invalid_ids = []
+
+        for vid_id in video_ids:
+            video = get_video_by_id(vid_id)
+            if video:
+                valid_videos.append(vid_id)
+            else:
+                invalid_ids.append(vid_id)
+
+        if not valid_videos:
+            msg = bot.reply_to(message, "❌ لا توجد فيديوهات صحيحة بالأرقام المدخلة. حاول مرة أخرى أو أرسل /cancel.")
+            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
+            return
+
+        # حفظ أرقام الفيديوهات في admin_steps
+        admin_steps[message.chat.id] = {"video_ids": valid_videos}
+
+        # 🌟 استخدام الكيبورد الهرمي الجديد بدلاً من البناء اليدوي
+        move_keyboard = create_hierarchical_category_keyboard("admin::move_confirm", add_back_button=False)
+        move_keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+
+        # رسالة مختلفة للنقل الفردي أو الجماعي
+        if len(valid_videos) == 1:
+            message_text = f"✅ تم اختيار الفيديو رقم {valid_videos[0]}\n\n🎯 اختر التصنيف الجديد:"
+        else:
+            message_text = (
+                f"✅ تم اختيار {len(valid_videos)} فيديو للنقل\n\n"
+                f"📝 الأرقام: {', '.join(map(str, valid_videos))}\n\n"
+            )
+            if invalid_ids:
+                message_text += f"⚠️ أرقام غير موجودة (تم تجاهلها): {', '.join(map(str, invalid_ids))}\n\n"
+            message_text += "🎯 اختر التصنيف الجديد:"
+
+        bot.reply_to(message, message_text, reply_markup=move_keyboard)
+
+    except ValueError:
+        msg = bot.reply_to(message, "❌ الرجاء إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
+        bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
+    except Exception as e:
+        logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
+        bot.reply_to(message, "❌ حدث خطأ غير متوقع.")
+
+def check_cancel(message, bot):
+    if message.text == "/cancel":
+        if message.chat.id in admin_steps:
+            del admin_steps[message.chat.id]
+        bot.send_message(message.chat.id, "تم إلغاء العملية.")
+        return True
+    return False
+
+# --- Handler Registration ---
+
+def register(bot, admin_ids):
+    def check_admin(func):
+        def wrapper(message):
+            if message.from_user.id in admin_ids:
+                return func(message)
+            else:
+                bot.reply_to(message, "ليس لديك صلاحية الوصول إلى هذا الأمر.")
+        return wrapper
+
+    def generate_admin_panel():
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(InlineKeyboardButton("➕ إضافة تصنيف", callback_data="admin::add_new_cat"),
+                     InlineKeyboardButton("🗑️ حذف تصنيف", callback_data="admin::delete_category_select"))
+        keyboard.add(InlineKeyboardButton("➡️ نقل فيديو بالرقم", callback_data="admin::move_video_by_id"),
+                     InlineKeyboardButton("❌ حذف فيديوهات بالأرقام", callback_data="admin::delete_videos_by_ids"))
+        keyboard.add(InlineKeyboardButton("🔘 تعيين التصنيف النشط", callback_data="admin::set_active"),
+                     InlineKeyboardButton("🔄 تحديث بيانات الفيديوهات القديمة", callback_data="admin::update_metadata"))
+        
+        # أزرار إدارة التعليقات
+        keyboard.add(InlineKeyboardButton("💬 عرض التعليقات", callback_data="admin::view_comments"),
+                     InlineKeyboardButton("📊 إحصائيات التعليقات", callback_data="admin::comments_stats"))
+        keyboard.add(InlineKeyboardButton("🗑️ حذف جميع التعليقات", callback_data="admin::delete_all_comments"),
+                     InlineKeyboardButton("🧹 حذف التعليقات القديمة", callback_data="admin::delete_old_comments"))
+        
+        keyboard.add(InlineKeyboardButton("➕ إضافة قناة اشتراك", callback_data="admin::add_channel"),
+                     InlineKeyboardButton("➖ إزالة قناة اشتراك", callback_data="admin::remove_channel"))
+        keyboard.add(InlineKeyboardButton("📋 عرض القنوات", callback_data="admin::list_channels"))
+        keyboard.add(InlineKeyboardButton("📢 بث رسالة", callback_data="admin::broadcast"),
+                     InlineKeyboardButton("📊 الإحصائيات", callback_data="admin::stats"),
+                     InlineKeyboardButton("👤 عدد المشتركين", callback_data="admin::sub_count"))
+        return keyboard
 
     @bot.message_handler(commands=["admin"])
+    @check_admin
     def admin_panel(message):
-        if message.from_user.id not in admin_ids:
-            bot.reply_to(message, MSG_ADMIN_ONLY)
-            return
-        
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton(f"{EMOJI_FOLDER} إدارة التصنيفات", callback_data="admin::manage_categories"),
-            InlineKeyboardButton(f"{EMOJI_MOVE} نقل فيديو", callback_data="admin::move_video"),
-            InlineKeyboardButton(f"{EMOJI_BROADCAST} إرسال بث", callback_data="admin::broadcast"),
-            InlineKeyboardButton(f"{EMOJI_ADMIN} إدارة القنوات", callback_data="admin::manage_channels"),
-            InlineKeyboardButton(f"{EMOJI_CLOCK} مهام الصيانة", callback_data="admin::maintenance"),
-            InlineKeyboardButton(f"{EMOJI_ADMIN} الإعدادات", callback_data="admin::settings")
-        )
-        bot.reply_to(message, f"{EMOJI_ADMIN} لوحة تحكم الأدمن:", reply_markup=markup, parse_mode=PARSE_MODE_HTML)
+        bot.send_message(message.chat.id, "🎛️ أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:", reply_markup=generate_admin_panel())
 
-    # --- Admin Callbacks ---
-    @bot.callback_query_handler(func=lambda call: call.data.startswith("admin::"))
-    def admin_callbacks(call):
-        user_id = call.from_user.id
-        if user_id not in admin_ids:
-            bot.answer_callback_query(call.id, MSG_ADMIN_ONLY, show_alert=True)
-            return
-
-        data = call.data.split(CALLBACK_DELIMITER)
-        action = data[1]
-
-        if action == "manage_categories":
-            markup = InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                InlineKeyboardButton(f"{EMOJI_FOLDER} إضافة تصنيف", callback_data="admin::add_category"),
-                InlineKeyboardButton(f"{EMOJI_FOLDER} إعادة تسمية تصنيف", callback_data="admin::rename_category"),
-                InlineKeyboardButton(f"{EMOJI_DELETE} حذف تصنيف", callback_data="admin::delete_category"),
-                InlineKeyboardButton(f"{EMOJI_MOVE} نقل فيديوهات لتصنيف", callback_data="admin::move_videos_to_category"),
-                InlineKeyboardButton(f"{EMOJI_BACK} رجوع", callback_data="admin::back_to_admin_panel")
-            )
-            bot.edit_message_text(f"{EMOJI_FOLDER} إدارة التصنيفات:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "add_category":
-            set_user_waiting_for_input(user_id, States.ADMIN_ADD_CATEGORY)
-            bot.edit_message_text(f"{EMOJI_FOLDER} أرسل اسم التصنيف الجديد (يمكنك إضافة تصنيف فرعي بكتابة: `اسم التصنيف الرئيسي/اسم التصنيف الفرعي`):", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "rename_category":
-            set_user_waiting_for_input(user_id, States.ADMIN_RENAME_CATEGORY)
-            bot.edit_message_text(f"{EMOJI_FOLDER} أرسل معرف التصنيف الذي تريد إعادة تسميته واسمه الجديد (مثال: `123/اسم جديد`):", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "delete_category":
-            set_user_waiting_for_input(user_id, States.ADMIN_DELETE_CATEGORY)
-            bot.edit_message_text(f"{EMOJI_DELETE} أرسل معرف التصنيف الذي تريد حذفه (سيتم حذف جميع الفيديوهات والتصنيفات الفرعية المرتبطة به):", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "move_video":
-            set_user_waiting_for_input(user_id, States.WAITING_VIDEO_ID_FOR_MOVE)
-            bot.edit_message_text(MSG_VIDEO_MOVE_PROMPT, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "broadcast":
-            set_user_waiting_for_input(user_id, States.WAITING_BROADCAST_MESSAGE)
-            bot.edit_message_text(MSG_BROADCAST_PROMPT, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "manage_channels":
-            markup = InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                InlineKeyboardButton(f"{EMOJI_CHECK} إضافة قناة", callback_data="admin::add_channel"),
-                InlineKeyboardButton(f"{EMOJI_DELETE} حذف قناة", callback_data="admin::remove_channel"),
-                InlineKeyboardButton(f"{EMOJI_BACK} رجوع", callback_data="admin::back_to_admin_panel")
-            )
-            bot.edit_message_text(f"{EMOJI_ADMIN} إدارة القنوات:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "add_channel":
-            set_user_waiting_for_input(user_id, States.ADMIN_ADD_CHANNEL)
-            bot.edit_message_text(f"{EMOJI_CHECK} أرسل معرف القناة واسمها (مثال: `-1001234567890/اسم القناة` أو `@username/اسم القناة`):", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "remove_channel":
-            set_user_waiting_for_input(user_id, States.ADMIN_REMOVE_CHANNEL)
-            bot.edit_message_text(f"{EMOJI_DELETE} أرسل معرف القناة التي تريد حذفها (مثال: `-1001234567890` أو `@username`):", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "maintenance":
-            markup = InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                InlineKeyboardButton(f"{EMOJI_CLOCK} تحديث البيانات الوصفية للفيديوهات", callback_data="admin::update_metadata"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} تحديث الصور المصغرة للفيديوهات", callback_data="admin::update_thumbnails"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} تحسين قاعدة البيانات", callback_data="admin::optimize_db"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} تنظيف سجل المشاهدة القديم", callback_data="admin::clean_history"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} إعادة تعيين معرفات الملفات", callback_data="admin::reset_file_ids"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} إصلاح معرفات الملفات في قاعدة البيانات", callback_data="admin::fix_database_file_ids"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} التحقق من معرفات الملفات", callback_data="admin::check_file_ids"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} استخراج الصور المصغرة للقنوات", callback_data="admin::extract_channel_thumbnails"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} إصلاح الفيديوهات الاحترافية", callback_data="admin::fix_videos_professional"),
-                InlineKeyboardButton(f"{EMOJI_CLOCK} ترحيل قاعدة البيانات", callback_data="admin::migrate_database"),
-                InlineKeyboardButton(f"{EMOJI_BACK} رجوع", callback_data="admin::back_to_admin_panel")
-            )
-            bot.edit_message_text(f"{EMOJI_CLOCK} مهام الصيانة:", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "update_metadata":
-            bot.edit_message_text(MSG_UPDATE_METADATA_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for update_metadata
-            bot.answer_callback_query(call.id, "بدأت عملية تحديث البيانات الوصفية في الخلفية.")
-
-        elif action == "update_thumbnails":
-            bot.edit_message_text(MSG_THUMBNAIL_UPDATE_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for update_thumbnails
-            bot.answer_callback_query(call.id, "بدأت عملية تحديث الصور المصغرة في الخلفية.")
-
-        elif action == "optimize_db":
-            bot.edit_message_text(MSG_DB_OPTIMIZER_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for optimize_db
-            bot.answer_callback_query(call.id, "بدأت عملية تحسين قاعدة البيانات في الخلفية.")
-
-        elif action == "clean_history":
-            bot.edit_message_text(MSG_HISTORY_CLEANER_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for clean_history
-            bot.answer_callback_query(call.id, "بدأت عملية تنظيف سجل المشاهدة في الخلفية.")
-
-        elif action == "reset_file_ids":
-            bot.edit_message_text(MSG_RESET_FILE_IDS_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for reset_file_ids
-            bot.answer_callback_query(call.id, "بدأت عملية إعادة تعيين معرفات الملفات في الخلفية.")
-
-        elif action == "fix_database_file_ids":
-            bot.edit_message_text(MSG_FIX_DATABASE_FILE_IDS_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for fix_database_file_ids
-            bot.answer_callback_query(call.id, "بدأت عملية إصلاح معرفات الملفات في قاعدة البيانات في الخلفية.")
-
-        elif action == "check_file_ids":
-            bot.edit_message_text(MSG_CHECK_FILE_IDS_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for check_file_ids
-            bot.answer_callback_query(call.id, "بدأت عملية التحقق من معرفات الملفات في الخلفية.")
-
-        elif action == "extract_channel_thumbnails":
-            bot.edit_message_text(MSG_EXTRACT_CHANNEL_THUMBNAILS_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for extract_channel_thumbnails
-            bot.answer_callback_query(call.id, "بدأت عملية استخراج الصور المصغرة للقنوات في الخلفية.")
-
-        elif action == "fix_videos_professional":
-            bot.edit_message_text(MSG_FIX_VIDEOS_PROFESSIONAL_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for fix_videos_professional
-            bot.answer_callback_query(call.id, "بدأت عملية إصلاح الفيديوهات الاحترافية في الخلفية.")
-
-        elif action == "migrate_database":
-            bot.edit_message_text(MSG_MIGRATE_DATABASE_STARTED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-            # TODO: Implement actual background task for migrate_database
-            bot.answer_callback_query(call.id, "بدأت عملية ترحيل قاعدة البيانات في الخلفية.")
-
-        elif action == "settings":
-            markup = InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                InlineKeyboardButton(f"{EMOJI_BACK} رجوع", callback_data="admin::back_to_admin_panel")
-            )
-            bot.edit_message_text(f"{EMOJI_ADMIN} الإعدادات (قريباً):", call.message.chat.id, call.message.message_id, reply_markup=markup, parse_mode=PARSE_MODE_HTML)
-
-        elif action == "back_to_admin_panel":
-            admin_panel(call.message)
-
-        bot.answer_callback_query(call.id)
-
-    # --- Admin State Handlers ---
-    @state_manager.state_handler(States.ADMIN_ADD_CATEGORY)
-    def handle_admin_add_category_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-        
-        parts = message.text.split("/")
-        category_name = parts[-1].strip()
-        parent_category_name = parts[0].strip() if len(parts) > 1 else None
-
-        parent_id = None
-        if parent_category_name:
-            parent_category = category_service.get_category_by_name_and_parent(parent_category_name)
-            if not parent_category:
-                bot.reply_to(message, f"{EMOJI_ERROR} التصنيف الرئيسي ‘{parent_category_name}’ غير موجود.", parse_mode=PARSE_MODE_HTML)
-                return
-            parent_id = parent_category["id"]
-
-        if category_service.get_category_by_name_and_parent(category_name, parent_id):
-            bot.reply_to(message, f"{EMOJI_WARNING} التصنيف ‘{category_name}’ موجود بالفعل ضمن هذا التصنيف الرئيسي.", parse_mode=PARSE_MODE_HTML)
-            return
-
-        new_category_id = category_service.add_new_category(category_name, parent_id)
-        if new_category_id:
-            bot.reply_to(message, f"{EMOJI_CHECK} تم إضافة التصنيف ‘{category_name}’ بنجاح بمعرف: `{new_category_id}`", parse_mode=PARSE_MODE_HTML)
+    @bot.message_handler(commands=["cancel"])
+    @check_admin
+    def cancel_step(message):
+        if message.chat.id in admin_steps:
+            del admin_steps[message.chat.id]
+            bot.send_message(message.chat.id, "✅ تم إلغاء العملية الحالية بنجاح.")
         else:
-            bot.reply_to(message, f"{EMOJI_ERROR} حدث خطأ أثناء إضافة التصنيف.", parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.ADMIN_RENAME_CATEGORY)
-    def handle_admin_rename_category_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-
-        parts = message.text.split("/")
-        if len(parts) != 2 or not parts[0].strip().isdigit():
-            bot.reply_to(message, f"{EMOJI_ERROR} صيغة غير صحيحة. يرجى استخدام `معرف_التصنيف/الاسم_الجديد`.", parse_mode=PARSE_MODE_HTML)
-            return
-        
-        category_id = int(parts[0].strip())
-        new_name = parts[1].strip()
-
-        if not category_service.get_category_details(category_id):
-            bot.reply_to(message, f"{EMOJI_ERROR} التصنيف بمعرف `{category_id}` غير موجود.", parse_mode=PARSE_MODE_HTML)
-            return
-
-        if category_service.update_category_name(category_id, new_name):
-            bot.reply_to(message, f"{EMOJI_CHECK} تم تحديث اسم التصنيف `{category_id}` إلى ‘{new_name}’ بنجاح.", parse_mode=PARSE_MODE_HTML)
-        else:
-            bot.reply_to(message, f"{EMOJI_ERROR} حدث خطأ أثناء إعادة تسمية التصنيف.", parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.ADMIN_DELETE_CATEGORY)
-    def handle_admin_delete_category_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-
-        if not message.text.strip().isdigit():
-            bot.reply_to(message, f"{EMOJI_ERROR} معرف التصنيف يجب أن يكون رقماً.", parse_mode=PARSE_MODE_HTML)
-            return
-        
-        category_id = int(message.text.strip())
-
-        if not category_service.get_category_details(category_id):
-            bot.reply_to(message, f"{EMOJI_ERROR} التصنيف بمعرف `{category_id}` غير موجود.", parse_mode=PARSE_MODE_HTML)
-            return
-
-        if category_service.delete_existing_category(category_id):
-            bot.reply_to(message, f"{EMOJI_CHECK} تم حذف التصنيف `{category_id}` وجميع الفيديوهات والتصنيفات الفرعية المرتبطة به بنجاح.", parse_mode=PARSE_MODE_HTML)
-        else:
-            bot.reply_to(message, f"{EMOJI_ERROR} حدث خطأ أثناء حذف التصنيف.", parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.WAITING_VIDEO_ID_FOR_MOVE)
-    def handle_waiting_video_id_for_move_state(message, bot, context):
-        user_id = message.from_user.id
-        video_id_str = message.text.strip()
-        if not video_id_str.isdigit():
-            bot.reply_to(message, MSG_VIDEO_MOVE_INVALID_ID, parse_mode=PARSE_MODE_HTML)
-            clear_user_waiting_state(user_id)
-            return
-        video_id = int(video_id_str)
-        video = video_service.get_video_details(video_id)
-        if not video:
-            bot.reply_to(message, MSG_VIDEO_MOVE_INVALID_ID, parse_mode=PARSE_MODE_HTML)
-            clear_user_waiting_state(user_id)
-            return
-        
-        set_user_waiting_for_input(user_id, States.WAITING_CATEGORY_FOR_MOVE, context={"video_id": video_id})
-        keyboard = create_hierarchical_category_keyboard(f"admin{CALLBACK_DELIMITER}move_confirm")
-        bot.reply_to(message, MSG_VIDEO_MOVE_CATEGORY_PROMPT.format(video_id=video_id), reply_markup=keyboard, parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.WAITING_CATEGORY_FOR_MOVE)
-    def handle_waiting_category_for_move_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-        bot.reply_to(message, MSG_VIDEO_MOVE_CANCELLED, parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.WAITING_BROADCAST_MESSAGE)
-    def handle_waiting_broadcast_message_state(message, bot, context):
-        user_id = message.from_user.id
-        broadcast_message = message.text
-        user_count = len(user_service.get_all_bot_users())
-
-        markup = InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            InlineKeyboardButton(f"{EMOJI_CHECK} تأكيد الإرسال", callback_data=f"admin{CALLBACK_DELIMITER}broadcast_confirm"),
-            InlineKeyboardButton(f"{EMOJI_ERROR} إلغاء", callback_data=f"admin{CALLBACK_DELIMITER}broadcast_cancel")
-        )
-        set_user_waiting_for_input(user_id, States.ADMIN_BROADCAST_CONFIRM, context={"message": broadcast_message})
-        bot.reply_to(message, MSG_BROADCAST_CONFIRM.format(user_count=user_count), reply_markup=markup, parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.ADMIN_BROADCAST_CONFIRM)
-    def handle_admin_broadcast_confirm_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-        bot.reply_to(message, MSG_BROADCAST_CANCELLED, parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.ADMIN_ADD_CHANNEL)
-    def handle_admin_add_channel_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-
-        parts = message.text.split("/")
-        if len(parts) != 2:
-            bot.reply_to(message, f"{EMOJI_ERROR} صيغة غير صحيحة. يرجى استخدام `معرف_القناة/اسم_القناة`.", parse_mode=PARSE_MODE_HTML)
-            return
-        
-        channel_id_str = parts[0].strip()
-        channel_name = parts[1].strip()
-
-        try:
-            channel_id = int(channel_id_str) if channel_id_str.startswith("-100") else channel_id_str
-        except ValueError:
-            bot.reply_to(message, f"{EMOJI_ERROR} معرف القناة غير صحيح.", parse_mode=PARSE_MODE_HTML)
-            return
-
-        if required_channels_repository.add_required_channel(channel_id, channel_name):
-            bot.reply_to(message, f"{EMOJI_CHECK} تم إضافة القناة ‘{channel_name}’ بنجاح.", parse_mode=PARSE_MODE_HTML)
-        else:
-            bot.reply_to(message, f"{EMOJI_ERROR} حدث خطأ أثناء إضافة القناة.", parse_mode=PARSE_MODE_HTML)
-
-    @state_manager.state_handler(States.ADMIN_REMOVE_CHANNEL)
-    def handle_admin_remove_channel_state(message, bot, context):
-        user_id = message.from_user.id
-        clear_user_waiting_state(user_id)
-
-        channel_id_str = message.text.strip()
-        try:
-            channel_id = int(channel_id_str) if channel_id_str.startswith("-100") else channel_id_str
-        except ValueError:
-            bot.reply_to(message, f"{EMOJI_ERROR} معرف القناة غير صحيح.", parse_mode=PARSE_MODE_HTML)
-            return
-
-        if required_channels_repository.remove_required_channel(channel_id):
-            bot.reply_to(message, f"{EMOJI_CHECK} تم حذف القناة بنجاح.", parse_mode=PARSE_MODE_HTML)
-        else:
-            bot.reply_to(message, f"{EMOJI_ERROR} حدث خطأ أثناء حذف القناة أو أنها غير موجودة.", parse_mode=PARSE_MODE_HTML)
-
-    # --- Admin Callback for moving videos to category ---
-    @bot.callback_query_handler(func=lambda call: call.data.startswith(f"admin{CALLBACK_DELIMITER}move_confirm"))
-    def admin_move_confirm_callback(call):
-        user_id = call.from_user.id
-        if user_id not in admin_ids:
-            bot.answer_callback_query(call.id, MSG_ADMIN_ONLY, show_alert=True)
-            return
-
-        data = call.data.split(CALLBACK_DELIMITER)
-        action = data[1]
-        category_id = int(data[2])
-
-        state_data = state_manager.get_user_state(user_id)
-        if not state_data or state_data["state"] != States.WAITING_CATEGORY_FOR_MOVE or "video_id" not in state_data["context"]:
-            bot.answer_callback_query(call.id, f"{EMOJI_ERROR} انتهت صلاحية العملية أو حدث خطأ.", show_alert=True)
-            clear_user_waiting_state(user_id)
-            return
-        
-        video_id = state_data["context"]["video_id"]
-        clear_user_waiting_state(user_id)
-
-        if video_service.move_video_to_new_category(video_id, category_id):
-            bot.edit_message_text(MSG_VIDEO_MOVED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-        else:
-            bot.edit_message_text(f"{EMOJI_ERROR} حدث خطأ أثناء نقل الفيديو.", call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-        bot.answer_callback_query(call.id)
-
-    # --- Admin Callback for broadcast confirmation ---
-    @bot.callback_query_handler(func=lambda call: call.data == f"admin{CALLBACK_DELIMITER}broadcast_confirm")
-    def admin_broadcast_confirm_callback(call):
-        user_id = call.from_user.id
-        if user_id not in admin_ids:
-            bot.answer_callback_query(call.id, MSG_ADMIN_ONLY, show_alert=True)
-            return
-
-        state_data = state_manager.get_user_state(user_id)
-        if not state_data or state_data["state"] != States.ADMIN_BROADCAST_CONFIRM or "message" not in state_data["context"]:
-            bot.answer_callback_query(call.id, f"{EMOJI_ERROR} انتهت صلاحية عملية البث أو حدث خطأ.", show_alert=True)
-            clear_user_waiting_state(user_id)
-            return
-        
-        broadcast_message = state_data["context"]["message"]
-        clear_user_waiting_state(user_id)
-
-        all_users = user_service.get_all_bot_users()
-        total_users = len(all_users)
-        success_count = 0
-
-        for user in all_users:
-            try:
-                bot.send_message(user["user_id"], broadcast_message, parse_mode=PARSE_MODE_HTML)
-                success_count += 1
-            except Exception as e:
-                logger.error(f"Failed to send broadcast to user {user["user_id"]}: {e}")
-        
-        bot.edit_message_text(MSG_BROADCAST_SENT.format(success_count=success_count, total_count=total_users), call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-        bot.answer_callback_query(call.id, "تم إرسال البث.")
-
-    @bot.callback_query_handler(func=lambda call: call.data == f"admin{CALLBACK_DELIMITER}broadcast_cancel")
-    def admin_broadcast_cancel_callback(call):
-        user_id = call.from_user.id
-        if user_id not in admin_ids:
-            bot.answer_callback_query(call.id, MSG_ADMIN_ONLY, show_alert=True)
-            return
-        clear_user_waiting_state(user_id)
-        bot.edit_message_text(MSG_BROADCAST_CANCELLED, call.message.chat.id, call.message.message_id, parse_mode=PARSE_MODE_HTML)
-        bot.answer_callback_query(call.id, "تم إلغاء البث.")
-
-
+            bot.send_message(message.chat.id, "لا توجد عملية لإلغائها.")
