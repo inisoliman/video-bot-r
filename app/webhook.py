@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # ==============================================================================
-# ملف: app/webhook.py (Flask Application)
-# الوصف: تطبيق Flask للتعامل مع webhooks من Telegram
+# Ù…Ù„Ù: app/webhook.py (Flask Application)
+# Ø§Ù„ÙˆØµÙ: ØªØ·Ø¨ÙŠÙ‚ Flask Ù„Ù„ØªØ¹Ø§Ù…Ù„ Ù…Ø¹ webhooks Ù…Ù† Telegram
 # ==============================================================================
 
 from flask import Flask, request, jsonify, abort
@@ -16,16 +16,16 @@ from .logger import setup_logger
 
 logger = logging.getLogger(__name__)
 
-# إعداد Flask
+# Ø¥Ø¹Ø¯Ø§Ø¯ Flask
 app = Flask(__name__)
 
-# إدارة الحالة
+# Ø¥Ø¯Ø§Ø±Ø© Ø§Ù„Ø­Ø§Ù„Ø©
 state_manager = StateManager()
 
 # --- Routes ---
 @app.route("/", methods=["GET"])
 def health_check():
-    """فحص صحة الخدمة"""
+    """ÙØ­Øµ ØµØ­Ø© Ø§Ù„Ø®Ø¯Ù…Ø©"""
     return jsonify({
         "status": "healthy",
         "bot": "video-bot-webhook",
@@ -35,7 +35,7 @@ def health_check():
 
 @app.route("/health", methods=["GET"])
 def health():
-    """فحص صحة قاعدة البيانات"""
+    """ÙØ­Øµ ØµØ­Ø© Ù‚Ø§Ø¹Ø¯Ø© Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª"""
     try:
         with get_db_connection() as conn:
             if conn:
@@ -54,7 +54,7 @@ def health():
 
 @app.route(f"/bot{settings.BOT_TOKEN}", methods=["POST"])
 def webhook():
-    """معالجة الويبهاوك"""
+    """Ù…Ø¹Ø§Ù„Ø¬Ø© Ø§Ù„ÙˆÙŠØ¨Ù‡Ø§ÙˆÙƒ"""
     try:
         if request.content_type != 'application/json':
             logger.warning(f"Invalid content-type: {request.content_type}")
@@ -70,7 +70,7 @@ def webhook():
             logger.warning("Invalid update object")
             abort(400)
         
-        # معالجة التحديث
+        # Ù…Ø¹Ø§Ù„Ø¬Ø© Ø§Ù„ØªØ­Ø¯ÙŠØ«
         process_update(update)
         
         return jsonify({"ok": True})
@@ -78,69 +78,3 @@ def webhook():
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
         return jsonify({"error": "server_error"}), 500
-
-def process_update(update):
-    """معالجة التحديثات"""
-    try:
-        # معالجة حالة المستخدم أولاً
-        if update.message and update.message.from_user:
-            if state_manager.handle_message(update.message, bot):
-                return
-        
-        # معالجة أنواع التحديثات المختلفة
-        if update.message:
-            bot.process_new_messages([update.message])
-        elif update.callback_query:
-            bot.process_new_callback_query([update.callback_query])
-        elif update.inline_query:
-            bot.process_new_inline_query([update.inline_query])
-            
-    except Exception as e:
-        logger.error(f"Process update error: {e}", exc_info=True)
-
-@app.route("/set_webhook", methods=["POST", "GET"])
-def set_webhook():
-    """تعيين الويبهاوك"""
-    try:
-        webhook_url = f"{settings.APP_URL}/bot{settings.BOT_TOKEN}"
-        
-        # حذف الويبهاوك القديم
-        bot.remove_webhook()
-        logger.info("🗑️ Old webhook removed")
-        
-        # تعيين ويبهاوك جديد
-        webhook_params = {
-            'url': webhook_url,
-            'max_connections': 40,
-            'drop_pending_updates': True,
-            'allowed_updates': ["message", "callback_query", "inline_query"]
-        }
-        
-        # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
-        if settings.WEBHOOK_SECRET and settings.WEBHOOK_SECRET != "":
-            webhook_params['secret_token'] = settings.WEBHOOK_SECRET
-            logger.info("🔐 Webhook secret token configured")
-        else:
-            logger.warning("⚠️ Using webhook without secret token")
-        
-        result = bot.set_webhook(**webhook_params)
-        
-        if result:
-            logger.info(f"✅ Webhook set: {webhook_url}")
-            return jsonify({
-                "status": "success", 
-                "webhook": webhook_url
-            })
-        else:
-            logger.error("❌ Failed to set webhook")
-            return jsonify({
-                "status": "failed",
-                "error": "Could not set webhook"
-            }), 500
-            
-    except Exception as e:
-        logger.error(f"Set webhook error: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500

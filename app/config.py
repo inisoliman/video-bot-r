@@ -1,4 +1,5 @@
-from pydantic import BaseSettings, AnyUrl, Field
+from pydantic_settings import BaseSettings
+from pydantic import AnyUrl, Field
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
