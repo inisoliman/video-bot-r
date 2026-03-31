@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: video-bot-r
+    runtime: python3
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn --bind 0.0.0.0:$PORT app.webhook:app"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.16
+      - key: BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CHANNEL_ID
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+
+databases:
+  - name: video-bot-db
+    databaseName: video_bot_r
+    user: video_bot_user
+    plan: free

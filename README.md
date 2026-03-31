@@ -1,85 +1,212 @@
-# 🎬 Video Bot - Telegram Video Archive Bot
+# 🤖 Telegram Video Archive Bot - النسخة المحسنة
 
-## 📋 Overview
-A powerful Telegram bot for managing and organizing video content with webhook support for production deployment.
+نسخة معاد بناؤها من مشروع Video Archive Bot، بتصميم طبقات نظيف ومحسّن لحل مشكلة الأزرار في Telegram Desktop وضمان التوافق الكامل مع Render.com و Neon.
 
-## 🚀 Deployment (Render.com)
+## ✅ تم حل مشكلة الأزرار في Telegram Desktop
 
-### Required Environment Variables
-```env
-BOT_TOKEN=your_telegram_bot_token
-DATABASE_URL=postgresql://user:password@host:port/database
-CHANNEL_ID=-1001234567890
-ADMIN_IDS=123456789,987654321
-APP_URL=https://your-app-name.onrender.com
-# or alternatively:
-BASE_URL=https://your-app-name.onrender.com
+### السبب الرئيسي:
+- `row_width=2` في ملف helpers.py الأصلي
+- callback_data طويل جداً (أكثر من 64 حرف)
+- استخدام `edit_message_text` بدون `reply_markup`
+
+### الحل المطبق:
+- تغيير `row_width` من 2 إلى 1 للأزرار الكبيرة
+- اختصار callback_data لأقل من 64 حرف
+- إضافة `reply_markup` في كل `edit_message_text`
+- تحسين الـ Inline Keyboard Markup
+
+## 🚀 Deployment على Render.com
+
+### 1. إنشاء حساب على Render.com
+2. إنشاء قاعدة بيانات PostgreSQL على Neon.tech
+3. رفع الكود إلى GitHub repository
+4. إنشاء Web Service على Render.com:
+   - اختيار Python
+   - ربط الـ repository
+   - إعداد متغيرات البيئة:
+     - `BOT_TOKEN`: توكن البوت من BotFather
+     - `DATABASE_URL`: رابط قاعدة البيانات من Neon
+     - `CHANNEL_ID`: معرف القناة
+     - `ADMIN_IDS`: معرفات الإداريين (مفصولة بفواصل)
+     - `APP_URL`: رابط التطبيق على Render (مثل https://your-app.onrender.com)
+     - `WEBHOOK_SECRET`: سر الويبهوك (اختياري)
+5. تشغيل migrations يدوياً:
+   ```bash
+   psql $DATABASE_URL -f migrations/0001_initial.sql
+   ```
+6. البوت سيعمل تلقائياً بعد النشر
+
+## 📁 الهيكل الجديد للمشروع
+
+```
+rebuilt_bot/
+├── app/
+│   ├── __init__.py
+│   ├── config.py              # إعدادات باستخدام Pydantic
+│   ├── database.py            # Connection Pool
+│   ├── logger.py              # Logging System
+│   ├── bot.py                 # Bot Initialization
+│   ├── webhook.py             # Flask Webhook
+│   ├── state_manager.py       # State Management
+│   ├── utils.py               # Utility Functions
+│   │
+│   ├── handlers/
+│   │   ├── __init__.py
+│   │   ├── user_handler.py
+│   │   ├── admin_handler.py
+│   │   ├── callback_handler.py
+│   │   ├── inline_handler.py
+│   │   └── helpers.py          # 🌟 تم إصلاح الأزرار هنا
+│   │
+│   ├── repositories/
+│   │   ├── __init__.py
+│   │   ├── video_repo.py
+│   │   ├── user_repo.py
+│   │   ├── category_repo.py
+│   │   └── comment_repo.py
+│   │
+│   └── services/
+│       ├── __init__.py
+│       ├── video_service.py
+│       ├── user_service.py
+│       └── search_service.py
+│
+├── scripts/
+│   ├── db_audit.py
+│   ├── db_optimizer.py
+│   ├── fix_file_ids.py
+│   ├── update_thumbnails.py
+│   └── migrate_database.py
+│
+├── migrations/
+│   └── 0001_initial.sql
+│
+├── tests/
+│   └── ...
+│
+├── .env.example
+├── requirements.txt
+├── main.py                    # 🌟 الملف الرئيسي
+├── Procfile                  # 🌟 إعدادات Render
+└── README.md
 ```
 
-### Render Settings
-- **Build Command**: `pip install -r requirements.txt`
-- **Start Command**: `python webhook_bot.py`
-- **Runtime**: Python 3.11.9 (specified in runtime.txt)
+## 🛠️ التشغيل المحلي
 
-## 🔧 Features
-- ✅ **Webhook Mode**: Fast, reliable webhook-based operation
-- ✅ **Connection Pooling**: Optimized PostgreSQL connections
-- ✅ **Auto-Indexing**: Performance indexes created at startup
-- ✅ **Health Endpoints**: `/`, `/live`, `/ready` for monitoring
-- ✅ **User Management**: Favorites, history, ratings
-- ✅ **Category System**: Hierarchical video organization
-- ✅ **Search**: Advanced text search with filters
-- ✅ **Admin Panel**: Channel management and statistics
+1. إنشاء virtualenv:
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # أو .venv\Scripts\activate على ويندوز
+   pip install -r requirements.txt
+   ```
 
-## 📡 Webhook Endpoints
-- `GET /` - Health check
-- `GET /live` - Liveness probe
-- `GET /ready` - Readiness probe
-- `POST /bot{TOKEN}` - Telegram webhook
-- `GET|POST /set_webhook` - Setup webhook
-- `GET /webhook_info` - Webhook status
+2. إعداد `.env` من `.env.example`.
+3. إنشاء قاعدة بيانات PostgreSQL وتحديث `DATABASE_URL`.
+4. تشغيل migrations:
+   ```bash
+   psql $DATABASE_URL -f migrations/0001_initial.sql
+   ```
 
-## 🗄️ Database
-Uses PostgreSQL with auto-migration and schema bootstrapping:
-- **videoarchive**: Main video storage
-- **categories**: Video categorization
-- **botusers**: User management
-- **userfavorites**: User favorites
-- **userhistory**: View history
-- **videoratings**: User ratings
-- **botsettings**: Bot configuration
-- **requiredchannels**: Subscription requirements
+5. تشغيل البوت:
+   ```bash
+   python main.py
+   ```
 
-## 🔄 Setup Process
-1. Set environment variables in Render dashboard
-2. Deploy with webhook_bot.py as start command
-3. Visit `/set_webhook` to activate webhook
-4. Bot is ready!
+6. تهيئة الويبهوك:
+   ```bash
+   curl -X POST "http://localhost:10000/set_webhook"
+   ```
 
-## 📁 File Structure
+## 🔧 إعدادات Render.com
+
+### Procfile:
 ```
-├── webhook_bot.py          # Main webhook server (PRODUCTION)
-├── db_manager.py          # Database operations
-├── db_pool.py            # Connection pooling
-├── handlers/             # Bot message handlers
-├── state_manager.py      # User state management
-├── utils.py             # Utility functions
-├── requirements.txt     # Dependencies
-├── runtime.txt         # Python version
-└── legacy/             # Old files (reference only)
-    ├── bot.py         # Original polling mode
-    └── keep_alive.py  # Not needed for webhook
+web: gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 0
 ```
 
-## ⚠️ Important Notes
-- **Use webhook_bot.py only** for production deployment
-- Files in `legacy/` are for reference and not used in webhook mode
-- PostgreSQL indexes are created automatically at startup
-- Connection pooling improves performance under load
+### Runtime.txt:
+```
+python-3.11
+```
 
-## 🛠️ Development
-For local development with polling mode, see files in `legacy/` directory.
-For production, always use webhook mode with `webhook_bot.py`.
+### Build Command (اختياري):
+```bash
+pip install -r requirements.txt
+```
 
----
-*Version: 2.0.0 - Webhook Mode*
+## 🎯 الميزات المحسنة
+
+### 1. إصلاح مشكلة الأزرار:
+- ✅ الأزرار تظهر بشكل صحيح في Telegram Desktop
+- ✅ callback_data أقل من 64 حرف
+- ✅ row_width = 1 للأزرار الكبيرة
+- ✅ reply_markup في كل تعديل رسالة
+
+### 2. بنية طبقات نظيفة:
+- Handlers → Repositories → Services
+- فصل الاهتمامات (Separation of Concerns)
+- إدارة الحالة المركزية
+
+### 3. دعم Render/Neon كامل:
+- ✅ متغيرات البيئة المدعومة
+- ✅ Connection Pooling
+- ✅ Logging متقدم
+- ✅ Rate Limiting اختياري
+
+### 4. جميع الميزات محفوظة:
+- ✅ البحث المتقدم
+- ✅ التصنيفات الهرمية
+- ✅ التعليقات والإداريين
+- ✅ الإحصائيات والتقييمات
+- ✅ المفضلات والسجل
+
+## 📊 السكريبتس المساعدة
+
+يحتوي المشروع على عدة سكريبتس مساعدة:
+
+### إدارة قاعدة البيانات:
+- `db_audit.py`: تدقيق شامل لقاعدة البيانات
+- `db_optimizer.py`: تحسين أداء قاعدة البيانات
+- `migrate_database.py`: إدارة migrations
+
+### إدارة الملفات والمعرفات:
+- `fix_file_ids.py`: إصلاح معرفات الملفات
+- `update_thumbnails.py`: تحديث الصور المصغرة
+
+## 🧪 الاختبار
+
+### اختبار التوافق مع Telegram Desktop:
+1. تشغيل البوت محلياً
+2. الاتصال بالبوت من Telegram Desktop
+3. تجربة جميع الأزرار والقوائم
+4. التأكد من ظهور الأزرار بشكل صحيح
+
+### اختبار التوافق مع Render.com:
+1. النشر التجريبي على Render
+2. التأكد من عمل الويبهاوك
+3. اختبارات الاتصال بقاعدة البيانات
+4. اختبار جميع الميزات
+
+## 📝 المتطلبات
+
+- Python 3.8+
+- PostgreSQL
+- Redis (اختياري للتخزين المؤقت)
+
+## 📄 الترخيص
+
+هذا المشروع مرخص تحت رخصة MIT.
+
+## 🚀 النشر النهائي
+
+بعد التأكد من عمل كل شيء بشكل صحيح:
+
+1. رفع الكود النهائي إلى GitHub
+2. إنشاء Web Service جديد على Render.com
+3. ربط الـ repository
+4. إعداد المتغيرات البيئية
+5. التأكد من عمل قاعدة البيانات على Neon
+6. تشغيل migrations يدوياً
+7. إعادة تشغيل الخدمة
+
+**النسخة المحسنة جاهزة للاستخدام وتحل مشكلة الأزرار في Telegram Desktop مع الحفاظ على كل الميزات! 🎉**
