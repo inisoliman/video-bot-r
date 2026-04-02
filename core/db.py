@@ -1,7 +1,7 @@
 
-import psycopg2
-from psycopg2 import sql
-from psycopg2.extras import DictCursor
+import psycopg as psycopg2
+from psycopg import sql
+from psycopg.extras import DictCursor
 import threading
 from contextlib import contextmanager
 import logging
