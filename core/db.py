@@ -2,6 +2,7 @@
 import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import DictCursor
+from psycopg2.pool import ThreadedConnectionPool
 import threading
 from contextlib import contextmanager
 import logging
@@ -20,7 +21,7 @@ def get_connection_pool():
         with _pool_lock:
             if _connection_pool is None:
                 try:
-                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                    _connection_pool = ThreadedConnectionPool(
                         Config.DB_POOL_MIN, Config.DB_POOL_MAX,
                         **Config.DB_CONFIG
                     )
