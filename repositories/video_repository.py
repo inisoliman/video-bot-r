@@ -52,13 +52,13 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
         params.append(category_id)
     
     if quality:
-        sql_query += " AND metadata->>‘quality_resolution’ = %s"
-        count_sql_query += " AND metadata->>‘quality_resolution’ = %s"
+        sql_query += " AND metadata->>\'quality_resolution\' = %s"
+        count_sql_query += " AND metadata->>\'quality_resolution\' = %s"
         params.append(quality)
     
     if status:
-        sql_query += " AND metadata->>‘status’ = %s"
-        count_sql_query += " AND metadata->>‘status’ = %s"
+        sql_query += " AND metadata->>\'status\' = %s"
+        count_sql_query += " AND metadata->>\'status\' = %s"
         params.append(status)
 
     sql_query += " ORDER BY upload_date DESC LIMIT %s OFFSET %s;"

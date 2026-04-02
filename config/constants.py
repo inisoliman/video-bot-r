@@ -3,6 +3,8 @@
 
 # --- UI Constants ---
 COMMENTS_PER_PAGE = 10 # Default, can be overridden by Config.COMMENTS_PER_PAGE
+VIDEOS_PER_PAGE = 10 # number of videos per page pagination
+CALLBACK_DELIMITER = "::"
 
 # --- Emojis ---
 EMOJI_FOLDER = "📁"
