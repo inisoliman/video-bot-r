@@ -2,6 +2,7 @@
 # core/state_manager.py
 
 import logging
+import threading
 from enum import Enum, auto
 from repositories import user_state_repository
 
