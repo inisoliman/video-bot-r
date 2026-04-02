@@ -53,6 +53,12 @@ class StateManager:
     def get_handler(self, state):
         return self._handlers.get(state)
 
+    def state_handler(self, state):
+        def decorator(func):
+            self.register_handler(state, func)
+            return func
+        return decorator
+
     def set_user_state(self, user_id, state, context=None):
         if not isinstance(state, States):
             raise ValueError("State must be an instance of States Enum.")
