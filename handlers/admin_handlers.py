@@ -19,9 +19,9 @@ from config.constants import (
     MSG_MIGRATE_DATABASE_STARTED, CALLBACK_DELIMITER, PARSE_MODE_HTML
 )
 from services import (
-    user_service, video_service, category_service, required_channels_repository,
-    bot_settings_repository
+    user_service, video_service, category_service
 )
+from repositories import required_channels_repository, bot_settings_repository
 from core.state_manager import States, state_manager, set_user_waiting_for_input, clear_user_waiting_state
 from utils.telegram_utils import create_hierarchical_category_keyboard
 
