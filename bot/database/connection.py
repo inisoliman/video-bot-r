@@ -5,6 +5,7 @@
 # ==============================================================================
 
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from typing import Optional, Any, List, Dict
@@ -21,11 +22,24 @@ logger = logging.getLogger(__name__)
 # --- Connection Pool Singleton ---
 _connection_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 _pool_lock = threading.Lock()
+_pool_pid: Optional[int] = None  # PID of the process that created the pool
 
 
 def get_connection_pool() -> psycopg2.pool.ThreadedConnectionPool:
-    """إنشاء أو إرجاع connection pool (Thread-safe Singleton)"""
-    global _connection_pool
+    """إنشاء أو إرجاع connection pool (Thread-safe, Fork-safe Singleton)"""
+    global _connection_pool, _pool_pid
+    current_pid = os.getpid()
+
+    # كشف fork(): إذا كان الـ Pool أُنشئ في process آخر (Master)
+    # يجب إعادة إنشائه لأن اتصالات SSL لا تنجو من fork()
+    if _connection_pool is not None and _pool_pid != current_pid:
+        logger.info(f"🔄 Pool created in PID {_pool_pid}, now in PID {current_pid} — recreating (fork detected)")
+        try:
+            _connection_pool.closeall()
+        except Exception:
+            pass
+        _connection_pool = None
+
     if _connection_pool is None:
         with _pool_lock:
             if _connection_pool is None:
@@ -35,9 +49,10 @@ def get_connection_pool() -> psycopg2.pool.ThreadedConnectionPool:
                         settings.db.pool_max,
                         **settings.db.connection_params
                     )
+                    _pool_pid = current_pid
                     logger.info(
                         f"✅ Database connection pool created "
-                        f"(min={settings.db.pool_min}, max={settings.db.pool_max})"
+                        f"(min={settings.db.pool_min}, max={settings.db.pool_max}, pid={current_pid})"
                     )
                 except Exception as e:
                     logger.critical(f"❌ Failed to create connection pool: {e}")

@@ -301,7 +301,16 @@ def _handle_rate(bot, call, data, user_id):
 
 def _handle_cat(bot, call, data):
     try:
-        _, cid, ps = data
+        # دعم كلا الصيغتين: cat::47 (بدون صفحة) و cat::47::0 (مع صفحة)
+        if len(data) == 2:
+            _, cid = data
+            ps = "0"
+        elif len(data) >= 3:
+            _, cid, ps = data[0], data[1], data[2]
+        else:
+            bot.answer_callback_query(call.id, "خطأ.", show_alert=True)
+            return
+
         if not cid.isdigit() or not ps.isdigit():
             bot.answer_callback_query(call.id, "خطأ.", show_alert=True)
             return
