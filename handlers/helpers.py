@@ -132,29 +132,19 @@ def list_videos(bot, message, edit_message=None, parent_id=None):
 def main_menu(bot_username=None):
     """
     القائمة الرئيسية مع زر البحث السريع.
-    محدثة للعمل على Telegram Desktop والموبايل.
     
     Args:
         bot_username: اسم البوت (اختياري) لإضافة زر switch inline
     """
-    markup = ReplyKeyboardMarkup(
-        resize_keyboard=True,
-        one_time_keyboard=False,
-        input_field_placeholder="اختر أمرًا من القائمة أدناه 👇"
-    )
-    # [تعديل] إضافة أزرار المفضلة والسجل - ترتيب أفضل للديسكتوب
-    markup.row(
-        KeyboardButton("🎬 عرض كل الفيديوهات"),
-        KeyboardButton("🔥 الفيديوهات الشائعة")
-    )
-    markup.row(
-        KeyboardButton("⭐ المفضلة"),
-        KeyboardButton("📺 سجل المشاهدة")
-    )
-    markup.row(
-        KeyboardButton("🍿 اقترح لي فيلم"),
-        KeyboardButton("🔍 بحث")
-    )
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    # [تعديل] إضافة أزرار المفضلة والسجل
+    markup.add(KeyboardButton("🎬 عرض كل الفيديوهات"), KeyboardButton("🔥 الفيديوهات الشائعة"))
+    markup.add(KeyboardButton("⭐ المفضلة"), KeyboardButton("📺 سجل المشاهدة"))
+    markup.add(KeyboardButton("🍿 اقترح لي فيلم"), KeyboardButton("🔍 بحث"))
+    
+    # إضافة زر البحث السريع إذا تم توفير username
+    if bot_username:
+        markup.add(KeyboardButton(f"🔍 بحث سريع في أي محادثة"))
     
     return markup
 

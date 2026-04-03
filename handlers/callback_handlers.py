@@ -5,21 +5,8 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
 import threading
 
-from db_manager import (
-    search_videos, get_videos, get_videos_ratings_bulk, VIDEOS_PER_PAGE,
-    get_user_favorites, get_user_history, get_categories_tree,
-    get_child_categories, get_category_by_id,
-    is_video_favorite, add_to_favorites, remove_from_favorites,
-    get_user_video_rating, get_video_rating_stats,
-    add_video_rating, add_to_history, get_popular_videos,
-    set_active_category_id, get_required_channels,
-    move_videos_bulk, delete_category_and_contents,
-    delete_category_by_id, move_videos_from_category,
-    delete_videos_by_ids, get_video_by_id, get_all_user_ids,
-    get_subscriber_count, get_bot_stats, add_required_channel,
-    remove_required_channel, increment_video_view_count,
-    get_unread_comments_count
-)
+from db_manager import *
+from db_manager import move_videos_bulk  # إضافة الدالة الجديدة بشكل صريح
 from . import helpers
 from . import admin_handlers
 from . import comment_handlers  # إضافة معالجات التعليقات

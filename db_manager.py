@@ -977,8 +977,3 @@ def get_videos_without_thumbnail(limit=20):
         LIMIT %s
     """
     return execute_query(sql, (limit,), fetch="all")
-
-# Alias للتوافق مع السكريبات الخارجية
-def ensure_schema():
-    """Alias لـ verify_and_repair_schema - للتوافق مع السكريبات الخارجية"""
-    return verify_and_repair_schema()
