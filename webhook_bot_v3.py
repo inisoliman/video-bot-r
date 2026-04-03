@@ -33,7 +33,9 @@ settings.validate_or_exit()
 settings.log_status()
 
 # --- إنشاء البوت وFlask ---
-bot = telebot.TeleBot(settings.bot.token, threaded=True)
+# ⚠️ threaded=False ضروري مع gunicorn + preload_app=True
+# لأن threaded=True يُنشئ Threads في Master لا تنتقل للـ Workers بعد fork()
+bot = telebot.TeleBot(settings.bot.token, threaded=False)
 app = Flask(__name__)
 
 # --- إعداد معالج أخطاء Telebot ---
@@ -217,6 +219,7 @@ def init_bot():
     try:
         # إصلاح مشكلة السلاش المزدوج في URL
         app_url = settings.bot.app_url.rstrip('/')
+        log_print(f"📍 APP_URL (cleaned): {app_url}")
         webhook_url = f"{app_url}/bot{settings.bot.token}"
 
         log_print(f"🔗 Setting webhook to: {webhook_url[:50]}...")
