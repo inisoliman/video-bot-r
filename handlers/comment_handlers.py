@@ -499,8 +499,8 @@ def handle_delete_user_comments(bot, user_id, admin_ids, target_user_id_str=None
             return
         
         if len(parts) < 2:
-            bot.reply_to(
-                message,
+            bot.send_message(
+                user_id,
                 "❌ *الاستخدام الصحيح:*\n"
                 "`/delete_user_comments <user_id>`\n\n"
                 "مثال: `/delete_user_comments 123456789`",
@@ -511,7 +511,7 @@ def handle_delete_user_comments(bot, user_id, admin_ids, target_user_id_str=None
         try:
             target_user_id = int(parts[1])
         except ValueError:
-            bot.reply_to(message, "❌ رقم المستخدم غير صحيح")
+            bot.send_message(user_id, "❌ رقم المستخدم غير صحيح")
             return
         
         # طلب تأكيد

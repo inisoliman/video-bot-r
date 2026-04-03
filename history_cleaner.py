@@ -10,7 +10,7 @@ import time
 import logging
 import json
 from datetime import datetime, timedelta
-from bot.database.connection import execute_query, get_db_connection
+from db_manager import execute_query, get_db_connection
 
 # إعداد المسجل
 logger = logging.getLogger(__name__)

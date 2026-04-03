@@ -1,62 +1,30 @@
-# Patch: restore missing functions needed by handlers
-import psycopg2
-from psycopg2.extras import DictCursor
-from urllib.parse import urlparse
-import os, logging, json
+#!/usr/bin/env python3
+# ==============================================================================
+# ملف: db_compat_patch.py
+# الوصف: طبقة توافق - يُستخدَم لاستيراد الدوال المشتركة من db_manager فقط
+# ملاحظة: هذا الملف لا يحتوي على أي دوال مكررة - كل شيء يُستورَد من db_manager
+# ==============================================================================
 
-logger = logging.getLogger(__name__)
+"""
+طبقة توافق لضمان عدم تضارب الاستيرادات.
+جميع الدوال يتم استيرادها مباشرة من db_manager لتجنب التكرار.
+"""
 
-DATABASE_URL = os.environ.get('DATABASE_URL')
-r = urlparse(DATABASE_URL)
-DB_CONFIG = {'user': r.username, 'password': r.password, 'host': r.hostname, 'port': r.port, 'dbname': r.path[1:]}
-
-def get_db_connection():
-    return psycopg2.connect(**DB_CONFIG)
-
-def execute_query(query, params=None, fetch=None, commit=False):
-    conn = get_db_connection()
-    try:
-        with conn.cursor(cursor_factory=DictCursor) as c:
-            c.execute(query, params)
-            if commit:
-                conn.commit()
-            if fetch == 'one':
-                return c.fetchone()
-            if fetch == 'all':
-                return c.fetchall()
-            return True if commit else None
-    except Exception as e:
-        logger.error(f"DB error: {e}")
-        if conn: conn.rollback()
-        return [] if fetch == 'all' else None
-    finally:
-        if conn: conn.close()
-
-# Restored functions
-
-def add_bot_user(user_id, username, first_name):
-    return execute_query(
-        "INSERT INTO bot_users (user_id, username, first_name) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING",
-        (user_id, username, first_name), commit=True)
-
-def get_random_video():
-    return execute_query("SELECT * FROM video_archive ORDER BY RANDOM() LIMIT 1", fetch='one')
-
-def increment_video_view_count(video_id):
-    return execute_query("UPDATE video_archive SET view_count = view_count + 1 WHERE id = %s", (video_id,), commit=True)
-
-def get_categories_tree():
-    # Return all categories ordered; filtering is handled at UI level
-    return execute_query("SELECT * FROM categories ORDER BY name", fetch='all')
-
-def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    metadata_json = json.dumps(metadata)
-    row = execute_query(
-        """
-        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (message_id) DO UPDATE SET caption=EXCLUDED.caption,file_name=EXCLUDED.file_name,file_id=EXCLUDED.file_id,metadata=EXCLUDED.metadata,grouping_key=EXCLUDED.grouping_key,category_id=EXCLUDED.category_id
-        RETURNING id
-        """,
-        (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id), fetch='one', commit=True)
-    return row['id'] if row else None
+# استيراد الدوال المشتركة من db_manager للاستخدام الخارجي
+from db_manager import (
+    execute_query, get_db_connection, get_connection_pool,
+    add_bot_user, get_random_video, increment_video_view_count,
+    get_categories_tree, add_video, get_category_by_id, get_videos,
+    get_child_categories, search_videos, get_popular_videos,
+    get_bot_stats, get_subscriber_count, get_all_user_ids,
+    add_to_favorites, is_video_favorite, remove_from_favorites,
+    get_user_favorites, add_to_history, get_user_history,
+    add_video_rating, get_user_video_rating, get_video_rating_stats,
+    add_required_channel, remove_required_channel, get_required_channels,
+    move_videos_bulk, delete_videos_by_ids, get_video_by_id,
+    delete_category_and_contents, move_videos_from_category, delete_category_by_id,
+    set_user_state, get_user_state, clear_user_state,
+    VIDEOS_PER_PAGE, CALLBACK_DELIMITER, admin_steps, user_last_search,
+    ensure_schema, verify_and_repair_schema,
+    EXPECTED_SCHEMA, DB_CONFIG, DB_POOL_MIN, DB_POOL_MAX,
+)
