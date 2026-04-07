@@ -971,6 +971,13 @@ def _stream_telegram_file(file_id: str, filename: str = None, as_attachment: boo
     try:
         # استخدام get_file_url بدلاً من get_file للملفات الكبيرة
         file_url = bot.get_file_url(file_id)
+    except telebot.apihelper.ApiTelegramException as e:
+        if "file is too big" in str(e):
+            logger.warning(f"File {file_id} is too big for streaming. Returning 404.")
+            abort(404, "File too big for streaming")
+        else:
+            logger.error(f"Failed to fetch telegram file URL for streaming: {e}")
+            abort(404)
     except Exception as e:
         logger.error(f"Failed to fetch telegram file URL for streaming: {e}")
         abort(404)
@@ -1038,19 +1045,52 @@ def watch_video(token):
         video {{ width:100%; border-radius:18px; background:#000; }}
         .controls {{ margin-top:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }}
         .controls a {{ display:inline-flex; justify-content:center; align-items:center; gap:10px; text-decoration:none; color:#071317; background:#7cc7ca; padding:14px 18px; border-radius:14px; font-weight:700; }}
+        .error {{ display:none; background:#ff6b6b; color:#fff; padding:14px; border-radius:14px; margin-top:18px; }}
+        .loading {{ display:flex; justify-content:center; align-items:center; height:200px; background:#000; border-radius:18px; color:#fff; }}
       </style>
     </head>
     <body>
       <div class="page">
         <div class="card">
           <h1>{title}</h1>
-          <video controls playsinline preload="metadata" src="{stream_url}"></video>
+          <div id="video-container">
+            <div class="loading" id="loading">جاري تحميل الفيديو...</div>
+            <video id="video-player" controls playsinline preload="metadata" src="{stream_url}" style="display:none;"></video>
+          </div>
+          <div class="error" id="error-message">
+            ❌ الفيديو كبير جداً للمشاهدة المباشرة. يرجى التحميل أولاً.
+          </div>
           <div class="controls">
             <a href="{stream_url}" target="_blank">▶️ مشاهدة</a>
             <a href="{download_url}" target="_blank">⬇️ تحميل</a>
           </div>
         </div>
       </div>
+      <script>
+        const video = document.getElementById('video-player');
+        const loading = document.getElementById('loading');
+        const error = document.getElementById('error-message');
+
+        video.addEventListener('loadstart', () => {{
+          loading.style.display = 'none';
+          video.style.display = 'block';
+        }});
+
+        video.addEventListener('error', (e) => {{
+          loading.style.display = 'none';
+          video.style.display = 'none';
+          error.style.display = 'block';
+          console.error('Video load error:', e);
+        }});
+
+        // إذا لم يبدأ التحميل خلال 10 ثواني، افترض خطأ
+        setTimeout(() => {{
+          if (loading.style.display !== 'none') {{
+            loading.style.display = 'none';
+            error.style.display = 'block';
+          }}
+        }}, 10000);
+      </script>
     </body>
     </html>
     """
