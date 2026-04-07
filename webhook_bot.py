@@ -969,12 +969,11 @@ def _get_video_from_token(token):
 
 def _stream_telegram_file(file_id: str, filename: str = None, as_attachment: bool = False):
     try:
-        telegram_file = bot.get_file(file_id)
+        # استخدام get_file_url بدلاً من get_file للملفات الكبيرة
+        file_url = bot.get_file_url(file_id)
     except Exception as e:
-        logger.error(f"Failed to fetch telegram file for streaming: {e}")
+        logger.error(f"Failed to fetch telegram file URL for streaming: {e}")
         abort(404)
-
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{telegram_file.file_path}"
     headers = {}
     range_header = request.headers.get('Range')
     if range_header:
