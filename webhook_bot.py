@@ -1024,7 +1024,7 @@ def watch_video(token):
     stream_url = build_render_stream_url(token)
     download_url = build_render_download_url(token)
 
-    html = """
+    html = f"""
     <!DOCTYPE html>
     <html lang="ar">
     <head>
@@ -1032,29 +1032,29 @@ def watch_video(token):
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>مشاهدة الفيديو - Orsozox</title>
       <style>
-        body { margin:0; min-height:100vh; font-family: Arial, sans-serif; background:#071317; color:#eef5f8; display:flex; align-items:center; justify-content:center; padding:20px; }
-        .page { max-width:980px; width:100%; }
-        .card { background:rgba(17,34,45,0.95); border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:22px; box-shadow:0 18px 60px rgba(0,0,0,0.35); }
-        h1 { margin-top:0; font-size:1.8rem; }
-        video { width:100%; border-radius:18px; background:#000; }
-        .controls { margin-top:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }
-        .controls a { display:inline-flex; justify-content:center; align-items:center; gap:10px; text-decoration:none; color:#071317; background:#7cc7ca; padding:14px 18px; border-radius:14px; font-weight:700; }
+        body {{ margin:0; min-height:100vh; font-family: Arial, sans-serif; background:#071317; color:#eef5f8; display:flex; align-items:center; justify-content:center; padding:20px; }}
+        .page {{ max-width:980px; width:100%; }}
+        .card {{ background:rgba(17,34,45,0.95); border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:22px; box-shadow:0 18px 60px rgba(0,0,0,0.35); }}
+        h1 {{ margin-top:0; font-size:1.8rem; }}
+        video {{ width:100%; border-radius:18px; background:#000; }}
+        .controls {{ margin-top:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }}
+        .controls a {{ display:inline-flex; justify-content:center; align-items:center; gap:10px; text-decoration:none; color:#071317; background:#7cc7ca; padding:14px 18px; border-radius:14px; font-weight:700; }}
       </style>
     </head>
     <body>
       <div class="page">
         <div class="card">
-          <h1>%s</h1>
-          <video controls playsinline preload="metadata" src="%s"></video>
+          <h1>{title}</h1>
+          <video controls playsinline preload="metadata" src="{stream_url}"></video>
           <div class="controls">
-            <a href="%s" target="_blank">▶️ مشاهدة</a>
-            <a href="%s" target="_blank">⬇️ تحميل</a>
+            <a href="{stream_url}" target="_blank">▶️ مشاهدة</a>
+            <a href="{download_url}" target="_blank">⬇️ تحميل</a>
           </div>
         </div>
       </div>
     </body>
     </html>
-    """ % (title, stream_url, stream_url, download_url)
+    """
 
     return html
 
