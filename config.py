@@ -58,6 +58,8 @@ SEARCH_CACHE_TIME = int(os.environ.get('SEARCH_CACHE_TIME', '60'))   # 1 minute
 # UI Constants
 # ==============================================================================
 CALLBACK_DELIMITER = '::'
+PUBLIC_STREAM_PAGE_URL = os.environ.get('PUBLIC_STREAM_PAGE_URL', 'https://orsozox.com/vstream')
+LINK_SIGNING_SECRET = os.environ.get('LINK_SIGNING_SECRET') or BOT_TOKEN
 
 # ==============================================================================
 # Feature Flags

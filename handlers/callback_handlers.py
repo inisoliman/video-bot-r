@@ -573,9 +573,13 @@ def register(bot, admin_ids):
                     # محاولة إرسال الفيديو
                     bot.copy_message(call.message.chat.id, chat_id_int, message_id_int)
                     
-                    # إضافة لوحة التقييم
+                    # إضافة لوحة التقييم ورابط المشاهدة/التحميل
                     rating_keyboard = helpers.create_video_action_keyboard(video_id_int, user_id)
-                    bot.send_message(call.message.chat.id, "⭐ قيم هذا الفيديو:", reply_markup=rating_keyboard)
+                    bot.send_message(
+                        call.message.chat.id,
+                        "⭐ تم عرض الفيديو. استخدم الأزرار أدناه للمشاهدة عبر الموقع أو لتحميله.",
+                        reply_markup=rating_keyboard
+                    )
                     
                 except telebot.apihelper.ApiTelegramException as e:
                     logger.error(f"Telegram API error handling video {video_id}: {e}", exc_info=True)
