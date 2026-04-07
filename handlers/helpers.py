@@ -11,10 +11,6 @@ from db_manager import (
     get_required_channels, is_video_favorite, get_categories_tree,
     get_videos_ratings_bulk  # إضافة الدالة الجديدة
 )
-from stream_utils import (
-    build_hostinger_watch_url, build_hostinger_download_url,
-    encode_stream_token
-)
 
 logger = logging.getLogger(__name__)
 
@@ -330,45 +326,26 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
 
 
 def create_video_action_keyboard(video_id, user_id):
-    keyboard = InlineKeyboardMarkup()
+    keyboard = InlineKeyboardMarkup(row_width=5)
     user_rating = get_user_video_rating(video_id, user_id)
-    is_fav = is_video_favorite(user_id, video_id)
+    is_fav = is_video_favorite(user_id, video_id) # [تعديل] التحقق من حالة المفضلة
 
-    watch_url = None
-    download_url = None
-    try:
-        token = encode_stream_token(video_id)
-        watch_url = build_hostinger_watch_url(token)
-        download_url = build_hostinger_download_url(token)
-    except Exception:
-        watch_url = None
-        download_url = None
-
-    if watch_url and download_url:
-        keyboard.add(
-            InlineKeyboardButton("▶️ مشاهدة", url=watch_url),
-            InlineKeyboardButton("⬇️ تحميل", url=download_url)
-        )
-
+    # [تعديل] إضافة زر المفضلة
     fav_text = "⭐ إزالة من المفضلة" if is_fav else "☆ إضافة للمفضلة"
     fav_data = f"fav::remove::{video_id}" if is_fav else f"fav::add::{video_id}"
     keyboard.add(InlineKeyboardButton(fav_text, callback_data=fav_data), row_width=1)
-
+    
+    # أزرار التقييم
     buttons = [InlineKeyboardButton("🌟" if user_rating == i else "☆", callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
     keyboard.add(*buttons)
-
+    
     stats = get_video_rating_stats(video_id)
     if stats and stats.get('avg') is not None:
-        keyboard.add(
-            InlineKeyboardButton(
-                f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)",
-                callback_data="noop"
-            ),
-            row_width=1
-        )
-
+        keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"), row_width=1)
+    
+    # [جديد] إضافة زر التعليق
     keyboard.add(InlineKeyboardButton("💬 إضافة تعليق", callback_data=f"add_comment::{video_id}"), row_width=1)
-
+    
     return keyboard
 
 

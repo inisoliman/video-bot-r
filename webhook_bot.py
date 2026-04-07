@@ -8,8 +8,7 @@ import os
 import json
 import logging
 import threading  # إضافة threading
-import requests
-from flask import Flask, request, jsonify, abort, Response, render_template_string
+from flask import Flask, request, jsonify, abort
 import telebot
 from telebot.types import Update
 
@@ -18,12 +17,6 @@ from db_manager import verify_and_repair_schema
 from handlers import register_all_handlers
 from state_manager import state_manager
 from history_cleaner import start_history_cleanup
-from stream_utils import (
-    decode_stream_token, encode_stream_token,
-    build_render_stream_url, build_render_download_url,
-    build_render_watch_url, build_hostinger_watch_url,
-    build_hostinger_download_url
-)
 
 # --- إعداد نظام التسجيل ---
 logging.basicConfig(
@@ -87,13 +80,6 @@ except ValueError as e:
 # --- إعداد Flask والBot ---
 app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
-
-@app.after_request
-def add_cors_headers(response):
-    response.headers.setdefault('Access-Control-Allow-Origin', '*')
-    response.headers.setdefault('Access-Control-Allow-Headers', 'Content-Type, Range')
-    response.headers.setdefault('Access-Control-Allow-Methods', 'GET, OPTIONS')
-    return response
 
 # --- إعداد Rate Limiting ---
 try:
@@ -951,167 +937,6 @@ def get_thumbnail(file_id):
         logger.error(f"Thumbnail fetch error for {file_id}: {e}")
         # صورة افتراضية أو خطأ 404
         abort(404)
-
-
-def _get_video_from_token(token):
-    try:
-        token_data = decode_stream_token(token)
-    except Exception as e:
-        logger.warning(f"Invalid stream token: {e}")
-        abort(404)
-
-    from db_manager import get_video_by_id
-    video = get_video_by_id(token_data['video_id'])
-    if not video or not video.get('file_id'):
-        abort(404)
-    return video
-
-
-def _stream_telegram_file(file_id: str, filename: str = None, as_attachment: bool = False):
-    try:
-        # استخدام get_file_url بدلاً من get_file للملفات الكبيرة
-        file_url = bot.get_file_url(file_id)
-    except telebot.apihelper.ApiTelegramException as e:
-        if "file is too big" in str(e):
-            logger.warning(f"File {file_id} is too big for streaming. Returning 404.")
-            abort(404, "File too big for streaming")
-        else:
-            logger.error(f"Failed to fetch telegram file URL for streaming: {e}")
-            abort(404)
-    except Exception as e:
-        logger.error(f"Failed to fetch telegram file URL for streaming: {e}")
-        abort(404)
-    headers = {}
-    range_header = request.headers.get('Range')
-    if range_header:
-        headers['Range'] = range_header
-
-    remote_response = requests.get(file_url, headers=headers, stream=True, timeout=(5, 30))
-    if remote_response.status_code not in (200, 206):
-        logger.warning(f"Telegram returned unexpected status {remote_response.status_code} for {file_url}")
-        abort(remote_response.status_code)
-
-    response = Response(
-        remote_response.iter_content(chunk_size=8192),
-        status=remote_response.status_code
-    )
-
-    for header_name in ('Content-Type', 'Content-Length', 'Content-Range', 'Accept-Ranges', 'ETag', 'Last-Modified'):
-        if header_name in remote_response.headers:
-            response.headers[header_name] = remote_response.headers[header_name]
-
-    if as_attachment and filename:
-        safe_name = filename.replace('"', '').replace("'", '').strip() or 'video'
-        response.headers['Content-Disposition'] = f'attachment; filename="{safe_name}"'
-
-    response.headers['Access-Control-Allow-Origin'] = '*'
-    return response
-
-
-@app.route("/generate_link", methods=["GET"])
-def generate_link():
-    video_id = request.args.get('video_id')
-    if not video_id or not video_id.isdigit():
-        return jsonify({"error": "video_id is required and must be numeric"}), 400
-
-    token = encode_stream_token(int(video_id))
-    return jsonify({
-        "watch_url": build_hostinger_watch_url(token),
-        "download_url": build_hostinger_download_url(token),
-        "stream_url": build_render_stream_url(token),
-        "render_watch_url": build_render_watch_url(token)
-    })
-
-
-@app.route("/watch/<token>", methods=["GET"])
-def watch_video(token):
-    video = _get_video_from_token(token)
-    title = (video.get('caption') or video.get('file_name') or 'فيديو تيليجرام').split('\n')[0]
-    stream_url = build_render_stream_url(token)
-    download_url = build_render_download_url(token)
-
-    html = f"""
-    <!DOCTYPE html>
-    <html lang="ar">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>مشاهدة الفيديو - Orsozox</title>
-      <style>
-        body {{ margin:0; min-height:100vh; font-family: Arial, sans-serif; background:#071317; color:#eef5f8; display:flex; align-items:center; justify-content:center; padding:20px; }}
-        .page {{ max-width:980px; width:100%; }}
-        .card {{ background:rgba(17,34,45,0.95); border:1px solid rgba(255,255,255,0.08); border-radius:22px; padding:22px; box-shadow:0 18px 60px rgba(0,0,0,0.35); }}
-        h1 {{ margin-top:0; font-size:1.8rem; }}
-        video {{ width:100%; border-radius:18px; background:#000; }}
-        .controls {{ margin-top:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }}
-        .controls a {{ display:inline-flex; justify-content:center; align-items:center; gap:10px; text-decoration:none; color:#071317; background:#7cc7ca; padding:14px 18px; border-radius:14px; font-weight:700; }}
-        .error {{ display:none; background:#ff6b6b; color:#fff; padding:14px; border-radius:14px; margin-top:18px; }}
-        .loading {{ display:flex; justify-content:center; align-items:center; height:200px; background:#000; border-radius:18px; color:#fff; }}
-      </style>
-    </head>
-    <body>
-      <div class="page">
-        <div class="card">
-          <h1>{title}</h1>
-          <div id="video-container">
-            <div class="loading" id="loading">جاري تحميل الفيديو...</div>
-            <video id="video-player" controls playsinline preload="metadata" src="{stream_url}" style="display:none;"></video>
-          </div>
-          <div class="error" id="error-message">
-            ❌ الفيديو كبير جداً للمشاهدة المباشرة. يرجى التحميل أولاً.
-          </div>
-          <div class="controls">
-            <a href="{stream_url}" target="_blank">▶️ مشاهدة</a>
-            <a href="{download_url}" target="_blank">⬇️ تحميل</a>
-          </div>
-        </div>
-      </div>
-      <script>
-        const video = document.getElementById('video-player');
-        const loading = document.getElementById('loading');
-        const error = document.getElementById('error-message');
-
-        video.addEventListener('loadstart', () => {{
-          loading.style.display = 'none';
-          video.style.display = 'block';
-        }});
-
-        video.addEventListener('error', (e) => {{
-          loading.style.display = 'none';
-          video.style.display = 'none';
-          error.style.display = 'block';
-          console.error('Video load error:', e);
-        }});
-
-        // إذا لم يبدأ التحميل خلال 10 ثواني، افترض خطأ
-        setTimeout(() => {{
-          if (loading.style.display !== 'none') {{
-            loading.style.display = 'none';
-            error.style.display = 'block';
-          }}
-        }}, 10000);
-      </script>
-    </body>
-    </html>
-    """
-
-    return html
-
-
-@app.route("/stream/<token>", methods=["GET", "OPTIONS"])
-def stream_video(token):
-    if request.method == 'OPTIONS':
-        return Response(status=204)
-    video = _get_video_from_token(token)
-    return _stream_telegram_file(video['file_id'], filename=video.get('file_name'))
-
-
-@app.route("/download/<token>", methods=["GET", "OPTIONS"])
-def download_video(token):
-    if request.method == 'OPTIONS':
-        return Response(status=204)
-    video = _get_video_from_token(token)
-    return _stream_telegram_file(video['file_id'], filename=video.get('file_name'), as_attachment=True)
 
 @app.route("/admin/diagnose_file_ids", methods=["GET", "POST"])
 def admin_diagnose_file_ids():

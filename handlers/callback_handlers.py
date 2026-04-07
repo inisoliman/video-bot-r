@@ -571,34 +571,11 @@ def register(bot, admin_ids):
                     add_to_history(user_id, video_id_int)
                     
                     # محاولة إرسال الفيديو
-                    try:
-                        bot.copy_message(call.message.chat.id, chat_id_int, message_id_int)
-                    except telebot.apihelper.ApiTelegramException as copy_error:
-                        logger.warning(f"Failed to copy message for video {video_id_int}: {copy_error}. Trying fallback with file_id.")
-                        # Fallback: إرسال الفيديو باستخدام file_id
-                        video_data = get_video_by_id(video_id_int)
-                        if video_data and video_data.get('file_id'):
-                            try:
-                                bot.send_video(
-                                    call.message.chat.id,
-                                    video_data['file_id'],
-                                    caption=video_data.get('title', 'فيديو')
-                                )
-                                logger.info(f"Successfully sent video {video_id_int} using file_id fallback.")
-                            except Exception as send_error:
-                                logger.error(f"Failed to send video {video_id_int} using file_id: {send_error}")
-                                raise copy_error  # Re-raise original error to be caught below
-                        else:
-                            logger.error(f"No file_id found for video {video_id_int}")
-                            raise copy_error
+                    bot.copy_message(call.message.chat.id, chat_id_int, message_id_int)
                     
-                    # إضافة لوحة التقييم ورابط المشاهدة/التحميل
+                    # إضافة لوحة التقييم
                     rating_keyboard = helpers.create_video_action_keyboard(video_id_int, user_id)
-                    bot.send_message(
-                        call.message.chat.id,
-                        "⭐ تم عرض الفيديو. استخدم الأزرار أدناه للمشاهدة عبر الموقع أو لتحميله.",
-                        reply_markup=rating_keyboard
-                    )
+                    bot.send_message(call.message.chat.id, "⭐ قيم هذا الفيديو:", reply_markup=rating_keyboard)
                     
                 except telebot.apihelper.ApiTelegramException as e:
                     logger.error(f"Telegram API error handling video {video_id}: {e}", exc_info=True)
