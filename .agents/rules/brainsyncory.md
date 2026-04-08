@@ -1,7 +1,7 @@
 
 
 # Project Memory — video-bot-r
-> 1237 notes | Score threshold: >40
+> 1251 notes | Score threshold: >40
 
 ## Safety — Never Run Destructive Commands
 
@@ -18,7 +18,7 @@
 
 **Stack:** Python
 
-## 📝 NOTE: 1 uncommitted file(s) in working tree.\n\n## Important Warnings
+## Important Warnings
 
 - **gotcha in shared-context.json** — -     }
 +     },
@@ -34,12 +34,12 @@
 
 - what-changed in shared-context.json — confirmed 6x
 - problem-fix in agent-rules.md — confirmed 6x
+- what-changed in shared-context.json — confirmed 6x
+- problem-fix in agent-rules.md — confirmed 6x
 - Added JWT tokens authentication — confirmed 5x
 - what-changed in shared-context.json — confirmed 7x
 - Strengthened types Verifying — evolves the database schema to support new req...
 - Strengthened types Import — evolves the database schema to support new requir...
-- problem-fix in agent-rules.md — confirmed 6x
-- what-changed in shared-context.json — confirmed 9x
 
 ## Known Fixes
 
