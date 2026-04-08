@@ -8,39 +8,17 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import DictCursor
 import os
-from urllib.parse import urlparse
 import logging
 import json
 import time
 from functools import lru_cache
 
+# Import connection pool functions from db_pool module
+from db_pool import get_db_connection, get_connection_pool
+
 logger = logging.getLogger(__name__)
 
-# [تعديل] يجب التأكد من أن هذا الملف لديك هو آخر نسخة كاملة
-# تتضمن EXPECTED_SCHEMA بكل الجداول (favorites, history, user_states)
-# وإلا ستفشل إضافات المفضلة. 
-
-try:
-    DATABASE_URL = os.environ.get('DATABASE_URL')
-    if not DATABASE_URL: raise ValueError("DATABASE_URL not set.")
-    result = urlparse(DATABASE_URL)
-    DB_CONFIG = {
-        'user': result.username, 'password': result.password,
-        'host': result.hostname, 'port': result.port, 'dbname': result.path[1:]
-    }
-except Exception as e:
-    logger.critical(f"FATAL: Could not parse DATABASE_URL. Error: {e}")
-    exit()
-
-# إنشاء connection pool
-import psycopg2.pool
-import threading
-from contextlib import contextmanager
-
-_connection_pool = None
-_pool_lock = threading.Lock()
-
-# إعدادات الـ Pool المحسنة
+# إعدادات الـ Pool المحسنة - نُستخدم في db_pool
 DB_POOL_MIN = int(os.environ.get('DB_POOL_MIN', '2'))  # زيادة الحد الأدنى
 DB_POOL_MAX = int(os.environ.get('DB_POOL_MAX', '20'))
 
@@ -130,43 +108,6 @@ EXPECTED_SCHEMA = {
     }
 }
 
-
-def get_connection_pool():
-    """إنشاء أو إرجاع connection pool"""
-    global _connection_pool
-    if _connection_pool is None:
-        with _pool_lock:
-            if _connection_pool is None:
-                try:
-                    _connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                        DB_POOL_MIN, DB_POOL_MAX,  # استخدام الإعدادات المرنة
-                        **DB_CONFIG
-                    )
-                    logger.info(f"Database connection pool created (min={DB_POOL_MIN}, max={DB_POOL_MAX})")
-                except Exception as e:
-                    logger.error(f"Failed to create connection pool: {e}")
-                    raise
-    return _connection_pool
-
-@contextmanager
-def get_db_connection():
-    """Context manager للحصول على اتصال من pool"""
-    pool = get_connection_pool()
-    conn = None
-    try:
-        conn = pool.getconn()
-        if conn:
-            yield conn
-        else:
-            raise psycopg2.OperationalError("Could not get connection from pool")
-    except Exception as e:
-        logger.error(f"Database connection error: {e}")
-        if conn:
-            pool.putconn(conn)
-        raise
-    finally:
-        if conn:
-            pool.putconn(conn)
 
 def verify_and_repair_schema():
     logger.info("Verifying and repairing database schema...")

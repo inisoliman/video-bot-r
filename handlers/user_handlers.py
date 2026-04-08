@@ -318,7 +318,7 @@ def register(bot, channel_id, admin_ids):
                                     # حذف الرسالة المُعاد توجيهها
                                     try:
                                         bot.delete_message(admin_id, forwarded.message_id)
-                                    except:
+                                    except Exception:
                                         pass
                             except Exception as e:
                                 logger.warning(f"Could not extract thumbnail via forward: {e}")

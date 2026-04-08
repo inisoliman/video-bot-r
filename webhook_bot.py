@@ -595,7 +595,7 @@ def admin_fix_videos_professional():
                             # حذف الرسالة المُعاد توجيهها
                             try:
                                 bot.delete_message(admin_id, forwarded.message_id)
-                            except:
+                            except Exception:
                                 pass
                         except Exception as e:
                             logger.error(f"Error forwarding video {video['id']}: {e}")
@@ -1004,7 +1004,7 @@ def admin_diagnose_file_ids():
                 # حذف الرسالة المُعاد توجيهها
                 try:
                     bot.delete_message(admin_id, forwarded.message_id)
-                except:
+                except Exception:
                     pass
                 
                 import time
