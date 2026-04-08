@@ -1,0 +1,19 @@
+{
+  "servers": {
+    "brainsync": {
+      "command": "node",
+      "args": [
+        "c:\\Users\\HiMa\\.vscode\\extensions\\dawoodahmad.brainsync-3.0.3\\dist\\mcp-server.js",
+        "--db",
+        "C:\\Users\\HiMa\\.brainsync\\video-bot-r-5142b4b7\\memory.db"
+      ],
+      "type": "stdio",
+      "env": {
+        "NEMOTRON_API_KEY": "",
+        "NEMOTRON_ENDPOINT": "https://api.ollama.com",
+        "NEMOTRON_MODEL": "nemotron-3-super:cloud",
+        "BRAINSYNC_LICENSE_TOKEN": "eyJ0aWVyIjoidHJpYWwiLCJleHBpcmVzQXQiOjE3NzU3MjY3NzcxNDMsIm1hY2hpbmVJZCI6IjQ5NzA3MjMwIiwidiI6MX0.ff27434a76126a96d765c664406af4cc4fe75346fcc78c9471c8d8dd7dce50a0"
+      }
+    }
+  }
+}
