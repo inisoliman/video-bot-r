@@ -71,8 +71,9 @@ def register(bot):
                 
                 results = []
                 for video in videos:
-                    # نستخدم دائماً وضع الفيديو لتوحيد المظهر
-                    res = create_inline_result(video, use_document=False)
+                    # التحقق من نوع المحتوى المخزن لتقليل أخطاء التليجرام
+                    is_document = (video.get('content_type') == 'DOCUMENT')
+                    res = create_inline_result(video, use_document=is_document)
                     if res:
                         results.append(res)
                 
