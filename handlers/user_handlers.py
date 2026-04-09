@@ -266,75 +266,84 @@ def register(bot, channel_id, admin_ids):
         # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي
         handle_private_text_search_direct(message, bot)
 
-    @bot.message_handler(content_types=["video"])
+    @bot.message_handler(content_types=["video", "document"])
     def handle_new_video(message):
-        if str(message.chat.id) == channel_id:
-            active_category_id = get_active_category_id()
-            if not active_category_id:
-                logger.warning(f"No active category set. Video {message.message_id} will not be saved.")
-                return
-            metadata = extract_video_metadata(message.caption)
-            if message.video:
-                metadata['duration'] = message.video.duration
-                if 'quality_resolution' not in metadata and message.video.height:
-                    metadata['quality_resolution'] = f"{message.video.height}p"
-            file_name = message.video.file_name if message.video else "video.mp4"
-            file_id = message.video.file_id if message.video else None
-            if not file_id:
-                logger.error(f"Could not get file_id for message {message.message_id}. Skipping.")
-                return
-            grouping_key = generate_grouping_key(metadata, message.caption, file_name)
-            video_db_id = add_video(
-                message_id=message.message_id, caption=message.caption, chat_id=message.chat.id,
-                file_name=file_name, file_id=file_id, metadata=metadata,
-                grouping_key=grouping_key, category_id=active_category_id
-            )
-            if video_db_id:
-                logger.info(f"Video {message.message_id} (DB ID: {video_db_id}) added to category {active_category_id}.")
+        """معالج الفيديوهات الجديدة المضافة للقناة (يدعم الفيديو والملفات)"""
+        if str(message.chat.id) != channel_id:
+            return
+
+        active_category_id = get_active_category_id()
+        if not active_category_id:
+            logger.warning(f"No active category set. Message {message.message_id} will not be saved.")
+            return
+
+        # تحديد ما إذا كان المحتوى فيديو أو ملفاً
+        content_obj = message.video or message.document
+        if not content_obj:
+            return
+
+        # إذا كان ملفاً، سنتأكد أنه فيديو (اختياري، يمكننا قبول أي ملف كفيديو)
+        content_type = 'VIDEO' if message.video else 'DOCUMENT'
+        
+        file_name = getattr(content_obj, 'file_name', f"video_{message.message_id}.mp4")
+        file_id = content_obj.file_id
+        
+        # استخراج الميتا داتا من الكابشن
+        metadata = extract_video_metadata(message.caption)
+        if message.video:
+            metadata['duration'] = message.video.duration
+            if 'quality_resolution' not in metadata and message.video.height:
+                metadata['quality_resolution'] = f"{message.video.height}p"
+
+        thumbnail_file_id = None
+        
+        # محاولة استخراج الصورة المصغرة والبيانات الكاملة عبر تمرير الرسالة للأدمن
+        # (لأن تليجرام أحياناً لا يرسل thumbnail_file_id في رسائل القنوات للبوتات)
+        try:
+            admin_id = admin_ids[0] if admin_ids else None
+            if admin_id:
+                forwarded = bot.forward_message(admin_id, message.chat.id, message.message_id)
                 
-                # استخراج وحفظ thumbnail تلقائياً
-                # المشكلة: message.video.thumb غالباً يكون None عند إرسال الفيديو للقناة
-                # الحل: نعيد توجيه الفيديو للأدمن ونستخرج thumbnail من الرسالة المُعاد توجيهها
+                # استخراج البيانات من الرسالة الموجهة
+                if forwarded.video:
+                    content_type = 'VIDEO'
+                    file_id = forwarded.video.file_id # استخدام file_id المحدث
+                    if forwarded.video.thumb:
+                        thumbnail_file_id = forwarded.video.thumb.file_id
+                elif forwarded.document:
+                    file_id = forwarded.document.file_id
+                    if forwarded.document.thumb:
+                        thumbnail_file_id = forwarded.document.thumb.file_id
+                
+                # حذف الرسالة الموجهة
                 try:
-                    if message.video:
-                        # محاولة استخراج thumbnail مباشرة أولاً
-                        thumbnail_file_id = None
-                        if message.video.thumb:
-                            thumbnail_file_id = message.video.thumb.file_id
-                            logger.info(f"✅ Thumbnail found directly for video {video_db_id}")
-                        else:
-                            # إذا لم يتوفر thumbnail مباشرة، نعيد توجيه الفيديو للأدمن لاستخراجه
-                            try:
-                                admin_id = admin_ids[0] if admin_ids else None
-                                if admin_id:
-                                    forwarded = bot.forward_message(
-                                        chat_id=admin_id,
-                                        from_chat_id=message.chat.id,
-                                        message_id=message.message_id
-                                    )
-                                    if forwarded.video and forwarded.video.thumb:
-                                        thumbnail_file_id = forwarded.video.thumb.file_id
-                                        logger.info(f"✅ Thumbnail extracted via forward for video {video_db_id}")
-                                    # حذف الرسالة المُعاد توجيهها
-                                    try:
-                                        bot.delete_message(admin_id, forwarded.message_id)
-                                    except Exception:
-                                        pass
-                            except Exception as e:
-                                logger.warning(f"Could not extract thumbnail via forward: {e}")
-                        
-                        # حفظ thumbnail إذا توفر
-                        if thumbnail_file_id:
-                            from db_manager import update_video_thumbnail
-                            if update_video_thumbnail(video_db_id, thumbnail_file_id):
-                                logger.info(f"💾 Thumbnail saved for video {video_db_id}")
-                            else:
-                                logger.warning(f"⚠️ Failed to save thumbnail for video {video_db_id}")
-                        else:
-                            logger.info(f"ℹ️ No thumbnail available for video {video_db_id}")
-                    else:
-                        logger.warning(f"⚠️ No video object for message {message.message_id}")
-                except Exception as e:
-                    logger.error(f"Error saving thumbnail for video {video_db_id}: {e}")
-            else:
-                logger.error(f"Failed to add video {message.message_id} to the database.")
+                    bot.delete_message(admin_id, forwarded.message_id)
+                except:
+                    pass
+        except Exception as e:
+            logger.warning(f"Could not refine metadata via forward for message {message.message_id}: {e}")
+            # إذا فشل التمرير، نحاول استخدام البيانات المتوفرة مباشرة
+            if content_obj and hasattr(content_obj, 'thumb') and content_obj.thumb:
+                thumbnail_file_id = content_obj.thumb.file_id
+
+        # إنشاء مفتاح التجميع
+        grouping_key = generate_grouping_key(metadata, message.caption, file_name)
+        
+        # إضافة الفيديو لقاعدة البيانات
+        video_db_id = add_video(
+            message_id=message.message_id, 
+            caption=message.caption, 
+            chat_id=message.chat.id,
+            file_name=file_name, 
+            file_id=file_id, 
+            metadata=metadata,
+            grouping_key=grouping_key, 
+            category_id=active_category_id,
+            thumbnail_file_id=thumbnail_file_id,
+            content_type=content_type
+        )
+        
+        if video_db_id:
+            logger.info(f"✅ Indexed {content_type} {message.message_id} (DB ID: {video_db_id}) with thumb: {thumbnail_file_id is not None}")
+        else:
+            logger.error(f"❌ Failed to index message {message.message_id}")

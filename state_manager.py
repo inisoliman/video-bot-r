@@ -15,6 +15,10 @@ class States:
     WAITING_BROADCAST_MESSAGE = "waiting_broadcast_message"
     WAITING_SEARCH_QUERY = "waiting_search_query"
     WAITING_REMOVE_CHANNEL_ID = "waiting_remove_channel_id"
+    # Admin roles for thumbnail management
+    WAITING_DEFAULT_THUMB = "waiting_default_thumb"
+    WAITING_VIDEO_ID_FOR_THUMB = "waiting_video_id_for_thumb"
+    WAITING_NEW_THUMB_FOR_VIDEO = "waiting_new_thumb_for_video"
 
 class StateManager:
     """Manages user conversation states using database storage."""

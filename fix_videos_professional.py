@@ -117,12 +117,12 @@ def fix_videos_from_channel():
                     # حذف الرسائل المنسوخة/المعاد توجيهها
                     try:
                         bot.delete_message(admin_id, copied.message_id)
-                    except:
+                    except Exception:
                         pass
                     
                     try:
                         bot.delete_message(admin_id, forwarded.message_id)
-                    except:
+                    except Exception:
                         pass
                     
                 except telebot.apihelper.ApiTelegramException as e:

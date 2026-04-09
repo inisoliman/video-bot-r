@@ -275,23 +275,26 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
     
     return result
 
-def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id=None):
-    metadata_json = json.dumps(metadata)
+def add_video(message_id, caption, chat_id, file_name, file_id, metadata, grouping_key=None, category_id=None, thumbnail_file_id=None, content_type='VIDEO'):
+    """إضافة فيديو جديد للأرشيف مع البيانات الكاملة"""
+    metadata_json = json.dumps(metadata) if metadata else None
     query = """
-        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO video_archive (message_id, caption, chat_id, file_name, file_id, metadata, grouping_key, category_id, thumbnail_file_id, content_type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (message_id) DO UPDATE SET
             caption = EXCLUDED.caption,
             file_name = EXCLUDED.file_name,
             file_id = EXCLUDED.file_id,
             metadata = EXCLUDED.metadata,
             grouping_key = EXCLUDED.grouping_key,
-            category_id = EXCLUDED.category_id
+            category_id = EXCLUDED.category_id,
+            thumbnail_file_id = COALESCE(EXCLUDED.thumbnail_file_id, video_archive.thumbnail_file_id),
+            content_type = EXCLUDED.content_type
         RETURNING id
     """
-    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id)
+    params = (message_id, caption, chat_id, file_name, file_id, metadata_json, grouping_key, category_id, thumbnail_file_id, content_type)
     result = execute_query(query, params, fetch="one", commit=True)
-    return result['id'] if result else None
+    return result['id'] if result and 'id' in result else (result[0] if result else None)
 
 # [إصلاح] إضافة دالة get_category_by_id قبل دالة add_category
 def get_category_by_id(category_id):
@@ -918,6 +921,31 @@ def get_videos_without_thumbnail(limit=20):
         LIMIT %s
     """
     return execute_query(sql, (limit,), fetch="all")
+
+# --- إدارة إعدادات البوت (Bot Settings) ---
+
+def set_bot_setting(key, value):
+    """حفظ أو تحديث إعداد في جدول bot_settings"""
+    sql_query = """
+    INSERT INTO bot_settings (setting_key, setting_value)
+    VALUES (%s, %s)
+    ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value
+    """
+    return execute_query(sql_query, (key, value), commit=True) is not None
+
+def get_bot_setting(key, default=None):
+    """جلب قيمة إعداد من جدول bot_settings"""
+    sql_query = "SELECT setting_value FROM bot_settings WHERE setting_key = %s"
+    result = execute_query(sql_query, (key,), fetch="one")
+    return result[0] if result else default
+
+def set_default_thumbnail(file_id):
+    """تعيين الصورة المصغرة الافتراضية للبوت"""
+    return set_bot_setting('default_thumbnail_file_id', file_id)
+
+def get_default_thumbnail():
+    """جلب الصورة المصغرة الافتراضية للبوت"""
+    return get_bot_setting('default_thumbnail_file_id')
 
 # Alias للتوافق مع السكريبات الخارجية
 def ensure_schema():

@@ -468,7 +468,7 @@ def admin_extract_channel_thumbnails():
                             # حذف الرسالة
                             try:
                                 bot.delete_message(admin_id, sent.message_id)
-                            except:
+                            except Exception:
                                 pass
                         else:
                             logger.warning(f"Video {video['id']} has no file_id")
@@ -502,7 +502,7 @@ def admin_extract_channel_thumbnails():
                         admin_id,
                         f"❌ حدث خطأ أثناء استخراج Thumbnails:\n{str(e)}"
                     )
-                except:
+                except Exception:
                     pass
         
         # تشغيل في thread منفصل
@@ -624,7 +624,7 @@ def admin_fix_videos_professional():
                 logger.error(f"Error in fix videos background: {e}", exc_info=True)
                 try:
                     bot.send_message(admin_id, f"❌ حدث خطأ أثناء الإصلاح:\n{str(e)}")
-                except:
+                except Exception:
                     pass
         
         thread = threading.Thread(target=fix_videos_background, daemon=True)
@@ -700,7 +700,7 @@ def admin_optimize_db():
                         admin_id,
                         f"❌ حدث خطأ أثناء تحسين القاعدة:\n{str(e)}"
                     )
-                except:
+                except Exception:
                     pass
 
         # تشغيل في thread منفصل

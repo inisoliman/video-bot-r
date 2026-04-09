@@ -13,8 +13,10 @@ from db_manager import (
     delete_videos_by_ids, get_video_by_id, delete_bot_user,
     delete_category_and_contents, move_videos_from_category, delete_category_by_id,
     get_categories_tree, set_active_category_id, get_child_categories,
-    move_videos_bulk, get_category_by_id  # إضافة get_category_by_id
+    move_videos_bulk, get_category_by_id, set_default_thumbnail, update_video_thumbnail  # إضافة الدوال الجديدة
 )
+
+from state_manager import state_handler, clear_user_waiting_state, set_user_waiting_for_input, States
 
 from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER, create_hierarchical_category_keyboard
 
@@ -173,9 +175,68 @@ def check_cancel(message, bot):
     if message.text == "/cancel":
         if message.chat.id in admin_steps:
             del admin_steps[message.chat.id]
+        clear_user_waiting_state(message.chat.id)
         bot.send_message(message.chat.id, "تم إلغاء العملية.")
         return True
     return False
+
+# --- معالجات الحالات الجديدة (Thumbnail Management) ---
+
+@state_handler(States.WAITING_DEFAULT_THUMB)
+def handle_set_default_thumb(message, bot, context):
+    if check_cancel(message, bot): return
+    
+    if message.content_type != 'photo':
+        bot.reply_to(message, "❌ يرجى إرسال صورة فقط. أو أرسل /cancel لإلغاء العملية.")
+        return
+    
+    # الحصول على رابط الصورة (أكبر حجم)
+    file_id = message.photo[-1].file_id
+    if set_default_thumbnail(file_id):
+        clear_user_waiting_state(message.from_user.id)
+        bot.reply_to(message, "✅ تم تعيين الصورة المصغرة الافتراضية بنجاح!")
+    else:
+        bot.reply_to(message, "❌ حدث خطأ أثناء حفظ الصورة.")
+
+@state_handler(States.WAITING_VIDEO_ID_FOR_THUMB)
+def handle_manual_thumb_id(message, bot, context):
+    if check_cancel(message, bot): return
+    
+    if not message.text or not message.text.isdigit():
+        bot.reply_to(message, "❌ يرجى إرسال رقم الفيديو (ID) فقط. مثال: 123")
+        return
+    
+    video_id = int(message.text)
+    video = get_video_by_id(video_id)
+    
+    if not video:
+        bot.reply_to(message, f"❌ لم يتم العثور على فيديو بالرقم {video_id}. جرب رقماً آخر.")
+        return
+    
+    # الانتقال للحالة التالية مع حفظ ID الفيديو في السياق
+    set_user_waiting_for_input(message.from_user.id, States.WAITING_NEW_THUMB_FOR_VIDEO, {"video_id": video_id})
+    bot.reply_to(message, f"🎯 تم اختيار الفيديو: {video['caption'][:50]}...\n\nالآن أرسل الصورة المصغرة الجديدة لهذا الفيديو:")
+
+@state_handler(States.WAITING_NEW_THUMB_FOR_VIDEO)
+def handle_manual_thumb_image(message, bot, context):
+    if check_cancel(message, bot): return
+    
+    video_id = context.get("video_id")
+    if not video_id:
+        clear_user_waiting_state(message.from_user.id)
+        bot.reply_to(message, "❌ حدث خطأ في النظام (ID مفقود).")
+        return
+
+    if message.content_type != 'photo':
+        bot.reply_to(message, "❌ يرجى إرسال صورة فقط لهذا الفيديو.")
+        return
+
+    file_id = message.photo[-1].file_id
+    if update_video_thumbnail(video_id, file_id):
+        clear_user_waiting_state(message.from_user.id)
+        bot.reply_to(message, f"✅ تم تحديث الصورة المصغرة للفيديو رقم {video_id} بنجاح!")
+    else:
+        bot.reply_to(message, "❌ حدث خطأ أثناء تحديث الصورة.")
 
 # --- Handler Registration ---
 
@@ -205,6 +266,13 @@ def register(bot, admin_ids):
         
         keyboard.add(InlineKeyboardButton("➕ إضافة قناة اشتراك", callback_data="admin::add_channel"),
                      InlineKeyboardButton("➖ إزالة قناة اشتراك", callback_data="admin::remove_channel"))
+        
+        # [جديد] أزرار إدارة الصور المصغرة
+        keyboard.add(InlineKeyboardButton("🖼️ تعيين صورة افتراضية", callback_data="admin::set_default_thumb"),
+                     InlineKeyboardButton("📸 تحديث صورة يدوي", callback_data="admin::manual_thumb"))
+        
+        keyboard.add(InlineKeyboardButton("✨ إصلاح شامل للأرشيف ✨", callback_data="admin::heal_archive"))
+        
         keyboard.add(InlineKeyboardButton("📋 عرض القنوات", callback_data="admin::list_channels"))
         keyboard.add(InlineKeyboardButton("📢 بث رسالة", callback_data="admin::broadcast"),
                      InlineKeyboardButton("📊 الإحصائيات", callback_data="admin::stats"),

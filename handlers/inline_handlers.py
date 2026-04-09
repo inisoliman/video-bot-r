@@ -71,20 +71,15 @@ def register(bot):
                 
                 results = []
                 for video in videos:
-                    content_type = video.get('content_type')
-                    if content_type == 'VIDEO':
-                        res = create_inline_result(video, use_document=False)
-                    else:
-                        res = create_inline_result(video, use_document=True)
+                    # نستخدم دائماً وضع الفيديو لتوحيد المظهر
+                    res = create_inline_result(video, use_document=False)
                     if res:
                         results.append(res)
                 
                 # حساب الـ offset القادم
-                # إذا كان عدد النتائج أقل من الحد (25)، فهذا يعني أننا وصلنا للنهاية
                 if len(videos) < 25:
                     next_offset = ""
                 else:
-                    # يوجد احتمال لوجود المزيد، نزيد الـ offset
                     next_offset = str(offset_val + 25)
 
                 if results:
@@ -92,32 +87,13 @@ def register(bot):
                         bot.answer_inline_query(
                             inline_query.id,
                             results,
-                            cache_time=30, # تقليل الكاش ليشعر المستخدم بالسرعة والتحديث
+                            cache_time=10, # تقليل الكاش ليشعر المستخدم بالتحديثات الفورية في الصور
                             is_personal=False,
                             next_offset=next_offset
                         )
-                        logger.info(f"✅ Sent {len(results)} results (Next offset: '{next_offset}')")
+                        logger.info(f"✅ Sent {len(results)} video results (Next offset: '{next_offset}')")
                     except Exception as e:
-                        # Fallback في حال حدوث خطأ غير متوقع
-                        logger.warning(f"⚠️ Primary send failed: {e}, retrying as Documents...")
-                        doc_results = []
-                        for video in videos[:25]:
-                            res = create_inline_result(video, use_document=True)
-                            if res:
-                                doc_results.append(res)
-                        
-                        if doc_results:
-                            try:
-                                bot.answer_inline_query(
-                                    inline_query.id,
-                                    doc_results,
-                                    cache_time=60,
-                                    is_personal=False,
-                                    next_offset=next_offset # تفعيل الـ pagination في الـ fallback أيضاً
-                                )
-                                logger.info(f"✅ Fallback: Sent {len(doc_results)} document results (Next offset: {next_offset})")
-                            except Exception as e2:
-                                logger.error(f"❌ Fallback also failed: {e2}")
+                        logger.error(f"❌ Primary send failed: {e}")
                 else:
                     logger.warning("⚠️ No valid results generated")
                     results = [

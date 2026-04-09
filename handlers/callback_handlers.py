@@ -458,6 +458,22 @@ def register(bot, admin_ids):
                     update_thread = threading.Thread(target=run_update_and_report_progress, args=(bot, msg.chat.id, msg.message_id))
                     update_thread.start()
 
+                elif sub_action == "heal_archive":
+                    msg = bot.edit_message_text("⏳ تم إرسال طلب إصلاح شامل للأرشيف (جلب الصور المصغرة)...", call.message.chat.id, call.message.message_id)
+                    from scripts.heal_archive import run_heal_archive
+                    heal_thread = threading.Thread(target=run_heal_archive, args=(bot, msg.chat.id, msg.message_id))
+                    heal_thread.start()
+
+                elif sub_action == "set_default_thumb":
+                    from state_manager import set_user_waiting_for_input
+                    bot.send_message(call.message.chat.id, "🖼️ من فضلك أرسل الصورة التي تريد تعيينها كصورة مصغرة افتراضية للفيديوهات. (أو /cancel)")
+                    set_user_waiting_for_input(user_id, States.WAITING_DEFAULT_THUMB)
+
+                elif sub_action == "manual_thumb":
+                    from state_manager import set_user_waiting_for_input
+                    bot.send_message(call.message.chat.id, "📸 من فضلك أرسل رقم الفيديو (ID) الذي تريد تحديث صورته المصغرة يدوياً. (أو /cancel)")
+                    set_user_waiting_for_input(user_id, States.WAITING_VIDEO_ID_FOR_THUMB)
+
                 elif sub_action == "set_active":
                     # 🌟 استخدام الكيبورد الهرمي الجديد
                     keyboard = create_hierarchical_category_keyboard("admin::setcat", add_back_button=False)
