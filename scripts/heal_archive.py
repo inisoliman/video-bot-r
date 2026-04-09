@@ -2,8 +2,8 @@
 
 import time
 import logging
-import telebot
-from db_manager import get_db_connection, update_video_thumbnail, execute_query
+import threading
+from db_manager import execute_query, update_video_thumbnail
 from telebot.apihelper import ApiTelegramException
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ def run_heal_archive(bot, chat_id, message_id):
     """
     bot.edit_message_text("🔍 بدء عملية الفحص والإصلاح الشامل للأرشيف...", chat_id, message_id)
     
-    # 1. جلب الفيديوهات التي تحتاج لإصلاح (ليس لها صورة مصغرة أو نوعها DOCUMENT)
+    # 1. جلب الفيديوهات التي تحتاج لإصلاح
     sql = """
         SELECT id, message_id, chat_id 
         FROM video_archive 
@@ -22,7 +22,13 @@ def run_heal_archive(bot, chat_id, message_id):
         ORDER BY id DESC
     """
     
-    videos_to_fix = execute_query(sql, fetch="all")
+    try:
+        videos_to_fix = execute_query(sql, fetch="all")
+    except Exception as e:
+        logger.error(f"Error fetching videos to fix: {e}")
+        bot.edit_message_text(f"❌ خطأ في قاعدة البيانات: {e}", chat_id, message_id)
+        return
+
     if not videos_to_fix:
         bot.edit_message_text("✅ الأرشيف سليم تماماً! كل الفيديوهات تحتوي على صور مصغرة.", chat_id, message_id)
         return
@@ -32,7 +38,7 @@ def run_heal_archive(bot, chat_id, message_id):
     failed_count = 0
     start_time = time.time()
     
-    # جلب معرف أحد المشرفين لإجراء عملية الـ Forward (تليجرام يتطلب وجود مستلم لتوليد البيانات)
+    # جلب معرف أحد المشرفين لإجراء عملية الـ Forward
     from config import ADMIN_IDS
     admin_id = ADMIN_IDS[0] if ADMIN_IDS else None
     
@@ -86,7 +92,7 @@ def run_heal_archive(bot, chat_id, message_id):
             logger.error(f"Error healing video {video_db_id}: {e}")
             failed_count += 1
             if "flood" in str(e).lower():
-                time.sleep(30) # انتظار طويل في حالة الـ Flood
+                time.sleep(35) 
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             failed_count += 1
@@ -108,7 +114,7 @@ def run_heal_archive(bot, chat_id, message_id):
                 pass
         
         # تأخير بسيط لتجنب الـ Flood
-        time.sleep(0.5)
+        time.sleep(1.0) # زيادة التأخير قليلاً للأمان
 
     final_text = (
         f"✅ اكتملت عملية الإصلاح الشامل!\n\n"
