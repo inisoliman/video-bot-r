@@ -464,6 +464,27 @@ def register(bot, admin_ids):
                     heal_thread = threading.Thread(target=run_heal_archive, args=(bot, msg.chat.id, msg.message_id))
                     heal_thread.start()
 
+                elif sub_action == "list_documents":
+                    from scripts.convert_docs_to_video import get_document_videos
+                    docs = get_document_videos()
+                    if not docs:
+                        bot.answer_callback_query(call.id, "✅ لا يوجد ملفات مسجلة كمستندات!", show_alert=True)
+                        return
+                    text = f"📄 الملفات المسجلة كمستندات ({len(docs)}):\n\n"
+                    for doc in docs[:30]:
+                        title = (doc.get('caption') or doc.get('file_name') or 'بدون عنوان')[:40]
+                        text += f"• ID: {doc['id']} - {title}\n"
+                    if len(docs) > 30:
+                        text += f"\n... و{len(docs) - 30} ملف آخر"
+                    text += f"\n\n💡 اضغط 'تحويل الكل إلى فيديو' لتحويلها تلقائياً."
+                    bot.send_message(call.message.chat.id, text)
+
+                elif sub_action == "convert_all_docs":
+                    msg = bot.edit_message_text("⏳ جارِ بدء عملية تحويل المستندات إلى فيديوهات...", call.message.chat.id, call.message.message_id)
+                    from scripts.convert_docs_to_video import run_convert_all_docs
+                    convert_thread = threading.Thread(target=run_convert_all_docs, args=(bot, msg.chat.id, msg.message_id))
+                    convert_thread.start()
+
                 elif sub_action == "set_default_thumb":
                     from state_manager import set_user_waiting_for_input
                     bot.send_message(call.message.chat.id, "🖼️ من فضلك أرسل الصورة التي تريد تعيينها كصورة مصغرة افتراضية للفيديوهات. (أو /cancel)")

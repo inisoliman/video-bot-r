@@ -273,6 +273,10 @@ def register(bot, admin_ids):
         
         keyboard.add(InlineKeyboardButton("✨ إصلاح شامل للأرشيف ✨", callback_data="admin::heal_archive"))
         
+        # أزرار تحويل المستندات
+        keyboard.add(InlineKeyboardButton("📄 عرض ملفات Document", callback_data="admin::list_documents"),
+                     InlineKeyboardButton("🔄 تحويل الكل إلى فيديو", callback_data="admin::convert_all_docs"))
+        
         keyboard.add(InlineKeyboardButton("📋 عرض القنوات", callback_data="admin::list_channels"))
         keyboard.add(InlineKeyboardButton("📢 بث رسالة", callback_data="admin::broadcast"),
                      InlineKeyboardButton("📊 الإحصائيات", callback_data="admin::stats"),
