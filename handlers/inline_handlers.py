@@ -69,33 +69,21 @@ def register(bot):
                 # استراتيجية العرض
                 logger.info(f"🔄 Processing results offset={offset_val}...")
                 
-                results = []
-                for video in videos:
-                    # التحقق من نوع المحتوى المخزن لتقليل أخطاء التليجرام
-                    is_document = (video.get('content_type') == 'DOCUMENT')
-                    res = create_inline_result(video, use_document=is_document)
-                    if res:
-                        results.append(res)
-                
                 # حساب الـ offset القادم
                 if len(videos) < 25:
                     next_offset = ""
                 else:
                     next_offset = str(offset_val + 25)
 
-                if results:
-                    try:
-                        bot.answer_inline_query(
-                            inline_query.id,
-                            results,
-                            cache_time=10, # تقليل الكاش ليشعر المستخدم بالتحديثات الفورية في الصور
-                            is_personal=False,
-                            next_offset=next_offset
-                        )
-                        logger.info(f"✅ Sent {len(results)} video results (Next offset: '{next_offset}')")
-                    except Exception as e:
-                        logger.error(f"❌ Primary send failed: {e}")
-                else:
+                # المحاولة الأولى: عرض كل النتائج حسب نوعها المخزن
+                results = []
+                for video in videos:
+                    is_document = (video.get('content_type') == 'DOCUMENT')
+                    res = create_inline_result(video, use_document=is_document)
+                    if res:
+                        results.append(res)
+
+                if not results:
                     logger.warning("⚠️ No valid results generated")
                     results = [
                         InlineQueryResultArticle(
@@ -108,6 +96,42 @@ def register(bot):
                         )
                     ]
                     bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                else:
+                    try:
+                        bot.answer_inline_query(
+                            inline_query.id,
+                            results,
+                            cache_time=10,
+                            is_personal=False,
+                            next_offset=next_offset
+                        )
+                        logger.info(f"✅ Sent {len(results)} results (Next offset: '{next_offset}')")
+                    except telebot.apihelper.ApiTelegramException as api_err:
+                        error_desc = str(api_err)
+                        if "VIDEO_CONTENT_TYPE_INVALID" in error_desc:
+                            # ✨ Fallback: تحويل كل النتائج إلى مستندات وإعادة الإرسال
+                            logger.warning(f"⚠️ VIDEO_CONTENT_TYPE_INVALID - retrying all as documents...")
+                            doc_results = []
+                            for video in videos:
+                                res = create_inline_result(video, use_document=True)
+                                if res:
+                                    doc_results.append(res)
+                            if doc_results:
+                                try:
+                                    bot.answer_inline_query(
+                                        inline_query.id,
+                                        doc_results,
+                                        cache_time=10,
+                                        is_personal=False,
+                                        next_offset=next_offset
+                                    )
+                                    logger.info(f"✅ Fallback OK: Sent {len(doc_results)} document results")
+                                except Exception as e2:
+                                    logger.error(f"❌ Fallback also failed: {e2}")
+                        else:
+                            logger.error(f"❌ API error: {api_err}")
+                    except Exception as e:
+                        logger.error(f"❌ Unexpected send error: {e}")
             
         except Exception as e:
             logger.error(f"Error in inline query handler: {e}", exc_info=True)
