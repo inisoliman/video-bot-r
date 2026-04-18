@@ -135,12 +135,12 @@ def show_user_comments(bot, message, page=0):
             buttons = []
             
             if page > 0:
-                buttons.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=f"my_comments::{page-1}"))
+                buttons.append(types.InlineKeyboardButton("◀️ السابق", callback_data=f"my_comments::{page-1}"))
             
             buttons.append(types.InlineKeyboardButton(f"📄 {page+1}/{(total-1)//db.VIDEOS_PER_PAGE + 1}", callback_data="noop"))
             
             if (page + 1) * db.VIDEOS_PER_PAGE < total:
-                buttons.append(types.InlineKeyboardButton("➡️ التالي", callback_data=f"my_comments::{page+1}"))
+                buttons.append(types.InlineKeyboardButton("التالي ▶️", callback_data=f"my_comments::{page+1}"))
             
             markup.row(*buttons)
             bot.send_message(user_id, "🔽 التنقل:", reply_markup=markup)
@@ -204,12 +204,12 @@ def show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False):
             buttons = []
             
             if not comment['admin_reply']:
-                buttons.append(types.InlineKeyboardButton("✍️ رد", callback_data=f"reply_comment::{comment['id']}"))
+                buttons.append(types.InlineKeyboardButton("✍️ رد 🟢", callback_data=f"reply_comment::{comment['id']}"))
             
             if not comment['is_read']:
-                buttons.append(types.InlineKeyboardButton("✓ تعليم كمقروء", callback_data=f"mark_read::{comment['id']}"))
+                buttons.append(types.InlineKeyboardButton("✓ مقروء 🔵", callback_data=f"mark_read::{comment['id']}"))
             
-            buttons.append(types.InlineKeyboardButton("🗑️ حذف", callback_data=f"delete_comment::{comment['id']}"))
+            buttons.append(types.InlineKeyboardButton("🗑️ حذف 🔴", callback_data=f"delete_comment::{comment['id']}"))
             
             markup.row(*buttons)
             
@@ -223,20 +223,20 @@ def show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False):
             nav_buttons = []
             if page > 0:
                 callback = f"admin_comments_unread::{page-1}" if unread_only else f"admin_comments::{page-1}"
-                nav_buttons.append(types.InlineKeyboardButton("⬅️ السابق", callback_data=callback))
+                nav_buttons.append(types.InlineKeyboardButton("◀️ السابق", callback_data=callback))
             
             nav_buttons.append(types.InlineKeyboardButton(f"📄 {page+1}/{(total-1)//db.VIDEOS_PER_PAGE + 1}", callback_data="noop"))
             
             if (page + 1) * db.VIDEOS_PER_PAGE < total:
                 callback = f"admin_comments_unread::{page+1}" if unread_only else f"admin_comments::{page+1}"
-                nav_buttons.append(types.InlineKeyboardButton("➡️ التالي", callback_data=callback))
+                nav_buttons.append(types.InlineKeyboardButton("التالي ▶️", callback_data=callback))
             
             if nav_buttons:
                 markup.row(*nav_buttons)
             
             # زر التبديل بين الكل وغير المقروءة
             filter_button = types.InlineKeyboardButton(
-                "📋 عرض الكل" if unread_only else "🔔 غير المقروءة فقط",
+                "📋 عرض الكل 🔵" if unread_only else "🔔 غير المقروءة فقط 🟡",
                 callback_data=f"admin_comments::0" if unread_only else f"admin_comments_unread::0"
             )
             markup.row(filter_button)
@@ -377,8 +377,8 @@ def handle_delete_comment(bot, call, admin_ids):
         # طلب تأكيد الحذف
         markup = types.InlineKeyboardMarkup()
         markup.row(
-            types.InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_comment::{comment_id}"),
-            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+            types.InlineKeyboardButton("🗑️ تأكيد الحذف 🔴", callback_data=f"confirm_delete_comment::{comment_id}"),
+            types.InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="noop")
         )
         
         bot.answer_callback_query(call.id)
@@ -433,8 +433,8 @@ def handle_delete_all_comments(bot, user_id, admin_ids):
         # طلب تأكيد
         markup = types.InlineKeyboardMarkup()
         markup.row(
-            types.InlineKeyboardButton("✅ نعم، احذف الكل", callback_data="confirm_delete_all_comments"),
-            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+            types.InlineKeyboardButton("🗑️ حذف الكل 🔴", callback_data="confirm_delete_all_comments"),
+            types.InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="noop")
         )
         
         stats = db.get_comments_stats()
@@ -517,8 +517,8 @@ def handle_delete_user_comments(bot, user_id, admin_ids, target_user_id_str=None
         # طلب تأكيد
         markup = types.InlineKeyboardMarkup()
         markup.row(
-            types.InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_user_comments::{target_user_id}"),
-            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+            types.InlineKeyboardButton("🗑️ تأكيد الحذف 🔴", callback_data=f"confirm_delete_user_comments::{target_user_id}"),
+            types.InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="noop")
         )
         
         bot.send_message(
@@ -580,8 +580,8 @@ def handle_delete_old_comments(bot, user_id, admin_ids, days_str=None):
         # طلب تأكيد
         markup = types.InlineKeyboardMarkup()
         markup.row(
-            types.InlineKeyboardButton("✅ نعم، احذف", callback_data=f"confirm_delete_old_comments::{days}"),
-            types.InlineKeyboardButton("❌ إلغاء", callback_data="noop")
+            types.InlineKeyboardButton("🗑️ تأكيد الحذف 🔴", callback_data=f"confirm_delete_old_comments::{days}"),
+            types.InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="noop")
         )
         
         bot.send_message(

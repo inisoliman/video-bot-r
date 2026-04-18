@@ -5,6 +5,7 @@
 # ==============================================================================
 
 import os
+import hmac  # للمقارنة الآمنة ضد timing attacks
 import json
 import logging
 import threading  # إضافة threading
@@ -146,15 +147,18 @@ def webhook():
             abort(429)  # Too Many Requests
     
     try:
-        # التحقق من WEBHOOK_SECRET فقط إذا تم تعيينه بشكل مخصص
-        # ملاحظة: Telegram قد لا يرسل secret_token في الطلبات القديمة
+        # 🔐 التحقق الإلزامي من WEBHOOK_SECRET عند تعيينه بشكل مخصص
+        # Telegram يرسل دائماً secret_token في الـ header إذا تم تكوينه عبر setWebhook
+        # المرجع: https://core.telegram.org/bots/api#setwebhook
         if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
-            secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
-            # فقط نحذر إذا كان هناك secret مخصص ولم يتطابق
-            # لكن لا نرفض الطلب لأن Telegram قد لا يرسله في بعض الحالات
-            if secret_token and secret_token != WEBHOOK_SECRET:
-                logger.warning(f"Webhook secret mismatch from {request.remote_addr}")
-                # لا نستخدم abort هنا لتجنب رفض الطلبات الشرعية
+            secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
+            # استخدام hmac.compare_digest لمنع timing attacks
+            if not secret_token or not hmac.compare_digest(secret_token, WEBHOOK_SECRET):
+                logger.warning(
+                    f"❌ Webhook secret mismatch/missing from {request.remote_addr} - "
+                    f"rejecting request (403)"
+                )
+                abort(403)  # رفض الطلب بشكل صريح
         
         if request.content_type != 'application/json':
             logger.warning(f"Invalid content-type: {request.content_type}")

@@ -109,43 +109,45 @@ def register(bot, channel_id, admin_ids):
     def get_my_id(message):
         bot.reply_to(message, f"معرف حسابك هو: `{message.from_user.id}`", parse_mode="Markdown")
 
-    @bot.message_handler(func=lambda message: message.text == "🎬 عرض كل الفيديوهات")
+    # [تعديل] المطابقة بـ `in` لتدعم النصوص القديمة والجديدة (بعد إضافة الدوائر الملوّنة 🟢🔴🟡🔵🟣🟠)
+    @bot.message_handler(func=lambda message: message.text and "عرض كل الفيديوهات" in message.text)
     def handle_list_videos_button(message):
         list_videos(bot, message)
         
-    @bot.message_handler(func=lambda message: message.text == "⭐ المفضلة") 
+    @bot.message_handler(func=lambda message: message.text and "المفضلة" in message.text and "عرض" not in message.text) 
     def handle_favorites_button(message):
         bot.send_chat_action(message.chat.id, 'typing')
         videos, total_count = get_user_favorites(message.from_user.id, page=0)
         if not videos:
-            bot.reply_to(message, "لا توجد فيديوهات في قائمتك المفضلة حالياً.")
+            bot.reply_to(message, "💭 لا توجد فيديوهات في قائمتك المفضلة حالياً.")
             return
         keyboard = create_paginated_keyboard(videos, total_count, 0, "fav_page", "user_fav")
-        bot.reply_to(message, f"قائمة مفضلاتك ({total_count} فيديو):", reply_markup=keyboard)
+        bot.reply_to(message, f"💖 <b>قائمة مفضلاتك</b>\n📊 العدد: <code>{total_count}</code> فيديو", reply_markup=keyboard)
         
-    @bot.message_handler(func=lambda message: message.text == "📺 سجل المشاهدة") 
+    @bot.message_handler(func=lambda message: message.text and "سجل المشاهدة" in message.text) 
     def handle_history_button(message):
         bot.send_chat_action(message.chat.id, 'typing')
         videos, total_count = get_user_history(message.from_user.id, page=0)
         if not videos:
-            bot.reply_to(message, "سجل المشاهدة الخاص بك فارغ حالياً.")
+            bot.reply_to(message, "📭 سجل المشاهدة الخاص بك فارغ حالياً.")
             return
         keyboard = create_paginated_keyboard(videos, total_count, 0, "history_page", "user_history")
-        bot.reply_to(message, f"سجل مشاهداتك ({total_count} فيديو):", reply_markup=keyboard)
+        bot.reply_to(message, f"📺 <b>سجل مشاهداتك</b>\n📊 العدد: <code>{total_count}</code> فيديو", reply_markup=keyboard)
 
 
-    @bot.message_handler(func=lambda message: message.text == "🔥 الفيديوهات الشائعة")
+    @bot.message_handler(func=lambda message: message.text and "الفيديوهات الشائعة" in message.text)
     def handle_popular_videos_button(message):
         show_popular_videos(message)
 
-    @bot.message_handler(func=lambda message: message.text == "🔍 بحث")
+    @bot.message_handler(func=lambda message: message.text and message.text.startswith("🔍 بحث"))
     def handle_search_button(message):
         # [تعديل] إبقاء الحالة لـ "البحث" فقط في حال عدم إرسال كلمة مباشرة
         set_user_waiting_for_input(message.from_user.id, States.WAITING_SEARCH_QUERY)
-        bot.reply_to(message, "أرسل الكلمة المفتاحية للبحث عن الفيديوهات:")
+        bot.reply_to(message, "🔎 <b>البحث عن فيديوهات</b>\n\n✏️ أرسل الآن الكلمة المفتاحية التي تريد البحث عنها:\n\n💡 أو استخدم /cancel للإلغاء")
 
-    @bot.message_handler(func=lambda message: message.text == "🍿 اقترح لي فيلم")
+    @bot.message_handler(func=lambda message: message.text and "اقترح لي فيلم" in message.text)
     def handle_random_suggestion(message):
+
         bot.send_chat_action(message.chat.id, 'typing')
         video = get_random_video()
         if video:

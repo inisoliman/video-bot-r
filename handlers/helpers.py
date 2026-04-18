@@ -140,37 +140,41 @@ def main_menu(bot_username=None):
     markup = ReplyKeyboardMarkup(
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="اختر أمرًا من القائمة أدناه 👇"
+        input_field_placeholder="✨ اختر أمرًا من القائمة أدناه 👇"
     )
     # [تعديل] إضافة أزرار المفضلة والسجل - ترتيب أفضل للديسكتوب
+    # 🟢 أخضر = تصفح عام | 🔴 أحمر = الأكثر طلباً | 🟡 أصفر = مخصص لك | 🔵 أزرق = نشاطك | 🟣 بنفسجي = مميز | 🟠 برتقالي = بحث
     markup.row(
-        KeyboardButton("🎬 عرض كل الفيديوهات"),
-        KeyboardButton("🔥 الفيديوهات الشائعة")
+        KeyboardButton("🎬 عرض كل الفيديوهات 🟢"),
+        KeyboardButton("🔥 الفيديوهات الشائعة 🔴")
     )
     markup.row(
-        KeyboardButton("⭐ المفضلة"),
-        KeyboardButton("📺 سجل المشاهدة")
+        KeyboardButton("⭐ المفضلة 🟡"),
+        KeyboardButton("📺 سجل المشاهدة 🔵")
     )
     markup.row(
-        KeyboardButton("🍿 اقترح لي فيلم"),
-        KeyboardButton("🔍 بحث")
+        KeyboardButton("🍿 اقترح لي فيلم 🟣"),
+        KeyboardButton("🔍 بحث 🟠")
     )
     
     return markup
 
 
+
 def create_categories_keyboard(parent_id=None):
     keyboard = InlineKeyboardMarkup(row_width=2)
     categories = get_child_categories(parent_id)
-    buttons = [InlineKeyboardButton(cat['name'], callback_data=f"cat::{cat['id']}::0") for cat in categories]
+    # 📁 أيقونة موحدة لكل تصنيف لشكل أجمل ومنظم
+    buttons = [InlineKeyboardButton(f"📁 {cat['name']}", callback_data=f"cat::{cat['id']}::0") for cat in categories]
     keyboard.add(*buttons)
     if parent_id:
         parent_category = get_category_by_id(parent_id)
         if parent_category and parent_category.get('parent_id') is not None:
-            keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data=f"cat::{parent_category['parent_id']}::0"))
+            keyboard.add(InlineKeyboardButton("↩️ رجوع", callback_data=f"cat::{parent_category['parent_id']}::0"))
         else:
-            keyboard.add(InlineKeyboardButton("🔙 رجوع للتصنيفات الرئيسية", callback_data="back_to_cats"))
+            keyboard.add(InlineKeyboardButton("🏠 التصنيفات الرئيسية", callback_data="back_to_cats"))
     return keyboard
+
 
 
 # ============================================
@@ -193,7 +197,7 @@ def create_hierarchical_category_keyboard(callback_prefix, add_back_button=True)
     all_categories = get_categories_tree()
     
     if not all_categories:
-        keyboard.add(InlineKeyboardButton("❌ لا توجد تصنيفات", callback_data="noop"))
+        keyboard.add(InlineKeyboardButton("🚫 لا توجد تصنيفات", callback_data="noop"))
         return keyboard
     
     # بناء الشجرة
@@ -210,9 +214,10 @@ def create_hierarchical_category_keyboard(callback_prefix, add_back_button=True)
     
     # إضافة زر الرجوع إذا كان مطلوباً
     if add_back_button:
-        keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+        keyboard.add(InlineKeyboardButton("❌ إلغاء", callback_data="back_to_main"))
     
     return keyboard
+
 
 
 def format_duration(seconds):
@@ -269,30 +274,36 @@ def create_paginated_keyboard(videos, total_count, current_page, action_prefix, 
     nav_buttons = []
     base_callback = f"{action_prefix}::{context_id}"
 
-    if current_page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"{base_callback}::{current_page - 1}"))
+    total_pages = max(math.ceil(total_count / VIDEOS_PER_PAGE), 1)
 
-    total_pages = math.ceil(total_count / VIDEOS_PER_PAGE)
+    if current_page > 0:
+        nav_buttons.append(InlineKeyboardButton("◀️ السابق", callback_data=f"{base_callback}::{current_page - 1}"))
+
+    # مؤشر الصفحة في المنتصف (زر معطّل بـ noop)
+    nav_buttons.append(InlineKeyboardButton(f"📄 {current_page + 1}/{total_pages}", callback_data="noop"))
+
     if current_page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("التالي ➡️", callback_data=f"{base_callback}::{current_page + 1}"))
+        nav_buttons.append(InlineKeyboardButton("التالي ▶️", callback_data=f"{base_callback}::{current_page + 1}"))
 
     if nav_buttons:
-        keyboard.add(*nav_buttons, row_width=2)
+        keyboard.add(*nav_buttons, row_width=3)
 
-    keyboard.add(InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="back_to_main"))
+    keyboard.add(InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="back_to_main"))
     return keyboard
 
 
 def create_combined_keyboard(child_categories, videos, total_video_count, current_page, parent_category_id):
     keyboard = InlineKeyboardMarkup()
     if child_categories:
-        keyboard.add(InlineKeyboardButton("📂--- الأقسام الفرعية ---📂", callback_data="noop"), row_width=1)
+        # 🗂️ عنوان قسم الأقسام الفرعية بشكل أنيق (زر noop)
+        keyboard.add(InlineKeyboardButton("╭─ 🗂️ الأقسام الفرعية ─╮", callback_data="noop"), row_width=1)
         cat_buttons = [InlineKeyboardButton(f"📁 {cat['name']}", callback_data=f"cat::{cat['id']}::0") for cat in child_categories]
         for i in range(0, len(cat_buttons), 2):
             keyboard.add(*cat_buttons[i:i+2])
     if videos:
         if child_categories:
-            keyboard.add(InlineKeyboardButton("🎬--- الفيديوهات ---🎬", callback_data="noop"), row_width=1)
+            # 🎬 عنوان قسم الفيديوهات
+            keyboard.add(InlineKeyboardButton("╭─ 🎬 الفيديوهات ─╮", callback_data="noop"), row_width=1)
         
         # تحويل كائنات DictRow
         mutable_videos = [dict(v) for v in videos] 
@@ -307,21 +318,28 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
             video['avg_rating'] = rating_info['avg']
 
             display_title = format_video_display_info(video)
-            keyboard.add(InlineKeyboardButton(display_title, callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"), row_width=1)
+            keyboard.add(InlineKeyboardButton(f"▶️ {display_title}", callback_data=f"video::{video['id']}::{video['message_id']}::{video['chat_id']}"), row_width=1)
+
             
     nav_buttons = []
+    total_pages = max(math.ceil(total_video_count / VIDEOS_PER_PAGE), 1) if total_video_count else 1
+
     if current_page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"cat::{parent_category_id}::{current_page - 1}"))
-    total_pages = math.ceil(total_video_count / VIDEOS_PER_PAGE)
+        nav_buttons.append(InlineKeyboardButton("◀️ السابق", callback_data=f"cat::{parent_category_id}::{current_page - 1}"))
+
+    if videos and total_video_count > 0:
+        # مؤشر الصفحة
+        nav_buttons.append(InlineKeyboardButton(f"📄 {current_page + 1}/{total_pages}", callback_data="noop"))
+
     if current_page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("التالي ➡️", callback_data=f"cat::{parent_category_id}::{current_page + 1}"))
+        nav_buttons.append(InlineKeyboardButton("التالي ▶️", callback_data=f"cat::{parent_category_id}::{current_page + 1}"))
     if nav_buttons:
-        keyboard.add(*nav_buttons, row_width=2)
+        keyboard.add(*nav_buttons, row_width=3)
     parent_category = get_category_by_id(parent_category_id)
     if parent_category and parent_category.get('parent_id') is not None:
-        keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data=f"cat::{parent_category['parent_id']}::0"), row_width=1)
+        keyboard.add(InlineKeyboardButton("↩️ رجوع", callback_data=f"cat::{parent_category['parent_id']}::0"), row_width=1)
     else:
-        keyboard.add(InlineKeyboardButton("🔙 رجوع للتصنيفات الرئيسية", callback_data="back_to_cats"), row_width=1)
+        keyboard.add(InlineKeyboardButton("🏠 التصنيفات الرئيسية", callback_data="back_to_cats"), row_width=1)
     return keyboard
 
 
@@ -330,23 +348,27 @@ def create_video_action_keyboard(video_id, user_id):
     user_rating = get_user_video_rating(video_id, user_id)
     is_fav = is_video_favorite(user_id, video_id) # [تعديل] التحقق من حالة المفضلة
 
-    # [تعديل] إضافة زر المفضلة
-    fav_text = "⭐ إزالة من المفضلة" if is_fav else "☆ إضافة للمفضلة"
+    # 💖 زر المفضلة بأيقونات ديناميكية معبّرة (قلب ممتلئ = في المفضلة / قلب أبيض = غير مضاف)
+    fav_text = "💖 إزالة من المفضلة" if is_fav else "🤍 إضافة للمفضلة"
     fav_data = f"fav::remove::{video_id}" if is_fav else f"fav::add::{video_id}"
     keyboard.add(InlineKeyboardButton(fav_text, callback_data=fav_data), row_width=1)
-    
-    # أزرار التقييم
-    buttons = [InlineKeyboardButton("🌟" if user_rating == i else "☆", callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
+
+    # 🌟 عنوان قسم التقييم
+    keyboard.add(InlineKeyboardButton("─── ⭐ قيّم الفيديو ───", callback_data="noop"), row_width=1)
+
+    # أزرار التقييم: ⭐ للمختار، ☆ للباقي
+    buttons = [InlineKeyboardButton("⭐" if user_rating and user_rating >= i else "☆", callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
     keyboard.add(*buttons)
     
     stats = get_video_rating_stats(video_id)
-    if stats and stats.get('avg') is not None:
-        keyboard.add(InlineKeyboardButton(f"متوسط التقييم: {stats['avg']:.1f} ({stats['count']} تقييم)", callback_data="noop"), row_width=1)
+    if stats and stats.get('avg') is not None and stats.get('count', 0) > 0:
+        keyboard.add(InlineKeyboardButton(f"📊 المتوسط: {stats['avg']:.1f}/5 • 👥 {stats['count']} تقييم", callback_data="noop"), row_width=1)
     
-    # [جديد] إضافة زر التعليق
-    keyboard.add(InlineKeyboardButton("💬 إضافة تعليق", callback_data=f"add_comment::{video_id}"), row_width=1)
+    # 💬 زر التعليقات — نص أوضح
+    keyboard.add(InlineKeyboardButton("💬 التعليقات والردود", callback_data=f"add_comment::{video_id}"), row_width=1)
     
     return keyboard
+
 
 
 def generate_grouping_key(metadata, caption, file_name):
