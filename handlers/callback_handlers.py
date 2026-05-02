@@ -4,6 +4,7 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
 import threading
+from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 
 from db_manager import (
     search_videos, get_videos, get_videos_ratings_bulk, VIDEOS_PER_PAGE,
@@ -47,11 +48,11 @@ def register(bot, admin_ids):
                 for channel in unsub_channels:
                     try:
                         link = f"https://t.me/{channel['channel_name']}" if not str(channel['channel_id']).startswith('-100') else f"https://t.me/c/{str(channel['channel_id']).replace('-100', '')}"
-                        markup.add(InlineKeyboardButton(f"📢 اشترك في {channel['channel_name']} 🔵", url=link))
+                        markup.add(inline_button(f"📢 اشترك في {channel['channel_name']} 🔵", STYLE_PRIMARY, url=link))
                     except Exception as e:
                         logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
 
-                markup.add(InlineKeyboardButton("🔄 تحقق من الاشتراك الآن 🟢", callback_data="check_subscription"))
+                markup.add(inline_button("🔄 تحقق من الاشتراك الآن 🟢", STYLE_SUCCESS, callback_data="check_subscription"))
 
                 sub_msg = "🛑 <b>يجب الاشتراك في القنوات التالية أولاً</b>\n\nلمتابعة استخدام البوت، يرجى الاشتراك ثم الضغط على زر التحقق."
                 try:
@@ -100,11 +101,11 @@ def register(bot, admin_ids):
                                 # قناة باسم مستخدم بدون @
                                 link = f"https://t.me/{channel_id_str}"
                             
-                            markup.add(InlineKeyboardButton(f"📢 اشترك في {channel['channel_name']} 🔵", url=link))
+                            markup.add(inline_button(f"📢 اشترك في {channel['channel_name']} 🔵", STYLE_PRIMARY, url=link))
                         except Exception as e:
                             logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
                     
-                    markup.add(InlineKeyboardButton("🔄 تحقق من الاشتراك الآن 🟢", callback_data="check_subscription"))
+                    markup.add(inline_button("🔄 تحقق من الاشتراك الآن 🟢", STYLE_SUCCESS, callback_data="check_subscription"))
                     
                     try:
                         bot.edit_message_text(
@@ -178,24 +179,25 @@ def register(bot, admin_ids):
                     tree = helpers.build_category_tree(categories)
                     
                     for cat in tree:
-                        keyboard.add(InlineKeyboardButton(
+                        keyboard.add(inline_button(
                             f"📁 {cat['name']}", 
+                            STYLE_PRIMARY,
                             callback_data=f"search_scope::{cat['id']}::0"
                         ))
                     
                     # زر "بحث في كل التصنيفات" يظهر أخيراً
-                    keyboard.add(InlineKeyboardButton("🌐 بحث في كل التصنيفات 🟠", callback_data=f"search_scope::all::0"))
-                    keyboard.add(InlineKeyboardButton("↩️ رجوع 🟢", callback_data="back_to_main"))
+                    keyboard.add(inline_button("🌐 بحث في كل التصنيفات 🟠", STYLE_SUCCESS, callback_data=f"search_scope::all::0"))
+                    keyboard.add(inline_button("↩️ رجوع 🟢", STYLE_SUCCESS, callback_data="back_to_main"))
 
                     bot.edit_message_text(f"🎯 <b>أين تريد البحث عن</b> \"<code>{query}</code>\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif search_type == "advanced":
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     keyboard.add(
-                        InlineKeyboardButton("📺 الجودة 🔵", callback_data="adv_filter::quality"),
-                        InlineKeyboardButton("🗣️ الحالة 🟣", callback_data="adv_filter::status")
+                        inline_button("📺 الجودة 🔵", STYLE_PRIMARY, callback_data="adv_filter::quality"),
+                        inline_button("🗣️ الحالة 🟣", STYLE_PRIMARY, callback_data="adv_filter::status")
                     )
-                    keyboard.add(InlineKeyboardButton("↩️ رجوع 🟢", callback_data="back_to_main"))
+                    keyboard.add(inline_button("↩️ رجوع 🟢", STYLE_SUCCESS, callback_data="back_to_main"))
                     bot.edit_message_text("⚙️ <b>اختر فلتر للبحث المتقدم:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_filter":
@@ -210,17 +212,17 @@ def register(bot, admin_ids):
                 if filter_type == "quality":
                     keyboard = InlineKeyboardMarkup(row_width=3)
                     qualities = ["1080p", "720p", "480p", "360p"]
-                    buttons = [InlineKeyboardButton(f"📺 {q}", callback_data=f"adv_search::quality::{q}::0") for q in qualities]
+                    buttons = [inline_button(f"📺 {q}", STYLE_PRIMARY, callback_data=f"adv_search::quality::{q}::0") for q in qualities]
                     keyboard.add(*buttons)
-                    keyboard.add(InlineKeyboardButton("↩️ رجوع للفلاتر 🟢", callback_data="search_type::advanced"))
+                    keyboard.add(inline_button("↩️ رجوع للفلاتر 🟢", STYLE_SUCCESS, callback_data="search_type::advanced"))
                     bot.edit_message_text("📺 <b>اختر الجودة:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif filter_type == "status":
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     statuses = ["مترجم", "مدبلج"]
-                    buttons = [InlineKeyboardButton(f"🗣️ {s}", callback_data=f"adv_search::status::{s}::0") for s in statuses]
+                    buttons = [inline_button(f"🗣️ {s}", STYLE_PRIMARY, callback_data=f"adv_search::status::{s}::0") for s in statuses]
                     keyboard.add(*buttons)
-                    keyboard.add(InlineKeyboardButton("↩️ رجوع للفلاتر 🟢", callback_data="search_type::advanced"))
+                    keyboard.add(inline_button("↩️ رجوع للفلاتر 🟢", STYLE_SUCCESS, callback_data="search_type::advanced"))
                     bot.edit_message_text("🗣️ <b>اختر الحالة:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_search":
@@ -303,8 +305,8 @@ def register(bot, admin_ids):
                     # حذف التعليقات الأقدم من 30 يوم افتراضياً
                     markup = InlineKeyboardMarkup(row_width=2)
                     markup.add(
-                        InlineKeyboardButton("🗑️ تأكيد الحذف 🔴", callback_data="confirm_delete_old_comments::30"),
-                        InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="noop")
+                        inline_button("🗑️ تأكيد الحذف 🔴", STYLE_DANGER, callback_data="confirm_delete_old_comments::30"),
+                        inline_button("↩️ إلغاء 🟢", STYLE_SUCCESS, callback_data="noop")
                     )
                     bot.send_message(
                         user_id,
@@ -316,9 +318,9 @@ def register(bot, admin_ids):
 
                 if sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
-                    keyboard.add(InlineKeyboardButton("📂 تصنيف رئيسي جديد 🟢", callback_data="admin::add_cat_main"))
-                    keyboard.add(InlineKeyboardButton("🌿 تصنيف فرعي 🔵", callback_data="admin::add_cat_sub_select_parent"))
-                    keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟡", callback_data="back_to_main"))
+                    keyboard.add(inline_button("📂 تصنيف رئيسي جديد 🟢", STYLE_SUCCESS, callback_data="admin::add_cat_main"))
+                    keyboard.add(inline_button("🌿 تصنيف فرعي 🔵", STYLE_PRIMARY, callback_data="admin::add_cat_sub_select_parent"))
+                    keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
                     bot.edit_message_text("➕ <b>اختر نوع التصنيف الذي تريد إضافته:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_main":
@@ -334,7 +336,7 @@ def register(bot, admin_ids):
                         bot.answer_callback_query(call.id, "أنشئ تصنيفاً رئيسياً أولاً.", show_alert=True)
                         return
 
-                    move_keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟡", callback_data="back_to_main"))
+                    move_keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
                     bot.edit_message_text("🎯 <b>اختر التصنيف الأب:</b>", call.message.chat.id, call.message.message_id, reply_markup=move_keyboard)
 
                 elif sub_action == "add_cat_sub_set_parent":
@@ -352,16 +354,16 @@ def register(bot, admin_ids):
                         bot.answer_callback_query(call.id, "لا توجد تصنيفات لحذفها.", show_alert=True)
                         return
 
-                    delete_keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟡", callback_data="back_to_main"))
+                    delete_keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
                     bot.edit_message_text("🗑️ <b>اختر التصنيف الذي تريد حذفه:</b>", call.message.chat.id, call.message.message_id, reply_markup=delete_keyboard)
 
                 elif sub_action == "delete_category_confirm":
                     category_id = int(data[2])
                     category = get_category_by_id(category_id)
                     keyboard = InlineKeyboardMarkup(row_width=1)
-                    keyboard.add(InlineKeyboardButton("🗑️ حذف التصنيف مع كل فيديوهاته 🔴", callback_data=f"admin::delete_cat_and_videos::{category_id}"))
-                    keyboard.add(InlineKeyboardButton("📦 نقل فيديوهاته لتصنيف آخر 🔵", callback_data=f"admin::delete_cat_move_videos_select_dest::{category_id}"))
-                    keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟢", callback_data="admin::cancel_delete_cat"))
+                    keyboard.add(inline_button("🗑️ حذف التصنيف مع كل فيديوهاته 🔴", STYLE_DANGER, callback_data=f"admin::delete_cat_and_videos::{category_id}"))
+                    keyboard.add(inline_button("📦 نقل فيديوهاته لتصنيف آخر 🔵", STYLE_PRIMARY, callback_data=f"admin::delete_cat_move_videos_select_dest::{category_id}"))
+                    keyboard.add(inline_button("↩️ إلغاء 🟢", STYLE_SUCCESS, callback_data="admin::cancel_delete_cat"))
                     bot.edit_message_text(f"⚠️ <b>أنت على وشك حذف</b> \"<code>{category['name']}</code>\"\n\nماذا أفعل بالفيديوهات؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "delete_cat_and_videos":
@@ -383,8 +385,8 @@ def register(bot, admin_ids):
                     tree = helpers.build_category_tree(categories)
                     keyboard = InlineKeyboardMarkup(row_width=1)
                     for cat in tree:
-                        keyboard.add(InlineKeyboardButton(f"📁 {cat['name']}", callback_data=f"admin::delete_cat_move_videos_confirm::{old_category_id}::{cat['id']}"))
-                    keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟡", callback_data="admin::cancel_delete_cat"))
+                        keyboard.add(inline_button(f"📁 {cat['name']}", STYLE_PRIMARY, callback_data=f"admin::delete_cat_move_videos_confirm::{old_category_id}::{cat['id']}"))
+                    keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="admin::cancel_delete_cat"))
                     bot.edit_message_text("🎯 <b>اختر التصنيف الذي ستُنقل إليه الفيديوهات:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "delete_cat_move_videos_confirm":
@@ -505,7 +507,7 @@ def register(bot, admin_ids):
                         bot.answer_callback_query(call.id, "لا توجد تصنيفات حالياً.", show_alert=True)
                         return
 
-                    keyboard.add(InlineKeyboardButton("↩️ إلغاء 🟡", callback_data="back_to_main"))
+                    keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
                     bot.edit_message_text("🔘 <b>اختر التصنيف الذي تريد تفعيله:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "setcat":

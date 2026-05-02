@@ -3,6 +3,7 @@
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import logging
+from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 
 from db_manager import (
     add_bot_user, get_popular_videos, search_videos,
@@ -67,11 +68,11 @@ def register(bot, channel_id, admin_ids):
                         # قناة باسم مستخدم بدون @
                         link = f"https://t.me/{channel_id_str}"
                     
-                    markup.add(InlineKeyboardButton(f"📢 اشترك في {channel['channel_name']}", url=link))
+                    markup.add(inline_button(f"📢 اشترك في {channel['channel_name']}", STYLE_PRIMARY, url=link))
                 except Exception as e:
                     logger.error(f"Could not create link for channel {channel['channel_id']}: {e}")
             
-            markup.add(InlineKeyboardButton("✅ لقد اشتركت، تحقق الآن", callback_data="check_subscription"))
+            markup.add(inline_button("✅ لقد اشتركت، تحقق الآن", STYLE_SUCCESS, callback_data="check_subscription"))
             
             welcome_text = (
                 "🤖 مرحباً بك في بوت البحث عن الفيديوهات!\n\n"
@@ -98,8 +99,9 @@ def register(bot, channel_id, admin_ids):
         
         # إضافة زر switch inline للبحث السريع
         markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton(
+        markup.add(inline_button(
             "🔍 ابحث الآن في أي محادثة",
+            STYLE_PRIMARY,
             switch_inline_query_current_chat=""
         ))
         
@@ -171,8 +173,8 @@ def register(bot, channel_id, admin_ids):
         user_last_search[message.chat.id] = {'query': query}
         keyboard = InlineKeyboardMarkup(row_width=2)
         keyboard.add(
-            InlineKeyboardButton("🔎 بحث عادي", callback_data="search_type::normal"),
-            InlineKeyboardButton("⚙️ بحث متقدم", callback_data="search_type::advanced")
+            inline_button("🔎 بحث عادي", STYLE_SUCCESS, callback_data="search_type::normal"),
+            inline_button("⚙️ بحث متقدم", STYLE_PRIMARY, callback_data="search_type::advanced")
         )
         bot.reply_to(message, f"اختر نوع البحث عن \"{query}\":", reply_markup=keyboard)
 
@@ -190,8 +192,8 @@ def register(bot, channel_id, admin_ids):
 
     def show_popular_videos(message):
         keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(InlineKeyboardButton("📈 الأكثر مشاهدة", callback_data="popular::most_viewed"))
-        keyboard.add(InlineKeyboardButton("⭐ الأعلى تقييماً", callback_data="popular::highest_rated"))
+        keyboard.add(inline_button("📈 الأكثر مشاهدة", STYLE_DANGER, callback_data="popular::most_viewed"))
+        keyboard.add(inline_button("⭐ الأعلى تقييماً", STYLE_SUCCESS, callback_data="popular::highest_rated"))
         bot.reply_to(message, "اختر نوع الفيديوهات الشائعة:", reply_markup=keyboard)
 
     def perform_group_search(message, query):

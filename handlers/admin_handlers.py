@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from telebot.apihelper import ApiTelegramException
+from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 
 from db_manager import (
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
@@ -148,7 +149,7 @@ def handle_move_by_id_input(message, bot):
 
         # 🌟 استخدام الكيبورد الهرمي الجديد بدلاً من البناء اليدوي
         move_keyboard = create_hierarchical_category_keyboard("admin::move_confirm", add_back_button=False)
-        move_keyboard.add(InlineKeyboardButton("🔙 إلغاء", callback_data="back_to_main"))
+        move_keyboard.add(inline_button("🔙 إلغاء", STYLE_DANGER, callback_data="back_to_main"))
 
         # رسالة مختلفة للنقل الفردي أو الجماعي
         if len(valid_videos) == 1:
@@ -253,46 +254,46 @@ def register(bot, admin_ids):
         keyboard = InlineKeyboardMarkup(row_width=2)
 
         # ─── قسم: إدارة التصنيفات ───
-        keyboard.add(InlineKeyboardButton("╭─ 🗂️ إدارة التصنيفات ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("➕ إضافة تصنيف 🟢", callback_data="admin::add_new_cat"),
-                     InlineKeyboardButton("🗑️ حذف تصنيف 🔴", callback_data="admin::delete_category_select"))
-        keyboard.add(InlineKeyboardButton("🔘 تعيين التصنيف النشط 🟡", callback_data="admin::set_active"))
+        keyboard.add(inline_button("╭─ 🗂️ إدارة التصنيفات ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("➕ إضافة تصنيف 🟢", STYLE_SUCCESS, callback_data="admin::add_new_cat"),
+                     inline_button("🗑️ حذف تصنيف 🔴", STYLE_DANGER, callback_data="admin::delete_category_select"))
+        keyboard.add(inline_button("🔘 تعيين التصنيف النشط 🟡", STYLE_PRIMARY, callback_data="admin::set_active"))
 
         # ─── قسم: إدارة الفيديوهات ───
-        keyboard.add(InlineKeyboardButton("╭─ 🎬 إدارة الفيديوهات ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("➡️ نقل فيديو بالرقم 🔵", callback_data="admin::move_video_by_id"),
-                     InlineKeyboardButton("❌ حذف فيديوهات 🔴", callback_data="admin::delete_videos_by_ids"))
-        keyboard.add(InlineKeyboardButton("🔄 تحديث البيانات القديمة 🟣", callback_data="admin::update_metadata"))
+        keyboard.add(inline_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("➡️ نقل فيديو بالرقم 🔵", STYLE_PRIMARY, callback_data="admin::move_video_by_id"),
+                     inline_button("❌ حذف فيديوهات 🔴", STYLE_DANGER, callback_data="admin::delete_videos_by_ids"))
+        keyboard.add(inline_button("🔄 تحديث البيانات القديمة 🟣", STYLE_PRIMARY, callback_data="admin::update_metadata"))
 
         # ─── قسم: إدارة التعليقات ───
-        keyboard.add(InlineKeyboardButton("╭─ 💬 إدارة التعليقات ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("💬 عرض التعليقات 🔵", callback_data="admin::view_comments"),
-                     InlineKeyboardButton("📊 الإحصائيات 🟣", callback_data="admin::comments_stats"))
-        keyboard.add(InlineKeyboardButton("🧹 حذف التعليقات القديمة 🟡", callback_data="admin::delete_old_comments"),
-                     InlineKeyboardButton("🗑️ حذف الكل 🔴", callback_data="admin::delete_all_comments"))
+        keyboard.add(inline_button("╭─ 💬 إدارة التعليقات ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("💬 عرض التعليقات 🔵", STYLE_PRIMARY, callback_data="admin::view_comments"),
+                     inline_button("📊 الإحصائيات 🟣", STYLE_PRIMARY, callback_data="admin::comments_stats"))
+        keyboard.add(inline_button("🧹 حذف التعليقات القديمة 🟡", STYLE_DANGER, callback_data="admin::delete_old_comments"),
+                     inline_button("🗑️ حذف الكل 🔴", STYLE_DANGER, callback_data="admin::delete_all_comments"))
 
         # ─── قسم: قنوات الاشتراك ───
-        keyboard.add(InlineKeyboardButton("╭─ 📢 قنوات الاشتراك ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("➕ إضافة قناة 🟢", callback_data="admin::add_channel"),
-                     InlineKeyboardButton("➖ إزالة قناة 🔴", callback_data="admin::remove_channel"))
-        keyboard.add(InlineKeyboardButton("📋 عرض القنوات 🔵", callback_data="admin::list_channels"))
+        keyboard.add(inline_button("╭─ 📢 قنوات الاشتراك ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("➕ إضافة قناة 🟢", STYLE_SUCCESS, callback_data="admin::add_channel"),
+                     inline_button("➖ إزالة قناة 🔴", STYLE_DANGER, callback_data="admin::remove_channel"))
+        keyboard.add(inline_button("📋 عرض القنوات 🔵", STYLE_PRIMARY, callback_data="admin::list_channels"))
 
         # ─── قسم: الصور المصغرة ───
-        keyboard.add(InlineKeyboardButton("╭─ 🖼️ الصور المصغرة ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("🖼️ صورة افتراضية 🟡", callback_data="admin::set_default_thumb"),
-                     InlineKeyboardButton("📸 تحديث يدوي 🔵", callback_data="admin::manual_thumb"))
+        keyboard.add(inline_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("🖼️ صورة افتراضية 🟡", STYLE_PRIMARY, callback_data="admin::set_default_thumb"),
+                     inline_button("📸 تحديث يدوي 🔵", STYLE_PRIMARY, callback_data="admin::manual_thumb"))
 
         # ─── قسم: أدوات الصيانة ───
-        keyboard.add(InlineKeyboardButton("╭─ 🛠️ أدوات الصيانة ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("✨ إصلاح شامل للأرشيف 🟣", callback_data="admin::heal_archive"))
-        keyboard.add(InlineKeyboardButton("📄 عرض المستندات 🔵", callback_data="admin::list_documents"),
-                     InlineKeyboardButton("🔄 تحويل → فيديو 🟢", callback_data="admin::convert_all_docs"))
+        keyboard.add(inline_button("╭─ 🛠️ أدوات الصيانة ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("✨ إصلاح شامل للأرشيف 🟣", STYLE_PRIMARY, callback_data="admin::heal_archive"))
+        keyboard.add(inline_button("📄 عرض المستندات 🔵", STYLE_PRIMARY, callback_data="admin::list_documents"),
+                     inline_button("🔄 تحويل → فيديو 🟢", STYLE_SUCCESS, callback_data="admin::convert_all_docs"))
 
         # ─── قسم: البث والإحصائيات ───
-        keyboard.add(InlineKeyboardButton("╭─ 📊 البث والإحصائيات ─╮", callback_data="noop"))
-        keyboard.add(InlineKeyboardButton("📢 بث رسالة 🟠", callback_data="admin::broadcast"))
-        keyboard.add(InlineKeyboardButton("📊 إحصائيات البوت 🟣", callback_data="admin::stats"),
-                     InlineKeyboardButton("👤 عدد المشتركين 🔵", callback_data="admin::sub_count"))
+        keyboard.add(inline_button("╭─ 📊 البث والإحصائيات ─╮", STYLE_PRIMARY, callback_data="noop"))
+        keyboard.add(inline_button("📢 بث رسالة 🟠", STYLE_SUCCESS, callback_data="admin::broadcast"))
+        keyboard.add(inline_button("📊 إحصائيات البوت 🟣", STYLE_PRIMARY, callback_data="admin::stats"),
+                     inline_button("👤 عدد المشتركين 🔵", STYLE_PRIMARY, callback_data="admin::sub_count"))
         return keyboard
 
     @bot.message_handler(commands=["admin"])
