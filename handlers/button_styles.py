@@ -27,27 +27,55 @@ def _normalize_style(style):
     return style if style in VALID_STYLES else None
 
 
+class StyledInlineKeyboardButton(InlineKeyboardButton):
+    """Inline button that always serializes Telegram's ``style`` field.
+
+    Some pyTelegramBotAPI releases may not yet expose ``style`` in the
+    constructor or in ``to_dict``. This subclass keeps the bot compatible with
+    those releases while still sending the official Bot API field to Telegram.
+    """
+
+    def __init__(self, text, style=None, **kwargs):
+        self._button_style = _normalize_style(style)
+        try:
+            super().__init__(text, style=self._button_style, **kwargs)
+        except TypeError:
+            super().__init__(text, **kwargs)
+
+    def to_dict(self):
+        data = super().to_dict()
+        if self._button_style:
+            data["style"] = self._button_style
+        return data
+
+
+class StyledKeyboardButton(KeyboardButton):
+    """Reply keyboard button that always serializes Telegram's ``style`` field."""
+
+    def __init__(self, text, style=None, **kwargs):
+        self._button_style = _normalize_style(style)
+        try:
+            super().__init__(text, style=self._button_style, **kwargs)
+        except TypeError:
+            super().__init__(text, **kwargs)
+
+    def to_dict(self):
+        data = super().to_dict()
+        if self._button_style:
+            data["style"] = self._button_style
+        return data
+
+
 def inline_button(text, style=None, **kwargs):
     """Create an InlineKeyboardButton with optional Telegram color style.
 
-    If the installed pyTelegramBotAPI version does not support ``style`` yet,
-    the button is created without style so the bot remains operational.
+    The returned object always includes ``style`` in its serialized JSON when a
+    valid style is provided, even on pyTelegramBotAPI versions that don't yet
+    expose the field directly.
     """
-    normalized_style = _normalize_style(style)
-    if normalized_style:
-        try:
-            return InlineKeyboardButton(text, style=normalized_style, **kwargs)
-        except TypeError:
-            pass
-    return InlineKeyboardButton(text, **kwargs)
+    return StyledInlineKeyboardButton(text, style=style, **kwargs)
 
 
 def keyboard_button(text, style=None, **kwargs):
     """Create a Reply KeyboardButton with optional Telegram color style."""
-    normalized_style = _normalize_style(style)
-    if normalized_style:
-        try:
-            return KeyboardButton(text, style=normalized_style, **kwargs)
-        except TypeError:
-            pass
-    return KeyboardButton(text, **kwargs)
+    return StyledKeyboardButton(text, style=style, **kwargs)
