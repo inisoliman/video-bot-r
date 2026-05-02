@@ -97,15 +97,7 @@ def register(bot, channel_id, admin_ids):
             "استمتع بوقتك! 😊"
         )
         
-        # إضافة زر switch inline للبحث السريع
-        markup = InlineKeyboardMarkup()
-        markup.add(inline_button(
-            "🔍 ابحث الآن في أي محادثة",
-            STYLE_PRIMARY,
-            switch_inline_query_current_chat=""
-        ))
-        
-        bot.reply_to(message, welcome_text, reply_markup=markup, parse_mode="Markdown")
+        bot.reply_to(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="Markdown")
 
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):

@@ -591,8 +591,18 @@ def register(bot, admin_ids):
                 helpers.list_videos(bot, call.message, edit_message=call.message)
 
             elif action == "back_to_main":
-                bot.delete_message(call.message.chat.id, call.message.message_id)
-                bot.send_message(call.message.chat.id, "🏠 <b>القائمة الرئيسية:</b>", reply_markup=helpers.main_menu())
+                try:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                except Exception as e:
+                    logger.warning(f"Could not delete previous menu message: {e}")
+
+                bot.send_message(
+                    call.message.chat.id,
+                    "🏠 <b>القائمة الرئيسية:</b>",
+                    reply_markup=helpers.main_menu(),
+                    parse_mode="HTML"
+                )
+                bot.answer_callback_query(call.id)
 
             elif action == "video":
                 try:
