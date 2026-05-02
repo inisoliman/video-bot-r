@@ -49,5 +49,11 @@ def get_db_connection():
     conn = pool.getconn()
     try:
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Failed to rollback database connection: {rollback_error}")
+        raise
     finally:
         pool.putconn(conn)

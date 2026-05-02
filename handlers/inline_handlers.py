@@ -10,9 +10,12 @@ from telebot.types import (
 import logging
 import os
 
+import config
 import db_manager as db
 
 logger = logging.getLogger(__name__)
+INLINE_CACHE_TIME = getattr(config, "INLINE_CACHE_TIME", 300)
+INLINE_EMPTY_CACHE_TIME = min(INLINE_CACHE_TIME, 30)
 
 def register(bot):
     """تسجيل معالج inline query"""
@@ -61,10 +64,10 @@ def register(bot):
                             )
                         )
                     ]
-                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                    bot.answer_inline_query(inline_query.id, results, cache_time=INLINE_EMPTY_CACHE_TIME)
                 else:
                     # إذا كنا في صفحة تالية ولا توجد نتائج إضافية، نرسل قائمة فارغة (نهاية التمرير)
-                    bot.answer_inline_query(inline_query.id, [], cache_time=1, next_offset="")
+                    bot.answer_inline_query(inline_query.id, [], cache_time=INLINE_EMPTY_CACHE_TIME, next_offset="")
             else:
                 # استراتيجية العرض
                 logger.info(f"🔄 Processing results offset={offset_val}...")
@@ -95,13 +98,13 @@ def register(bot):
                             )
                         )
                     ]
-                    bot.answer_inline_query(inline_query.id, results, cache_time=1)
+                    bot.answer_inline_query(inline_query.id, results, cache_time=INLINE_EMPTY_CACHE_TIME)
                 else:
                     try:
                         bot.answer_inline_query(
                             inline_query.id,
                             results,
-                            cache_time=10,
+                            cache_time=INLINE_CACHE_TIME,
                             is_personal=False,
                             next_offset=next_offset
                         )
@@ -121,7 +124,7 @@ def register(bot):
                                     bot.answer_inline_query(
                                         inline_query.id,
                                         doc_results,
-                                        cache_time=10,
+                                        cache_time=INLINE_CACHE_TIME,
                                         is_personal=False,
                                         next_offset=next_offset
                                     )

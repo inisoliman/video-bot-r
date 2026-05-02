@@ -143,12 +143,17 @@ def optimize_database_performance():
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_favorites_user_id ON user_favorites(user_id)", "idx_user_favorites_user_id"),
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_favorites_video_id ON user_favorites(video_id)", "idx_user_favorites_video_id"),
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_favorites_date_added_desc ON user_favorites(date_added DESC)", "idx_user_favorites_date_added_desc"),
+        ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_favorites_user_date_desc ON user_favorites(user_id, date_added DESC)", "idx_user_favorites_user_date_desc"),
         # user_history
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_history_user_id ON user_history(user_id)", "idx_user_history_user_id"),
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_history_last_watched_desc ON user_history(last_watched DESC)", "idx_user_history_last_watched_desc"),
+        ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_user_history_user_watched_desc ON user_history(user_id, last_watched DESC)", "idx_user_history_user_watched_desc"),
         # video_ratings
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_video_ratings_video_id ON video_ratings(video_id)", "idx_video_ratings_video_id"),
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_video_ratings_user_id ON video_ratings(user_id)", "idx_video_ratings_user_id"),
+        # video_comments
+        ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_video_comments_user_created_desc ON video_comments(user_id, created_at DESC)", "idx_video_comments_user_created_desc"),
+        ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_video_comments_unread_created_desc ON video_comments(created_at DESC) WHERE is_read = FALSE", "idx_video_comments_unread_created_desc"),
         # bot_users
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bot_users_join_date_desc ON bot_users(join_date DESC)", "idx_bot_users_join_date_desc"),
         ("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bot_users_username ON bot_users(username)", "idx_bot_users_username"),

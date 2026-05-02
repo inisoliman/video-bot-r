@@ -177,18 +177,28 @@ def execute_query(query, params=None, fetch=None, commit=False):
     result = None
     try:
         with get_db_connection() as conn:
-            with conn.cursor(cursor_factory=DictCursor) as c:
-                c.execute(query, params)
-                if fetch == "one": 
-                    result = c.fetchone()
-                elif fetch == "all": 
-                    result = c.fetchall()
-                if commit:
-                    conn.commit()
-                    if fetch is None: 
-                        result = True
+            try:
+                with conn.cursor(cursor_factory=DictCursor) as c:
+                    c.execute(query, params)
+                    if fetch == "one": 
+                        result = c.fetchone()
+                    elif fetch == "all": 
+                        result = c.fetchall()
+                    if commit:
+                        conn.commit()
+                        if fetch is None: 
+                            result = True
+            except psycopg2.Error as e:
+                try:
+                    conn.rollback()
+                except Exception as rollback_error:
+                    logger.error(f"Database rollback failed: {rollback_error}")
+                logger.error(f"Database query failed. Error: {e}", exc_info=True)
+                if fetch == "all": 
+                    return []
+                return None if fetch else False
     except psycopg2.Error as e:
-        logger.error(f"Database query failed. Error: {e}", exc_info=True)
+        logger.error(f"Database connection failed. Error: {e}", exc_info=True)
         if fetch == "all": 
             return []
         return None if fetch else False
