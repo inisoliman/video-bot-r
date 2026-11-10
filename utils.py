@@ -7,6 +7,97 @@ import logging
 # إعداد المسجل (logger) لهذا الملف
 logger = logging.getLogger(__name__)
 
+# ==============================================================================
+# عرض الفيديوهات والعناوين (display titles)
+# ==============================================================================
+
+VIDEO_TITLE_FALLBACK = "فيديو"
+# حد أقصى لطول العنوان (يعمل مع حدود تيليجرام للنصوص)
+MAX_DISPLAY_TITLE_LENGTH = 120
+
+# الأحرف التي تعاملها LIKE كرموز نمطية
+_LIKE_SPECIAL = str.maketrans({'\\': '\\\\', '%': '\\%', '_': '\\_'})
+
+
+def _field(video, name):
+    """قراءة حقل من dict أو من صف DictRow بأمان."""
+    try:
+        value = video.get(name)
+    except AttributeError:
+        try:
+            value = video[name]
+        except (KeyError, IndexError, TypeError):
+            value = None
+    return value
+
+
+def clean_display_title(value):
+    """تحضير عنوان عرض للسطر الأول: إزالة المسافات الزائدة وتقليم الطول فقط."""
+    if not value:
+        return ""
+    text = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    text = text.strip()
+    # أول سطر فقط للعناوين التي تحتوي على أسطر متعددة في الكابشن
+    first_line = text.split("\n")[0].strip() if "\n" in text else text
+    if len(first_line) > MAX_DISPLAY_TITLE_LENGTH:
+        first_line = first_line[:MAX_DISPLAY_TITLE_LENGTH - 3].rstrip() + "..."
+    return first_line
+
+
+def validate_display_title(value):
+    """
+    التحقق من عنوان عرض يقدمه الأدمن.
+
+    Returns:
+        tuple: (is_valid, normalized_title_or_error_message)
+    """
+    if value is None:
+        return False, "اكتب عنواناً صالحاً."
+    text = str(value).strip()
+    if not text:
+        return False, "لا يمكن حفظ عنوان فارغ."
+    if len(text) > MAX_DISPLAY_TITLE_LENGTH:
+        return False, f"العنوان طويل جداً (الحد الأقصى {MAX_DISPLAY_TITLE_LENGTH} حرفاً)."
+    return True, text
+
+
+def video_title(video, fallback=VIDEO_TITLE_FALLBACK):
+    """
+    العنوان المعروض لفيديو: display_title ← أول سطر من caption ← file_name ← بديل.
+
+    لا يعدّل caption أو file_name (العنوان المعدّل يبقى في display_title).
+    """
+    if video is None:
+        return fallback
+    title = clean_display_title(_field(video, 'display_title'))
+    if title:
+        return title
+    title = clean_display_title(_field(video, 'caption'))
+    if title:
+        return title
+    title = clean_display_title(_field(video, 'file_name'))
+    return title or fallback
+
+
+def escape_like(value):
+    """تهريب رموز LIKE في نص يقدمه المستخدم للبحث الحقيقي (تطابق حرفي)."""
+    if value is None:
+        return None
+    return str(value).translate(_LIKE_SPECIAL)
+
+
+def normalized_search_patterns(query):
+    """
+    أنماط ILIKE للبحث عن نص في caption أو file_name أو display_title.
+
+    Returns:
+        tuple: (pattern, pattern, pattern) للاستخدام مع
+        ``(caption ILIKE %s OR file_name ILIKE %s OR display_title ILIKE %s)``
+    """
+    pattern = f"%{escape_like(query if query is not None else '')}%"
+    return pattern, pattern, pattern
+
+
 def arabic_word_to_int(word):
     """يحول الكلمات العربية للأرقام إلى أعداد صحيحة."""
     if not word:

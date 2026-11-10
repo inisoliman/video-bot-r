@@ -47,7 +47,9 @@ EXPECTED_SCHEMA = {
         'upload_date': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
         'grouping_key': 'TEXT',
         'thumbnail_file_id': 'TEXT',
-        'content_type': 'TEXT DEFAULT NULL'  # VIDEO or DOCUMENT
+        'content_type': 'TEXT DEFAULT NULL',  # VIDEO or DOCUMENT
+        # عنوان عرض يعدّله الأدمن - لا يغيّر caption/file_name/file_id
+        'display_title': 'TEXT DEFAULT NULL'
     },
     'required_channels': {
         'channel_id': 'BIGINT PRIMARY KEY',
@@ -104,72 +106,242 @@ EXPECTED_SCHEMA = {
         'admin_reply': 'TEXT',
         'is_read': 'BOOLEAN DEFAULT FALSE',
         'replied_at': 'TIMESTAMP',
-        'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'
+        'created_at': 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP',
+        # --- إضافات تراكمية (additive) لنظام المحادثات ---
+        'thread_updated_at': 'TIMESTAMP',
+        'member_read_at': 'TIMESTAMP',
+        'admin_read_at': 'TIMESTAMP'
     }
 }
 
+# جدول رسائل المحادثة (إضافي فقط - لا يعدّل أو يحذف أعمدة قديمة)
+COMMENT_THREAD_TABLE = 'video_comment_messages'
+COMMENT_THREAD_TABLE_DDL = """
+    CREATE TABLE IF NOT EXISTS video_comment_messages (
+        id SERIAL PRIMARY KEY,
+        comment_id INTEGER NOT NULL REFERENCES video_comments(id) ON DELETE CASCADE,
+        author_role TEXT NOT NULL,
+        author_id BIGINT,
+        body TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT 'thread',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+"""
+
+
+def _thread_schema_statements():
+    """DDL إضافي متكرر التنفيذ للمحادثات - يُنفَّذ بعد إنشاء الجدول الأب video_comments."""
+    return [
+        (COMMENT_THREAD_TABLE, COMMENT_THREAD_TABLE_DDL),
+        (
+            'video_comment_messages_idx',
+            "CREATE INDEX IF NOT EXISTS video_comment_messages_comment_idx "
+            "ON video_comment_messages (comment_id, id)"
+        ),
+    ]
+
+
+LEGACY_ORIGIN_ORIGINAL = 'legacy_original'
+LEGACY_ORIGIN_REPLY = 'legacy_reply'
+
+
+def ensure_thread_legacy_unique_index(cursor):
+    """
+    فهرس فريد جزئي (comment_id, origin) يمنع تكرار التاريخ القديم عند أي إعادة تشغيل.
+
+    إن تعذّرت إضافته (بيانات قديمة مكررة لا تمنع التهيئة) يستمر الاستيراد لأن حارس
+    NOT EXISTS+ON CONFLICT DO NOTHING يبقيه بلا تكرار.
+    """
+    try:
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS video_comment_messages_legacy_uq "
+            "ON video_comment_messages (comment_id, origin) WHERE origin <> 'thread'"
+        )
+        return True
+    except Exception as index_err:
+        logger.warning("Legacy unique index unavailable (%s) - import guard still applies", index_err)
+        return False
+
+
+def _legacy_import_statements():
+    """
+    استيراد التعليق الأصلي (comment_text) والرد القديم (admin_reply) مرة واحدة لكل محادثة.
+
+    لا يعدّل ولا يحذف أي صف قديم. يحافظ على النص والهوية والوقت الأصليين، ولا يمس
+    رسائل المحادثة الجديدة (origin='thread').
+    """
+    return [
+        (
+            LEGACY_ORIGIN_ORIGINAL,
+            """
+            INSERT INTO video_comment_messages (comment_id, author_role, author_id, body, origin, created_at)
+            SELECT c.id, 'member', c.user_id, c.comment_text, %s, COALESCE(c.created_at, CURRENT_TIMESTAMP)
+            FROM video_comments c
+            WHERE c.comment_text IS NOT NULL AND c.comment_text <> ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM video_comment_messages m
+                  WHERE m.comment_id = c.id AND m.origin = %s
+              )
+            ON CONFLICT DO NOTHING
+            """,
+        ),
+        (
+            LEGACY_ORIGIN_REPLY,
+            """
+            INSERT INTO video_comment_messages (comment_id, author_role, author_id, body, origin, created_at)
+            SELECT c.id, 'admin', NULL, c.admin_reply, %s, COALESCE(c.replied_at, c.created_at, CURRENT_TIMESTAMP)
+            FROM video_comments c
+            WHERE c.admin_reply IS NOT NULL AND c.admin_reply <> ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM video_comment_messages m
+                  WHERE m.comment_id = c.id AND m.origin = %s
+              )
+            ON CONFLICT DO NOTHING
+            """,
+        ),
+    ]
+
+
+def import_legacy_comment_history(cursor):
+    """
+    تنفيذ استيراد التاريخ القديم على مؤشر داخل معاملة المستدعي.
+
+    Returns:
+        dict: import_original, import_reply (صفوف أُدخلت في هذه الدعوة)
+    """
+    outcome = {'import_original': 0, 'import_reply': 0}
+
+    for origin, statement in _legacy_import_statements():
+        cursor.execute(statement, (origin, origin))
+        inserted = max(cursor.rowcount or 0, 0)
+        if origin == LEGACY_ORIGIN_ORIGINAL:
+            outcome['import_original'] = inserted
+        else:
+            outcome['import_reply'] = inserted
+
+    if outcome['import_original'] or outcome['import_reply']:
+        logger.info(
+            "Imported legacy comment history: originals=%s replies=%s",
+            outcome['import_original'], outcome['import_reply']
+        )
+    return outcome
+
+
+def _existing_columns(cursor, table_name):
+    """أعمدة الجدول الحقيقية من information_schema (set قد يكون فارغاً إن تعذّرت القراءة)."""
+    _render_and_execute(cursor, "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+                        (table_name,))
+    rows = cursor.fetchall() or []
+    columns = set()
+    for row in rows:
+        if isinstance(row, dict):
+            columns.add(row.get('column_name'))
+        elif isinstance(row, (list, tuple)):
+            columns.add(row[0])
+    return columns
+
+
+def quote_identifier(name):
+    """
+    تهريب آمن لهوية جدول/عمود كما يفعل psycopg2.sql.Identifier، بدون اتصال حقيقي.
+    الأسماء تأتي دائماً من ثوابت داخلية لا من مدخلات المستخدم.
+    """
+    text = str(name)
+    if not text:
+        raise ValueError("empty identifier")
+    if "\x00" in text:
+        raise ValueError("NUL in identifier")
+    return '"' + text.replace('"', '""') + '"'
+
+
+def _render_and_execute(cursor, statement, params=None):
+    """
+    تنفيذ عبارة DDL مكوَّنة: psycopg2.sql.Composable تُحوَّل إلى نص (أسماء مهربة).
+    """
+    if hasattr(statement, 'as_string'):
+        statement = statement.as_string(cursor)
+    return cursor.execute(statement, params)
+
+
+def _run_additive_schema(cursor):
+    """
+    كل التغييرات الإضافية في المعاملة الحالية: جداول الأب first (ترتيب EXPECTED_SCHEMA)،
+    ثم الأعمدة الإضافية، ثم الجدول الفرعي video_comment_messages (مفتاح أجنبي بعد الأب)،
+    ثم الفهرس الفريد، ثم استيراد التاريخ القديم. أي خطأ يرفع للمستدعي لـ rollback ذري.
+    """
+    for table_name, columns in EXPECTED_SCHEMA.items():
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS " + quote_identifier(table_name) + " (id SERIAL PRIMARY KEY)"
+        )
+        logger.info("Checking table: %s", table_name)
+
+        existing = _existing_columns(cursor, table_name)
+        for column_name, column_definition in columns.items():
+            if column_name.startswith('_') or column_name == 'id':
+                continue
+            if column_name in existing:
+                continue
+            logger.warning("Column '%s' not found in table '%s'. Adding it now.", column_name, table_name)
+            cursor.execute(
+                "ALTER TABLE " + quote_identifier(table_name)
+                + " ADD COLUMN IF NOT EXISTS " + quote_identifier(column_name)
+                + " " + column_definition
+            )
+            logger.info("Successfully added column '%s' to '%s'.", column_name, table_name)
+
+        if '_UNIQUE_CONSTRAINT' in columns:
+            constraint_definition = columns['_UNIQUE_CONSTRAINT']
+            constraint_name = f"{table_name}_unique_constraint"
+            cursor.execute("""
+                SELECT 1 FROM information_schema.table_constraints
+                WHERE table_name = %s AND constraint_name = %s
+            """, (table_name, constraint_name))
+            if cursor.fetchone() is None:
+                logger.info("Adding UNIQUE constraint to %s", table_name)
+                cursor.execute(
+                    "ALTER TABLE " + quote_identifier(table_name)
+                    + " ADD CONSTRAINT " + quote_identifier(constraint_name)
+                    + " " + constraint_definition
+                )
+
+    # الجدول الفرعي بعد الجدول الأب (foreign key)
+    for object_name, statement in _thread_schema_statements():
+        cursor.execute(statement)
+        logger.info("Thread schema ensured: %s", object_name)
+
+    ensure_thread_legacy_unique_index(cursor)
+    return import_legacy_comment_history(cursor)
+
+
+def _rollback_quietly(conn):
+    try:
+        conn.rollback()
+    except Exception as rollback_error:
+        logger.error("Schema rollback failed: %s", rollback_error)
+
 
 def verify_and_repair_schema():
+    """
+    تهيئة المخطط الإضافي بشكل ذري: الأب أولاً ثم الفرعي ثم التاريخ القديم، أو تراجع كامل.
+
+    تكرار الدعوة آمن: كل عبارة idempotent والاستيراد لا يكرر صفوفاً.
+    """
     logger.info("Verifying and repairing database schema...")
-    
-    try:
-        with get_db_connection() as conn:
+
+    with get_db_connection() as conn:
+        try:
             with conn.cursor() as c:
-                for table_name, columns in EXPECTED_SCHEMA.items():
-                    create_table_query = sql.SQL(f"CREATE TABLE IF NOT EXISTS {table_name} (id SERIAL PRIMARY KEY)")
-                    try:
-                        c.execute(create_table_query)
-                    except psycopg2.ProgrammingError:
-                        pass 
-
-                    logger.info(f"Checking table: {table_name}")
-                    for column_name, column_definition in columns.items():
-                        # تجاهل الأعمدة الخاصة والـ id (يتم إنشاؤه تلقائياً)
-                        if column_name.startswith('_') or column_name == 'id':
-                            continue 
-                            
-                        c.execute("""
-                            SELECT 1 FROM information_schema.columns 
-                            WHERE table_name = %s AND column_name = %s
-                        """, (table_name, column_name))
-                        
-                        if c.fetchone() is None:
-                            logger.warning(f"Column '{column_name}' not found in table '{table_name}'. Adding it now.")
-
-                            alter_query = sql.SQL("ALTER TABLE {} ADD COLUMN {} {}").format(
-                                sql.Identifier(table_name),
-                                sql.Identifier(column_name),
-                                sql.SQL(column_definition)
-                            )
-                            try:
-                                c.execute(alter_query)
-                                logger.info(f"Successfully added column '{column_name}' to '{table_name}'.")
-                            except Exception as add_err:
-                                logger.error(f"Error adding column {column_name} to {table_name}: {add_err}")
-                    
-                    # إضافة قيود UNIQUE إذا كانت محددة
-                    if '_UNIQUE_CONSTRAINT' in columns:
-                        constraint_definition = columns['_UNIQUE_CONSTRAINT']
-                        constraint_name = f"{table_name}_unique_constraint"
-                        c.execute("""
-                            SELECT 1 FROM information_schema.table_constraints 
-                            WHERE table_name = %s AND constraint_name = %s
-                        """, (table_name, constraint_name))
-                        if c.fetchone() is None:
-                            logger.info(f"Adding UNIQUE constraint to {table_name}")
-                            try:
-                                c.execute(sql.SQL(f"ALTER TABLE {table_name} ADD CONSTRAINT {constraint_name} {constraint_definition}"))
-                            except Exception as const_err:
-                                logger.error(f"Error adding constraint to {table_name}: {const_err}")
-
-                conn.commit()
-                logger.info("Schema verification and repair process completed successfully.")
-    except psycopg2.Error as e:
-        logger.error(f"Schema verification error: {e}", exc_info=True)
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected error in schema verification: {e}", exc_info=True)
-        raise
+                outcome = _run_additive_schema(c)
+            conn.commit()
+            logger.info(
+                "Schema verification and repair completed. legacy originals=%s replies=%s",
+                outcome['import_original'], outcome['import_reply'],
+            )
+            return outcome
+        except Exception as schema_err:
+            _rollback_quietly(conn)
+            logger.error("Schema verification failed, rolled back: %s", schema_err, exc_info=True)
+            raise
 
 
 def execute_query(query, params=None, fetch=None, commit=False):
@@ -203,6 +375,25 @@ def execute_query(query, params=None, fetch=None, commit=False):
             return []
         return None if fetch else False
     return result
+
+
+def row_count(row, key='count', default=0):
+    """
+    قراءة عدّاد من صف استعلام بأمان (DictRow أو tuple أو None).
+
+    يستخدمها كل عدّاد في هذا الملف حتى لا يرفع صفٌّ ناقص KeyError في طبقة العرض.
+    """
+    if not row:
+        return default
+    try:
+        value = row[key]
+    except (KeyError, IndexError, TypeError):
+        try:
+            value = row[0]
+        except (KeyError, IndexError, TypeError):
+            return default
+    return default if value is None else value
+
 
 # ==============================================================================
 # دالة بحث مطورة لتدعم الفلاتر المتقدمة - مع Caching
@@ -251,9 +442,9 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
     offset = page * VIDEOS_PER_PAGE
     search_term = f"%{query}%"
 
-    # بناء جملة WHERE بشكل ديناميكي
-    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s)"]
-    params = [search_term, search_term]
+    # بناء جملة WHERE بشكل ديناميكي (يشمل العنوان المعدّل display_title)
+    where_clauses = ["(caption ILIKE %s OR file_name ILIKE %s OR display_title ILIKE %s)"]
+    params = [search_term, search_term, search_term]
 
     if category_id:
         where_clauses.append("category_id = %s")
@@ -280,7 +471,7 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
     total = execute_query(count_query, final_params_count, fetch="one")
 
     # حفظ النتيجة في الـ cache
-    result = (videos, total['count'] if total else 0)
+    result = (videos, row_count(total))
     _set_cached_search(cache_key, result)
     
     return result
@@ -348,7 +539,7 @@ def get_videos(category_id, page=0):
     offset = page * VIDEOS_PER_PAGE
     videos = execute_query("SELECT * FROM video_archive WHERE category_id = %s ORDER BY id DESC LIMIT %s OFFSET %s", (category_id, VIDEOS_PER_PAGE, offset), fetch="all")
     total = execute_query("SELECT COUNT(*) as count FROM video_archive WHERE category_id = %s", (category_id,), fetch="one")
-    return videos, total['count'] if total else 0
+    return videos, row_count(total)
 
 def increment_video_view_count(video_id):
     """دالة زيادة عداد المشاهدات."""
@@ -445,7 +636,7 @@ def get_all_user_ids():
 
 def get_subscriber_count():
     res = execute_query("SELECT COUNT(*) as count FROM bot_users", fetch="one")
-    return res['count'] if res else 0
+    return row_count(res)
 
 def get_bot_stats():
     stats = {}
@@ -525,7 +716,7 @@ def get_user_favorites(user_id, page=0):
     """
     videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
     total = execute_query("SELECT COUNT(*) as count FROM user_favorites WHERE user_id = %s", (user_id,), fetch="one")
-    return videos, total['count'] if total else 0
+    return videos, row_count(total)
 
 def add_to_history(user_id, video_id):
     query = """
@@ -546,7 +737,7 @@ def get_user_history(user_id, page=0):
     """
     videos = execute_query(videos_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
     total = execute_query("SELECT COUNT(*) as count FROM user_history WHERE user_id = %s", (user_id,), fetch="one")
-    return videos, total['count'] if total else 0
+    return videos, row_count(total)
 
 # --- دالة حذف المشترك (لحل خطأ البث 403) ---
 def delete_bot_user(user_id):
@@ -600,6 +791,28 @@ def add_comment(video_id, user_id, username, comment_text):
     result = execute_query(query, (video_id, user_id, username, comment_text), fetch="one", commit=True)
     return result['id'] if result else None
 
+def _thread_bind(c, query, params=None, fetch=None):
+    """تنفيذ استعلام المحادثة داخل معاملة واحدة (يمرَّر المؤشر من perform_transaction)."""
+    c.execute(query, params)
+    if fetch == 'one':
+        return c.fetchone()
+    if fetch == 'all':
+        return c.fetchall()
+    return True
+
+
+def _comment_with_video_select(where_clause, order_clause=''):
+    return f"""
+        SELECT c.*, v.caption as video_caption, v.file_name as video_name,
+               v.display_title as display_title,
+               (v.id IS NULL) as video_missing
+        FROM video_comments c
+        LEFT JOIN video_archive v ON c.video_id = v.id
+        {where_clause}
+        {order_clause}
+    """
+
+
 def get_all_comments(page=0, unread_only=False):
     """
     جلب جميع التعليقات للأدمن (مع pagination).
@@ -613,22 +826,15 @@ def get_all_comments(page=0, unread_only=False):
     """
     offset = page * VIDEOS_PER_PAGE
     
-    where_clause = "WHERE is_read = FALSE" if unread_only else ""
+    where_clause = "WHERE c.is_read = FALSE" if unread_only else ""
     
-    comments_query = f"""
-        SELECT c.*, v.caption as video_caption, v.file_name as video_name
-        FROM video_comments c
-        JOIN video_archive v ON c.video_id = v.id
-        {where_clause}
-        ORDER BY c.created_at DESC
-        LIMIT %s OFFSET %s
-    """
+    comments_query = _comment_with_video_select(where_clause, "ORDER BY c.created_at DESC") + "LIMIT %s OFFSET %s"
     comments = execute_query(comments_query, (VIDEOS_PER_PAGE, offset), fetch="all")
     
-    count_query = f"SELECT COUNT(*) as count FROM video_comments {where_clause}"
+    count_query = f"SELECT COUNT(*) as count FROM video_comments c {where_clause}"
     total = execute_query(count_query, fetch="one")
     
-    return comments, total['count'] if total else 0
+    return comments, row_count(total)
 
 def get_user_comments(user_id, page=0):
     """
@@ -643,19 +849,15 @@ def get_user_comments(user_id, page=0):
     """
     offset = page * VIDEOS_PER_PAGE
     
-    comments_query = """
-        SELECT c.*, v.caption as video_caption, v.file_name as video_name
-        FROM video_comments c
-        JOIN video_archive v ON c.video_id = v.id
-        WHERE c.user_id = %s
-        ORDER BY c.created_at DESC
-        LIMIT %s OFFSET %s
-    """
+    comments_query = _comment_with_video_select(
+        "WHERE c.user_id = %s",
+        "ORDER BY COALESCE(c.thread_updated_at, c.created_at) DESC, c.id DESC"
+    ) + " LIMIT %s OFFSET %s"
     comments = execute_query(comments_query, (user_id, VIDEOS_PER_PAGE, offset), fetch="all")
     
     total = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE user_id = %s", (user_id,), fetch="one")
     
-    return comments, total['count'] if total else 0
+    return comments, row_count(total)
 
 def get_comment_by_id(comment_id):
     """
@@ -667,17 +869,12 @@ def get_comment_by_id(comment_id):
     Returns:
         بيانات التعليق أو None
     """
-    query = """
-        SELECT c.*, v.caption as video_caption, v.file_name as video_name
-        FROM video_comments c
-        JOIN video_archive v ON c.video_id = v.id
-        WHERE c.id = %s
-    """
+    query = _comment_with_video_select("WHERE c.id = %s")
     return execute_query(query, (comment_id,), fetch="one")
 
 def reply_to_comment(comment_id, admin_reply):
     """
-    الرد على تعليق من قبل الأدمن.
+    الرد على تعليق من قبل الأدمن (آخر رد - للتوافق مع النظام القديم).
     
     Args:
         comment_id: رقم التعليق
@@ -688,7 +885,8 @@ def reply_to_comment(comment_id, admin_reply):
     """
     query = """
         UPDATE video_comments 
-        SET admin_reply = %s, replied_at = CURRENT_TIMESTAMP, is_read = TRUE
+        SET admin_reply = %s, replied_at = CURRENT_TIMESTAMP, is_read = TRUE,
+            thread_updated_at = CURRENT_TIMESTAMP
         WHERE id = %s
     """
     return execute_query(query, (admin_reply, comment_id), commit=True)
@@ -725,7 +923,7 @@ def get_unread_comments_count():
         عدد التعليقات غير المقروءة
     """
     result = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE is_read = FALSE", fetch="one")
-    return result['count'] if result else 0
+    return row_count(result)
 
 def get_video_comments_count(video_id):
     """
@@ -738,11 +936,238 @@ def get_video_comments_count(video_id):
         عدد التعليقات
     """
     result = execute_query("SELECT COUNT(*) as count FROM video_comments WHERE video_id = %s", (video_id,), fetch="one")
-    return result['count'] if result else 0
+    return row_count(result)
 
 # ==============================================================================
 # دوال الحذف الجماعي للتعليقات
 # ==============================================================================
+
+THREAD_PAGE_SIZE = 10  # عدد رسائل المحادثة في الصفحة الواحدة
+ROLE_MEMBER = 'member'
+ROLE_ADMIN = 'admin'
+THREAD_ORIGIN = 'thread'
+MAX_THREAD_BODY = 2000  # حد أقصى لنص الرسالة المحفوظ
+
+
+def append_thread_message(comment_id, author_role, author_id, body):
+    """
+    إضافة رسالة جديدة إلى محادثة تعليق (بدون أي تعديل على Comment_text أو admin_reply).
+
+    Args:
+        comment_id: رقم التعليق (الاستفسار)
+        author_role: 'member' أو 'admin'
+        author_id: رقم كاتب الرسالة (None للأدمن القديم)
+        body: نص الرسالة (يُقطع إلى MAX_THREAD_BODY)
+
+    Returns:
+        رقم الرسالة الجديدة أو None عند الفشل
+    """
+    if author_role not in (ROLE_MEMBER, ROLE_ADMIN):
+        logger.error("Invalid thread author_role: %s", author_role)
+        return None
+    text = _clip_thread_body(body)
+    if not text:
+        return None
+    return _thread_write(comment_id, author_role, author_id, text)
+
+
+def _clip_thread_body(body):
+    if body is None:
+        return ''
+    text = str(body)
+    return text[:MAX_THREAD_BODY]
+
+
+def _thread_write(comment_id, author_role, author_id, text):
+    with get_db_connection() as conn:
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute("SELECT 1 FROM video_comments WHERE id = %s", (comment_id,))
+                if c.fetchone() is None:
+                    return None
+                c.execute(
+                    """
+                    INSERT INTO video_comment_messages (comment_id, author_role, author_id, body, origin)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (comment_id, author_role, author_id, text, THREAD_ORIGIN)
+                )
+                row = c.fetchone()
+                c.execute("UPDATE video_comments SET thread_updated_at = CURRENT_TIMESTAMP WHERE id = %s", (comment_id,))
+                conn.commit()
+                if not row:
+                    return None
+                return row['id'] if hasattr(row, 'keys') else row[0]
+        except psycopg2.Error as e:
+            try:
+                conn.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Database rollback failed: {rollback_error}")
+            logger.error(f"Thread write failed. Error: {e}", exc_info=True)
+            return None
+
+
+def get_thread_messages(comment_id, page=0, page_size=THREAD_PAGE_SIZE, order='asc'):
+    """
+    جلب رسائل المحادثة مرتبة (الأقدم أولاً افتراضياً).
+
+    Returns:
+        tuple: (قائمة الرسائل، العدد الإجمالي)
+    """
+    page = max(int(page or 0), 0)
+    page_size = max(int(page_size or THREAD_PAGE_SIZE), 1)
+    offset = page * page_size
+    order_sql = 'DESC' if str(order).lower() == 'desc' else 'ASC'
+    rows = execute_query(
+        f"""
+        SELECT id, comment_id, author_role, author_id, body, origin, created_at
+        FROM video_comment_messages
+        WHERE comment_id = %s
+        ORDER BY id {order_sql}
+        LIMIT %s OFFSET %s
+        """,
+        (comment_id, page_size, offset),
+        fetch='all'
+    ) or []
+    total = execute_query(
+        "SELECT COUNT(*) as count FROM video_comment_messages WHERE comment_id = %s",
+        (comment_id,),
+        fetch='one'
+    )
+    return rows, row_count(total)
+
+
+def get_latest_thread_message(comment_id):
+    result = execute_query(
+        """
+        SELECT id, comment_id, author_role, author_id, body, origin, created_at
+        FROM video_comment_messages
+        WHERE comment_id = %s
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (comment_id,),
+        fetch='one'
+    )
+    return result
+
+
+def get_thread_message_count(comment_id):
+    result = execute_query(
+        "SELECT COUNT(*) as count FROM video_comment_messages WHERE comment_id = %s",
+        (comment_id,),
+        fetch='one'
+    )
+    return row_count(result)
+
+
+def get_thread_owner_id(comment_id):
+    row = execute_query("SELECT user_id FROM video_comments WHERE id = %s", (comment_id,), fetch='one')
+    return row['user_id'] if row else None
+
+
+def reply_in_thread(comment_id, admin_id, body):
+    """
+    حفظ رد الأدمن في سجل المحادثة وتحديث admin_reply (آخر رد) في معاملة واحدة.
+
+    الترتيب: آخر رد + رسالة المحادثة تُثبّت معاً، ثم تُرسل الإشعار من طبقة المعالجات.
+    الاستدعاء المتكرر لنفس النص بعد إشعار فاشل لا يكرر الرسالة المحفوظة.
+
+    Returns:
+        dict: status ('ok' | 'already_answered' | 'missing' | 'error'), message_id
+    """
+    text = _clip_thread_body(body)
+    if not text:
+        return {'status': 'missing', 'message_id': None}
+    with get_db_connection() as conn:
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute("SELECT 1 FROM video_comments WHERE id = %s FOR UPDATE", (comment_id,))
+                if c.fetchone() is None:
+                    conn.rollback()
+                    return {'status': 'missing', 'message_id': None}
+                c.execute(
+                    """
+                    UPDATE video_comments
+                    SET admin_reply = %s, replied_at = CURRENT_TIMESTAMP,
+                        is_read = TRUE, thread_updated_at = CURRENT_TIMESTAMP
+                    WHERE id = %s
+                    """,
+                    (text, comment_id)
+                )
+                c.execute(
+                    """
+                    INSERT INTO video_comment_messages (comment_id, author_role, author_id, body, origin)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (comment_id, ROLE_ADMIN, admin_id, text, THREAD_ORIGIN)
+                )
+                row = c.fetchone()
+                conn.commit()
+                return {'status': 'ok', 'message_id': (row['id'] if hasattr(row, 'keys') else row[0]) if row else None}
+        except psycopg2.Error as e:
+            try:
+                conn.rollback()
+            except Exception as rollback_error:
+                logger.error(f"Database rollback failed: {rollback_error}")
+            logger.error(f"Reply persistence failed. Error: {e}", exc_info=True)
+            return {'status': 'error', 'message_id': None}
+
+
+def mark_thread_preferred(comment_id, role):
+    """تحديث علامات القراءة لطرف واحد (member/admin) أو thread_updated_at."""
+    if role == ROLE_MEMBER:
+        query = "UPDATE video_comments SET member_read_at = CURRENT_TIMESTAMP WHERE id = %s"
+    elif role == ROLE_ADMIN:
+        query = "UPDATE video_comments SET admin_read_at = CURRENT_TIMESTAMP, is_read = TRUE WHERE id = %s"
+    else:
+        query = "UPDATE video_comments SET thread_updated_at = CURRENT_TIMESTAMP WHERE id = %s"
+    return execute_query(query, (comment_id,), commit=True)
+
+
+def mark_comment_read_for_admin(comment_id):
+    """تعليم التعليق كمقروء للأدمن دون المساس برسائل المحادثة."""
+    return execute_query(
+        "UPDATE video_comments SET is_read = TRUE, admin_read_at = CURRENT_TIMESTAMP WHERE id = %s",
+        (comment_id,),
+        commit=True
+    )
+
+
+def set_display_title(video_id, display_title):
+    """
+    حفظ عنوان عرض يعدّله الأدمن (لا يغيّر caption/file_name/file_id أو القناة).
+
+    Args:
+        video_id: رقم الفيديو
+        display_title: العنوان الجديد (None لاستعادة العنوان الأصلي)
+
+    Returns:
+        True إذا تم التحديث
+    """
+    row = execute_query(
+        "UPDATE video_archive SET display_title = %s WHERE id = %s RETURNING id",
+        (display_title, video_id),
+        fetch='one',
+        commit=True
+    )
+    if row:
+        clear_search_cache()
+        return True
+    return False
+
+
+def get_video_title_source(video_id):
+    """جلب بيانات العنوان الحالية لفيديو (للمعاينة والتحقق من الحقوق عند الحفظ)."""
+    return execute_query(
+        "SELECT id, caption, file_name, display_title FROM video_archive WHERE id = %s",
+        (video_id,),
+        fetch='one'
+    )
+
+
 
 def delete_all_comments():
     """
@@ -779,7 +1204,7 @@ def delete_old_comments(days=30):
     """
     query = """
         DELETE FROM video_comments 
-        WHERE created_at < NOW() - INTERVAL '%s days'
+        WHERE created_at < NOW() - make_interval(days => %s)
         RETURNING id
     """
     result = execute_query(query, (days,), fetch="all", commit=True)
@@ -822,7 +1247,7 @@ def search_videos_for_inline(query, offset=0, limit=50):
         # إذا كان البحث فارغاً، نعرض الفيديوهات الأكثر مشاهدة
         sql = """
             SELECT 
-                v.id, v.file_id, v.caption, v.file_name, v.view_count,
+                v.id, v.file_id, v.caption, v.file_name, v.display_title, v.view_count,
                 v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type,
                 c.name as category_name,
                 COALESCE(AVG(r.rating), 0) as avg_rating,
@@ -832,7 +1257,7 @@ def search_videos_for_inline(query, offset=0, limit=50):
             LEFT JOIN video_ratings r ON v.id = r.video_id
             WHERE v.file_id IS NOT NULL 
               AND LENGTH(v.file_id) >= 20
-            GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count, 
+            GROUP BY v.id, v.file_id, v.caption, v.file_name, v.display_title, v.view_count,
                      v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
             ORDER BY v.view_count DESC, avg_rating DESC
             LIMIT %s OFFSET %s
@@ -846,7 +1271,7 @@ def search_videos_for_inline(query, offset=0, limit=50):
     # 4. يحتوي على (Contains)
     sql = """
         SELECT 
-            v.id, v.file_id, v.caption, v.file_name, v.view_count,
+            v.id, v.file_id, v.caption, v.file_name, v.display_title, v.view_count,
             v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type,
             c.name as category_name,
             COALESCE(AVG(r.rating), 0) as avg_rating,
@@ -860,19 +1285,20 @@ def search_videos_for_inline(query, offset=0, limit=50):
             AND (
                 v.caption ILIKE %s OR 
                 v.file_name ILIKE %s OR 
+                v.display_title ILIKE %s OR
                 c.name ILIKE %s
             )
-        GROUP BY v.id, v.file_id, v.caption, v.file_name, v.view_count,
+        GROUP BY v.id, v.file_id, v.caption, v.file_name, v.display_title, v.view_count,
                  v.thumbnail_file_id, v.chat_id, v.message_id, v.content_type, c.name
         ORDER BY 
             CASE 
-                WHEN v.caption ILIKE %s THEN 0       -- تطابق تام (الأهم)
+                WHEN v.caption ILIKE %s OR v.display_title ILIKE %s THEN 0       -- تطابق تام (الأهم)
                 WHEN v.file_name ILIKE %s THEN 0
                 
-                WHEN v.caption ILIKE %s THEN 1       -- يبدأ بـ
+                WHEN v.caption ILIKE %s OR v.display_title ILIKE %s THEN 1       -- يبدأ بـ
                 WHEN v.file_name ILIKE %s THEN 1
                 
-                WHEN v.caption ILIKE %s THEN 2       -- كلمة كاملة (محاطة بمسافات)
+                WHEN v.caption ILIKE %s OR v.display_title ILIKE %s THEN 2       -- كلمة كاملة (محاطة بمسافات)
                 WHEN v.file_name ILIKE %s THEN 2
                 
                 ELSE 3                               -- مجرد احتواء (الأقل أهمية)
@@ -889,11 +1315,11 @@ def search_videos_for_inline(query, offset=0, limit=50):
     contains_pattern = f"%{query}%"         # %يوسف%
     
     return execute_query(sql, (
-        contains_pattern, contains_pattern, contains_pattern,  # WHERE (للفلترة العامة)
+        contains_pattern, contains_pattern, contains_pattern, contains_pattern,  # WHERE (للفلترة العامة)
         
-        exact_pattern, exact_pattern,           # Case 0: Exact
-        starts_with_pattern, starts_with_pattern, # Case 1: Starts With
-        word_pattern, word_pattern,             # Case 2: Word Match
+        exact_pattern, exact_pattern, exact_pattern,           # Case 0: Exact (caption / display_title / file_name)
+        starts_with_pattern, starts_with_pattern, starts_with_pattern, # Case 1: Starts With
+        word_pattern, word_pattern, word_pattern,             # Case 2: Word Match
         
         limit, offset                           # Limit & Offset
     ), fetch="all")

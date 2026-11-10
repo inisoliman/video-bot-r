@@ -9,7 +9,10 @@ import hmac  # للمقارنة الآمنة ضد timing attacks
 import json
 import logging
 import threading  # إضافة threading
+from datetime import timedelta
+from functools import wraps
 from flask import Flask, request, jsonify, abort
+from werkzeug.exceptions import HTTPException
 import telebot
 from telebot.types import Update
 
@@ -34,6 +37,24 @@ ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "default_secret")
 APP_URL = os.getenv("APP_URL")
 
+# --- توكن إدارة المسارات الحساسة (اختياري، لا يمنع الإقلاع) ---
+# ترتيب الأولوية: WEBHOOK_MANAGEMENT_TOKEN ثم WEBHOOK_SECRET إن كان مضبوطاً يدوياً فقط.
+# القيمة الافتراضية "default_secret" لا تُعتبر بيانات اعتماد أبداً.
+_DEFAULT_WEBHOOK_SECRET = "default_secret"
+_RAW_MANAGEMENT_TOKEN = os.getenv("WEBHOOK_MANAGEMENT_TOKEN")
+WEBHOOK_MANAGEMENT_TOKEN_RAW_SET = bool(_RAW_MANAGEMENT_TOKEN)
+MANAGEMENT_TOKEN = (_RAW_MANAGEMENT_TOKEN or "").strip()
+if not MANAGEMENT_TOKEN and WEBHOOK_SECRET and WEBHOOK_SECRET != _DEFAULT_WEBHOOK_SECRET:
+    MANAGEMENT_TOKEN = WEBHOOK_SECRET
+MANAGEMENT_HEADER = "X-Admin-Token"
+
+# هل نسمح بحذف التحديثات المعلّقة عند إعداد webhook؟ افتراضياً لا
+WEBHOOK_DROP_PENDING = os.getenv("WEBHOOK_DROP_PENDING", "0").strip().lower() in ("1", "true", "yes", "on")
+
+# الأنواع المسموحة للتحديثات (channel_post مطلوب لفهم منشورات القناة)
+WEBHOOK_ALLOWED_UPDATES = ["message", "edited_message", "channel_post", "edited_channel_post",
+                           "callback_query", "inline_query"]
+
 # Render يستخدم PORT بدلاً من WEBHOOK_PORT
 PORT = int(os.getenv("PORT", "10000"))
 
@@ -45,6 +66,15 @@ logger.info(f"CHANNEL_ID: {'✅ Set' if CHANNEL_ID else '❌ Missing'}")
 logger.info(f"ADMIN_IDS: {'✅ Set' if ADMIN_IDS_STR else '❌ Missing'}")
 logger.info(f"APP_URL: {'✅ Set' if APP_URL else '❌ Missing'}")
 logger.info(f"PORT: {PORT}")
+if MANAGEMENT_TOKEN:
+    logger.info("WEBHOOK_MANAGEMENT_TOKEN: ✅ Set (management routes authenticated)")
+elif WEBHOOK_MANAGEMENT_TOKEN_RAW_SET:
+    logger.warning("⚠️ WEBHOOK_MANAGEMENT_TOKEN is set but empty after stripping; management routes disabled")
+elif WEBHOOK_SECRET != _DEFAULT_WEBHOOK_SECRET:
+    logger.warning("⚠️ WEBHOOK_SECRET is configured and is reused as the management credential")
+else:
+    logger.warning("⚠️ No management credential configured; /set_webhook and /admin/* "
+                   "will answer 503 (health and webhook are unaffected)")
 
 # التحقق من المتغيرات المطلوبة
 missing_vars = []
@@ -83,6 +113,9 @@ app = Flask(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
 
 # --- إعداد Rate Limiting ---
+# ملاحظة: لا يوجد حد افتراضي عام. الحد العام القديم ("50 per hour") كان يخنق حركة
+# تيليجرام الشرعية ويؤخر تحديثات المستخدمين. الآن: webhook له حماية لكل IP فقط،
+# ومسارات الإدارة لها حد صريح، ومسارات الصحة مستثناة.
 try:
     from flask_limiter import Limiter
     from flask_limiter.util import get_remote_address
@@ -90,13 +123,71 @@ try:
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
-        default_limits=["200 per day", "50 per hour"],
         storage_uri="memory://"
     )
     logger.info("✅ Rate limiting enabled")
 except ImportError:
     logger.warning("⚠️ Flask-Limiter not installed. Rate limiting disabled.")
     limiter = None
+
+MANAGEMENT_RATE_LIMIT = "120 per hour"
+WEBHOOK_RATE_LIMIT = "600 per minute"
+
+def _limited(limit_value, deduct_when=None):
+    """تطبيق حد معدل صريح عند توفر Flask-Limiter فقط (لا حد عام على الحالة كلها)."""
+    if limiter is None:
+        return lambda func: func
+    if deduct_when is None:
+        return limiter.limit(limit_value)
+    return limiter.limit(limit_value, deduct_when=deduct_when)
+
+# --- حماية مسارات الإدارة (Fail closed) ---
+def _client_token():
+    """التوكن المُقدَّم من العميل: الهيدر أولاً ثم وسيط token في الـ query."""
+    return (request.headers.get(MANAGEMENT_HEADER) or "").strip() or \
+        (request.args.get("token") or "").strip()
+
+def _token_matches(candidate):
+    """مقارنة ثابتة الزمن لا تكشف التوكن المكوَّن."""
+    if not MANAGEMENT_TOKEN or not candidate:
+        return False
+    return hmac.compare_digest(candidate.encode("utf-8"), MANAGEMENT_TOKEN.encode("utf-8"))
+
+def _management_unavailable():
+    # لا نكشف أي توكن أو إعداد حساس هنا
+    return jsonify({"status": "error", "message": "Management API disabled: no management credential configured"}), 503
+
+def _management_forbidden():
+    return jsonify({"status": "error", "message": "Unauthorized"}), 401
+
+def management_route(func):
+    """يجعل مسارات الإدارة تفشل بأمان دون بيانات اعتماد مُعدّة.
+
+    - بدون توكن إدارة مُعدّ: 503 (لا نعتمد على admin_id ولا على IP).
+    - توكن خاطئ أو مفقود: 401.
+    - مقارنة ثابتة الزمن على الهيدر ``X-Admin-Token`` (أو ``?token=``).
+    المحاولات غير المصرَّح بها لا تُستهلك من حد المعدل كي لا تُقفل المسار عن المالك.
+    """
+    func.is_management_route = True
+
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            if not MANAGEMENT_TOKEN:
+                logger.warning(f"🔒 Management route {request.path} called without configured credential (503)")
+                return _management_unavailable()
+            if not _token_matches(_client_token()):
+                logger.warning(f"❌ Management auth failed for {request.path} from {request.remote_addr}")
+                return _management_forbidden()
+            return func(*args, **kwargs)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Management route error on {request.path}: {e}", exc_info=True)
+            return jsonify({"status": "error", "message": "server_error"}), 500
+
+    return _limited(MANAGEMENT_RATE_LIMIT,
+                    deduct_when=lambda response: response.status_code != 401)(wrapper)
 
 # --- Routes ---
 @app.route("/", methods=["GET"])
@@ -136,24 +227,48 @@ def health():
 if limiter:
     limiter.exempt(health)
 
+@app.route("/live", methods=["GET"])
+def live():
+    """Liveness: العملية تعمل. لا يلمس قاعدة البيانات ولا Telegram."""
+    return jsonify({"status": "alive"})
+
+if limiter:
+    limiter.exempt(live)
+
+@app.route("/ready", methods=["GET"])
+def ready():
+    """Readiness: الحالة الأخيرة المعروفة لفحص المخطط والقاعدة.
+
+    لا ننفذ اتصالاً بقاعدة البيانات داخل الطلب، بل نقرأ علم التهيئة فقط.
+    الحالة قديمة 503 حتى يكتمل ``init_bot``; فشل فحص المخطط يبقى 503.
+    """
+    state = app.config.get("READY_STATE") or "initializing"
+    detail = app.config.get("READY_DETAIL")
+    if state == "ready":
+        return jsonify({"status": "ready"})
+    payload = {"status": "not_ready", "state": state}
+    if detail:
+        payload["detail"] = detail
+    return jsonify(payload), 503
+
+if limiter:
+    limiter.exempt(ready)
+
 @app.route(f"/bot{BOT_TOKEN}", methods=["POST"])
+@_limited(WEBHOOK_RATE_LIMIT)
 def webhook():
-    # تطبيق rate limiting يدوياً إذا كان متاحاً
-    if limiter:
-        try:
-            limiter.check()
-        except Exception:
-            logger.warning(f"Rate limit exceeded from {request.remote_addr}")
-            abort(429)  # Too Many Requests
-    
+    # الحد العام القديم (50/hour) أُزيل لأنه كان يخنق حركة تيليجرام الشرعية.
+    # تبقى حماية لكل IP على مسار الـ webhook فقط، والمسارات الأخرى بلا حد عام.
     try:
         # 🔐 التحقق الإلزامي من WEBHOOK_SECRET عند تعيينه بشكل مخصص
         # Telegram يرسل دائماً secret_token في الـ header إذا تم تكوينه عبر setWebhook
         # المرجع: https://core.telegram.org/bots/api#setwebhook
-        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
+        if WEBHOOK_SECRET and WEBHOOK_SECRET != _DEFAULT_WEBHOOK_SECRET:
             secret_token = request.headers.get('X-Telegram-Bot-Api-Secret-Token', '')
             # استخدام hmac.compare_digest لمنع timing attacks
-            if not secret_token or not hmac.compare_digest(secret_token, WEBHOOK_SECRET):
+            if not secret_token or not hmac.compare_digest(
+                secret_token.encode("utf-8"), WEBHOOK_SECRET.encode("utf-8")
+            ):
                 logger.warning(
                     f"❌ Webhook secret mismatch/missing from {request.remote_addr} - "
                     f"rejecting request (403)"
@@ -164,13 +279,14 @@ def webhook():
             logger.warning(f"Invalid content-type: {request.content_type}")
             abort(400)
         
-        json_data = request.get_json()
-        if not json_data:
-            logger.warning("Empty JSON received")
+        # JSON غير صالح يُرفض بـ 400 صراحةً بدل اعتباره طلباً ناجحاً
+        json_data = request.get_json(silent=True)
+        if not isinstance(json_data, dict) or not json_data:
+            logger.warning("Empty or malformed JSON received")
             abort(400)
         
         update = Update.de_json(json_data)
-        if not update:
+        if not isinstance(update, Update) or not getattr(update, "update_id", None):
             logger.warning("Invalid update object")
             abort(400)
         
@@ -179,13 +295,16 @@ def webhook():
         
         return jsonify({"ok": True})
         
+    except HTTPException:
+        # 400/403/429 وغيرها تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
         return jsonify({"error": "server_error"}), 500
 
 def process_update(update):
     try:
-        # معالجة حالة المستخدم أولاً
+        # معالجة حالة المستخدم أولاً (/cancel قبل أي حالة)
         if update.message and update.message.from_user:
             if state_manager.handle_message(update.message, bot):
                 return
@@ -197,41 +316,93 @@ def process_update(update):
             bot.process_new_callback_query([update.callback_query])
         elif update.inline_query:
             bot.process_new_inline_query([update.inline_query])
+        elif update.channel_post:
+            bot.process_new_channel_posts([update.channel_post])
+        elif update.edited_message:
+            bot.process_new_edited_messages([update.edited_message])
+        elif update.edited_channel_post:
+            bot.process_new_edited_channel_posts([update.edited_channel_post])
+        else:
+            logger.info(f"Unhandled update type id={update.update_id}")
             
     except Exception as e:
+        # لا نعيد الرمي: التحديث عُولج أو فشل بالفعل، وإعادته إلى تيليجرام تُكرر العمل
         logger.error(f"Process update error: {e}", exc_info=True)
 
-@app.route("/set_webhook", methods=["POST", "GET"])
-def set_webhook():
-    try:
-        webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
-        
-        # حذف webhook القديم
+def _webhook_allowed_updates(include_channel_post):
+    allowed = [u for u in WEBHOOK_ALLOWED_UPDATES if u != "channel_post"]
+    if include_channel_post:
+        allowed.insert(2, "channel_post")
+    return allowed
+
+_TRUTHY_PARAMS = ("1", "true", "yes", "on")
+
+def _flag_param(name):
+    """قراءة علم منطقي من الـ query أو جسم الطلب (افتراضياً False)."""
+    value = request.args.get(name)
+    if value is None and request.form is not None:
+        value = request.form.get(name)
+    return str(value or "").strip().lower() in _TRUTHY_PARAMS
+
+def _requested_drop_pending(allow_param):
+    """هل طُلب صراحةً حذف التحديثات المعلّقة؟
+
+    الافتراضي دائماً False. يمكن طلبه بـ ``?drop_pending_updates=1`` ومع
+    ``confirm=1`` (مفسّر فقط عند ``allow_param=True``).
+    """
+    if not allow_param:
+        return False
+    return _flag_param("drop_pending_updates") and _flag_param("confirm")
+
+def _configure_webhook(drop_pending_updates, allowed_updates, remove_first=False):
+    """إعداد webhook بدون كشف الأسرار وإرجاع نتيجة حقيقية.
+
+    - لا حذف مسبق (``remove_first``) إلا عند الطلب صراحة.
+    - ``drop_pending_updates`` لا يكون True إلا عند الطلب صراحة.
+    - ``secret_token`` يُمرَّر فقط إذا كان ``WEBHOOK_SECRET`` مضبوطاً يدوياً.
+    """
+    webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
+    if remove_first:
         bot.remove_webhook()
-        logger.info("🗑️ Old webhook removed")
-        
-        # تعيين webhook جديد
-        webhook_params = {
-            'url': webhook_url,
-            'max_connections': 40,
-            'drop_pending_updates': True,
-            'allowed_updates': ["message", "callback_query", "inline_query"]
-        }
-        
-        # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
-        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
-            webhook_params['secret_token'] = WEBHOOK_SECRET
-            logger.info("🔐 Webhook secret token configured")
-        else:
-            logger.warning("⚠️ Using webhook without secret token")
-        
-        result = bot.set_webhook(**webhook_params)
-        
+        logger.info("🗑️ Old webhook removed (explicitly requested)")
+
+    webhook_params = {
+        'url': webhook_url,
+        'max_connections': 40,
+        'drop_pending_updates': bool(drop_pending_updates),
+        'allowed_updates': list(allowed_updates),
+    }
+    if WEBHOOK_SECRET and WEBHOOK_SECRET != _DEFAULT_WEBHOOK_SECRET:
+        webhook_params['secret_token'] = WEBHOOK_SECRET
+        logger.info("🔐 Webhook secret token configured")
+    else:
+        logger.warning("⚠️ Using webhook without secret token (less secure)")
+
+    return bot.set_webhook(**webhook_params)
+
+@app.route("/set_webhook", methods=["POST"])
+@management_route
+def set_webhook():
+
+    try:
+        # القيم الافتراضية الآمنة: لا حذف للتحديثات المعلّقة، وإتاحة channel_post
+        drop_pending = _requested_drop_pending(True)
+        remove_first = _flag_param("remove_first") and _flag_param("confirm")
+        result = _configure_webhook(
+            drop_pending_updates=drop_pending,
+            allowed_updates=_webhook_allowed_updates(include_channel_post=True),
+            remove_first=remove_first,
+        )
+        # لا نعيد الرابط الكامل لأنه يحتوي BOT_TOKEN
+        safe_url = f"{APP_URL}/bot<redacted>"
+
         if result:
-            logger.info(f"✅ Webhook set: {webhook_url}")
+            logger.info(f"✅ Webhook set (url redacted) drop_pending={drop_pending}")
             return jsonify({
-                "status": "success", 
-                "webhook": webhook_url
+                "status": "success",
+                "webhook": safe_url,
+                "drop_pending_updates": drop_pending,
+                "allowed_updates": _webhook_allowed_updates(include_channel_post=True),
             })
         else:
             logger.error("❌ Failed to set webhook")
@@ -239,15 +410,19 @@ def set_webhook():
                 "status": "failed",
                 "error": "Could not set webhook"
             }), 500
-            
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Set webhook error: {e}")
+        # الكشف عن الرسالة التشغيلية فقط، بلا أسرار
+        logger.error(f"Set webhook error: {type(e).__name__}")
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": "server_error"
         }), 500
 
 @app.route("/admin/update_thumbnails", methods=["GET", "POST"])
+@management_route
 def admin_update_thumbnails():
     """
     مسار للأدمن لتحديث thumbnails للفيديوهات القديمة.
@@ -367,6 +542,9 @@ def admin_update_thumbnails():
             "message": "Thumbnail update started in background. You will receive a message when complete."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Admin update thumbnails error: {e}", exc_info=True)
         return jsonify({
@@ -375,6 +553,7 @@ def admin_update_thumbnails():
         }), 500
 
 @app.route("/admin/extract_channel_thumbnails", methods=["GET", "POST"])
+@management_route
 def admin_extract_channel_thumbnails():
     """
     استخراج thumbnails من القناة للفيديوهات القديمة.
@@ -518,6 +697,9 @@ def admin_extract_channel_thumbnails():
             "message": "Channel thumbnail extraction started. You will receive a message when complete."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Admin extract channel thumbnails error: {e}", exc_info=True)
         return jsonify({
@@ -526,6 +708,7 @@ def admin_extract_channel_thumbnails():
         }), 500
 
 @app.route('/admin/fix_videos_professional', methods=['GET'])
+@management_route
 def admin_fix_videos_professional():
     """الحل الاحترافي: جلب file_id و thumbnail من القناة"""
     try:
@@ -639,10 +822,14 @@ def admin_fix_videos_professional():
             "message": "Professional video fix started. You will receive a message when complete."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Admin fix videos error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 @app.route("/admin/optimize_db", methods=["GET", "POST"])
+@management_route
 def admin_optimize_db():
     """
     تحسين قاعدة البيانات عبر الويب: إنشاء الفهارس.
@@ -724,6 +911,7 @@ def admin_optimize_db():
         }), 500
 
 @app.route("/admin/migrate_database", methods=["GET", "POST"])
+@management_route
 def admin_migrate_database():
     """
     ترحيل قاعدة البيانات عبر الويب: ترحيل البيانات من الجداول القديمة وحذفها.
@@ -901,6 +1089,9 @@ def admin_migrate_database():
             "message": "Database migration started. You will receive a Telegram message with results."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Admin migrate database error: {e}", exc_info=True)
         return jsonify({
@@ -908,41 +1099,75 @@ def admin_migrate_database():
             "message": str(e)
         }), 500
 @app.route("/webhook_info", methods=["GET"])
+@management_route
 def webhook_info():
     try:
         info = bot.get_webhook_info()
+        webhook_url = getattr(info, "url", "") or ""
+        # الرابط يحتوي BOT_TOKEN: نعرض المسار فقط دون التوكن
+        safe_url = ""
+        if webhook_url and BOT_TOKEN:
+            safe_url = webhook_url.replace(BOT_TOKEN, "<redacted>")
         return jsonify({
-            "url": info.url,
-            "pending_updates": info.pending_update_count,
-            "last_error": info.last_error_message,
-            "max_connections": info.max_connections
+            "url": safe_url,
+            "pending_updates": getattr(info, "pending_update_count", None),
+            "last_error": getattr(info, "last_error_message", None),
+            "max_connections": getattr(info, "max_connections", None),
+            "allowed_updates": getattr(info, "allowed_updates", None),
         })
+    except HTTPException:
+        raise
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        logger.error(f"Webhook info error: {e}")
+        return jsonify({"error": "server_error"}), 500
 
 @app.route("/thumbnail/<file_id>", methods=["GET"])
 def get_thumbnail(file_id):
     """
     مسار لعرض الصور المصغرة.
-    يقوم بإعادة توجيه الطلب إلى رابط تيليجرام المباشر.
+    يعيد التوجيه إلى مسار وسيط على نفس المضيف يعيد إرسال الملف بالتوكن من الخادم،
+    فلا يظهر BOT_TOKEN في الرابط المُعاد ولا في سجل المتصفح/الوسيط.
     """
     try:
         # جلب مسار الملف من تيليجرام
         file_info = bot.get_file(file_id)
-        
-        # رابط الملف المباشر (صالح لمدة ساعة)
-        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
-        
-        # إعادة توجيه (302)
+        file_path = getattr(file_info, "file_path", None)
+        if not file_path:
+            abort(404)
+
+        # رابط الوسيط يُبنى من APP_URL (المُتحقق منه HTTPS) لا من عنوان الطلب،
+        # تفادياً لأي إعادة توجيه مفتوحة بقرار المتصل.
+        from urllib.parse import quote
         from flask import redirect
-        return redirect(file_url)
+        if not APP_URL:
+            abort(404)
+        proxy_url = f"{APP_URL.rstrip('/')}/telegram_file/{quote(file_path, safe='/')}"
+        return redirect(proxy_url)
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Thumbnail fetch error for {file_id}: {e}")
-        # صورة افتراضية أو خطأ 404
+        # لا نسجل التوكن ولا العنوان الكامل
+        logger.error(f"Thumbnail fetch error for file_id={str(file_id)[:16]}...: {e}")
         abort(404)
 
+@app.route("/telegram_file/<path:file_path>", methods=["GET"])
+def telegram_file_proxy(file_path):
+    """وسيط بسيط يبني رابط ملف تيليجرام على الخادم (لا يظهر التوكن للعميل)."""
+    try:
+        if not BOT_TOKEN or not file_path:
+            abort(404)
+        file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        from flask import redirect
+        response = redirect(file_url, code=302)
+        # لا نسمح بتخزين الروابط التي تحتوي التوكن وسيطياً
+        response.headers["Cache-Control"] = "private, max-age=300"
+        return response
+    except HTTPException:
+        raise
+
 @app.route("/admin/diagnose_file_ids", methods=["GET", "POST"])
+@management_route
 def admin_diagnose_file_ids():
     """
     تشخيص مشكلة file_id - يفحص 5 فيديوهات ويُقارن file_id المحفوظ مع الفعلي
@@ -1021,11 +1246,15 @@ def admin_diagnose_file_ids():
         
         return jsonify({"status": "success", "message": "Diagnosis sent to admin"})
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Diagnosis error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/admin/db_stats", methods=["GET"])
+@management_route
 def admin_db_stats():
     """
     إحصائيات شاملة لقاعدة البيانات - لفحص حالة الفيديوهات
@@ -1109,11 +1338,15 @@ def admin_db_stats():
             "stats": stats
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"DB stats error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/admin/fix_content_types", methods=["GET", "POST"])
+@management_route
 def admin_fix_content_types():
     """
     إصلاح أنواع المحتوى (Video/Document) بشكل تلقائي
@@ -1267,11 +1500,15 @@ def admin_fix_content_types():
             "message": "Task started in background. You will receive a report via Telegram."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Endpoint error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/admin/test_search", methods=["GET"])
+@management_route
 def admin_test_search():
     """
     فحص البحث - يظهر ماذا يحدث عند البحث عن كلمة معينة
@@ -1362,11 +1599,15 @@ def admin_test_search():
             "full_results": len(full_results)
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Test search error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/admin/debug_search", methods=["GET"])
+@management_route
 def admin_debug_search():
     """
     فحص تفصيلي للبحث - يُقارن بين البحث البسيط والمعقد
@@ -1488,11 +1729,15 @@ def admin_debug_search():
             "results": results
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Debug search error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/admin/force_refresh_all_file_ids", methods=["GET", "POST"])
+@management_route
 def admin_force_refresh_all_file_ids():
     """
     إعادة جلب file_id لجميع الفيديوهات من القناة (حتى لو كان موجود)
@@ -1682,6 +1927,9 @@ def admin_force_refresh_all_file_ids():
             "message": "Refresh started. Check Telegram for results."
         })
         
+    except HTTPException:
+        # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
+        raise
     except Exception as e:
         logger.error(f"Admin force refresh error: {e}", exc_info=True)
         return jsonify({
@@ -1691,8 +1939,15 @@ def admin_force_refresh_all_file_ids():
 
 
 # --- تهيئة البوت ---
+def _set_ready_state(state, detail=None):
+    """تسجيل حالة الجهوزية بشكل موحّد (يقرأه /ready ولا يلمس شبكة)."""
+    app.config["READY_STATE"] = state
+    app.config["READY_DETAIL"] = detail
+    return state
+
 def init_bot():
     logger.info("🤖 Initializing bot...")
+    _set_ready_state("initializing")
     
     try:
         # فحص قاعدة البيانات
@@ -1700,6 +1955,7 @@ def init_bot():
         logger.info("✅ Database schema OK")
     except Exception as e:
         logger.error(f"❌ Database error: {e}")
+        _set_ready_state("db_error", "database schema check failed")
         return False
     
     try:
@@ -1708,38 +1964,26 @@ def init_bot():
         logger.info("✅ Bot handlers registered")
     except Exception as e:
         logger.error(f"❌ Handlers error: {e}")
+        _set_ready_state("handlers_error", "handler registration failed")
         return False
     
     try:
-        # إعداد webhook
-        webhook_url = f"{APP_URL}/bot{BOT_TOKEN}"
-        bot.remove_webhook()
-        
-        webhook_params = {
-            'url': webhook_url,
-            'max_connections': 40,
-            'drop_pending_updates': True,
-            'allowed_updates': ["message", "callback_query", "inline_query"]
-        }
-        
-        # إضافة secret_token فقط إذا تم تعيينه بشكل مخصص
-        # ملاحظة: لا نضيفه إذا كان القيمة الافتراضية لتجنب مشاكل التوافق
-        if WEBHOOK_SECRET and WEBHOOK_SECRET != "default_secret":
-            webhook_params['secret_token'] = WEBHOOK_SECRET
-            logger.info("🔐 Webhook secret token configured")
-        else:
-            logger.warning("⚠️ Using webhook without secret token (less secure)")
-        
-        result = bot.set_webhook(**webhook_params)
+        # إعداد webhook: لا حذف مسبق، ولا حذف للتحديثات المعلّقة إلا بالطلب الصريح
+        result = _configure_webhook(
+            drop_pending_updates=WEBHOOK_DROP_PENDING,
+            allowed_updates=_webhook_allowed_updates(include_channel_post=True),
+        )
         
         if result:
-            logger.info(f"✅ Webhook set: {webhook_url}")
+            # لا نطبع الرابط الكامل لأنه يحتوي BOT_TOKEN
+            logger.info("✅ Webhook set (url redacted)")
         else:
             logger.warning("⚠️ Webhook setup failed")
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         # لا نتوقف هنا، سيتم إعداده لاحقاً
     
+    _set_ready_state("ready")
     logger.info("🚀 Bot initialization completed!")
     
     # بدء تنظيف السجل

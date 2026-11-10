@@ -5,6 +5,21 @@ from db_manager import set_user_state, get_user_state, clear_user_state
 
 logger = logging.getLogger(__name__)
 
+# حالات تُعالج في user_handlers (نصوص حرة يتحقق الحارس من هوية المستخدم قبلها)
+DELEGATED_STATES = frozenset({
+    'waiting_comment',
+    'replying_comment',
+    'editing_display_title',
+})
+
+# حالات تعتمد على نص المستخدم مباشرة: لا يجب أن تستهلك أوامر /command
+TEXT_INPUT_STATES = frozenset({
+    'waiting_comment',
+    'replying_comment',
+    'editing_display_title',
+    'waiting_search_query',
+})
+
 # State constants
 class States:
     WAITING_CHANNEL_ID = "waiting_channel_id"
@@ -63,6 +78,14 @@ class StateManager:
     def handle_message(self, message, bot):
         """Handle incoming message based on user state."""
         user_id = message.from_user.id
+        text = (getattr(message, 'text', None) or "").strip()
+
+        # /cancel يُعالج قبل توجيه أي حالة، فلا يستهلكه معالج حالة ولا يصل كعنوان/رد
+        if text == "/cancel" or text.startswith("/cancel "):
+            self.clear_state(user_id)
+            bot.reply_to(message, "✅ تم إلغاء العملية")
+            return True
+
         user_state = self.get_state(user_id)
         
         if not user_state:
@@ -71,8 +94,12 @@ class StateManager:
         state = user_state['state']
         context = user_state.get('context', {})
         
-        # حالات التعليقات تُعالج في user_handlers مباشرة
-        if state in ['waiting_comment', 'replying_comment']:
+        # الأوامر لا تدخل حالة نصية مفتوحة (مثل عنوان جديد أو رد)
+        if text.startswith("/") and state in TEXT_INPUT_STATES:
+            return False  # Let the command handlers process it
+
+        # حالات التعليقات والعناوين تُعالج في user_handlers مباشرة
+        if state in DELEGATED_STATES:
             return False  # Let user_handlers process these
         
         if state in self.handlers:

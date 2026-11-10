@@ -5,6 +5,7 @@ from telebot.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 import math
 import re
 import logging
+from html import escape as html_escape
 from .button_styles import (
     STYLE_DANGER,
     STYLE_PRIMARY,
@@ -16,14 +17,29 @@ from db_manager import (
     get_child_categories, get_category_by_id, get_user_video_rating,
     get_video_rating_stats, VIDEOS_PER_PAGE, CALLBACK_DELIMITER,
     get_required_channels, is_video_favorite, get_categories_tree,
-    get_videos_ratings_bulk  # إضافة الدالة الجديدة
+    get_videos_ratings_bulk,  # إضافة الدالة الجديدة
 )
+from utils import video_title, clean_display_title
 
 logger = logging.getLogger(__name__)
 
 # القواميس المشتركة لتخزين حالة المستخدمين
 admin_steps = {}
 user_last_search = {}
+
+# أقصى رقم صفحة مقبول من callback_data (حماية من قيم مشوّهة)
+MAX_PAGE_INDEX = 9999
+
+
+def safe_page(value, default=0):
+    """تحويل رقم صفحة قادم من callback إلى عدد صحيح غير سالب ومحدود."""
+    try:
+        page = int(value)
+    except (TypeError, ValueError):
+        return default
+    if page < 0 or page > MAX_PAGE_INDEX:
+        return default
+    return page
 
 
 # ============================================
@@ -238,11 +254,16 @@ def format_duration(seconds):
 
 def format_video_display_info(video):
     metadata = video.get('metadata') or {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    # ⚠️ العنوان: display_title (تعديل الأدمن) له الأولوية المطلقة، ثم اسم المسلسل
+    # من الميتاداتا، ثم أول سطر من caption، ثم file_name. (كان العكس فيفشل التعديل للمسلسلات)
+    override = clean_display_title(video.get('display_title'))
     series_name = metadata.get('series_name')
+    series_name = str(series_name).strip() if series_name else ""
+    title_base = override or series_name or video_title(video)
+    title_base = title_base.strip()
     season = metadata.get('season_number')
     episode = metadata.get('episode_number')
-    title_base = series_name or (video.get('caption') or video.get('file_name') or "فيديو").split('\n')[0]
-    title_base = title_base.strip()
     parts = []
     if season: parts.append(f"م{season}")
     if episode: parts.append(f"ح{episode}")

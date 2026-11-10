@@ -2,6 +2,7 @@
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import html
 import logging
 import threading
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
@@ -31,12 +32,18 @@ from state_manager import States
 logger = logging.getLogger(__name__)
 
 def register(bot, admin_ids):
+    def _split(data):
+        return (data or "").split(helpers.CALLBACK_DELIMITER)
+
+    def _safe_page(value):
+        return helpers.safe_page(value)
+
     @bot.callback_query_handler(func=lambda call: True)
     def callback_query(call):
         try:
             user_id = call.from_user.id
-            data = call.data.split(helpers.CALLBACK_DELIMITER)
-            action = data[0]
+            data = _split(getattr(call, 'data', '') or '')
+            action = data[0] if data else ''
 
 # ملاحظة: سنجيب على callback_query في كل معالج حسب الحاجة بدلاً من الرد الفوري هنا
 
@@ -122,8 +129,10 @@ def register(bot, admin_ids):
 
             # --- معالجة المفضلة والسجل ---
             if action == "fav":
-                _, action_type, video_id = data
-                video_id = int(video_id)
+                if len(data) < 3 or not data[2].isdigit():
+                    bot.answer_callback_query(call.id, "خطأ في بيانات الفيديو.", show_alert=True)
+                    return
+                action_type, video_id = data[1], int(data[2])
 
                 if action_type == "remove":
                     remove_from_favorites(user_id, video_id)
@@ -138,8 +147,7 @@ def register(bot, admin_ids):
                 return
 
             elif action in ["fav_page", "history_page"]:
-                _, _, page_str = data
-                page = int(page_str)
+                page = _safe_page(data[2] if len(data) > 2 else 0)
 
                 if action == "fav_page":
                     videos, total_count = get_user_favorites(user_id, page)
@@ -160,7 +168,7 @@ def register(bot, admin_ids):
 
             # --- معالجة البحث ---
             elif action == "search_type":
-                search_type = data[1]
+                search_type = data[1] if len(data) > 1 else ""
                 query_data = helpers.user_last_search.get(call.message.chat.id)
 
                 if not query_data or 'query' not in query_data:
@@ -189,8 +197,7 @@ def register(bot, admin_ids):
                     keyboard.add(inline_button("🌐 بحث في كل التصنيفات 🟠", STYLE_SUCCESS, callback_data=f"search_scope::all::0"))
                     keyboard.add(inline_button("↩️ رجوع 🟢", STYLE_SUCCESS, callback_data="back_to_main"))
 
-                    bot.edit_message_text(f"🎯 <b>أين تريد البحث عن</b> \"<code>{query}</code>\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
-
+                    bot.edit_message_text(f"🎯 <b>أين تريد البحث عن</b> \"<code>{html.escape(str(query))}</code>\"؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 elif search_type == "advanced":
                     keyboard = InlineKeyboardMarkup(row_width=2)
                     keyboard.add(
@@ -201,7 +208,7 @@ def register(bot, admin_ids):
                     bot.edit_message_text("⚙️ <b>اختر فلتر للبحث المتقدم:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_filter":
-                filter_type = data[1]
+                filter_type = data[1] if len(data) > 1 else ""
                 query_data = helpers.user_last_search.get(call.message.chat.id)
 
                 if not query_data or 'query' not in query_data:
@@ -226,8 +233,11 @@ def register(bot, admin_ids):
                     bot.edit_message_text("🗣️ <b>اختر الحالة:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "adv_search":
-                _, filter_type, filter_value, page_str = data
-                page = int(page_str)
+                if len(data) < 3:
+                    bot.answer_callback_query(call.id, "خطأ في بيانات البحث.", show_alert=True)
+                    return
+                filter_type, filter_value = data[1], data[2]
+                page = _safe_page(data[3] if len(data) > 3 else 0)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
 
                 if not query_data or 'query' not in query_data:
@@ -252,11 +262,14 @@ def register(bot, admin_ids):
                 action_prefix = f"adv_search::{filter_type}"
                 context_id = filter_value
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, action_prefix, context_id)
-                bot.edit_message_text(f"🔍 <b>نتائج البحث المتقدم عن</b> \"<code>{query}</code>\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                bot.edit_message_text(f"🔍 <b>نتائج البحث المتقدم عن</b> \"<code>{html.escape(str(query))}</code>\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             elif action == "search_scope":
-                _, scope, page_str = data
-                page = int(page_str)
+                if len(data) < 2:
+                    bot.answer_callback_query(call.id, "خطأ في بيانات البحث.", show_alert=True)
+                    return
+                scope = data[1]
+                page = _safe_page(data[2] if len(data) > 2 else 0)
                 query_data = helpers.user_last_search.get(call.message.chat.id)
 
                 if not query_data or 'query' not in query_data:
@@ -265,16 +278,16 @@ def register(bot, admin_ids):
                     return
 
                 query = query_data['query']
-                category_id = int(scope) if scope != "all" else None
+                category_id = int(scope) if scope.isdigit() else None
                 videos, total_count = search_videos(query=query, page=page, category_id=category_id)
 
                 if not videos:
-                    bot.edit_message_text(f"❌ لا توجد نتائج لـ \"{query}\".", call.message.chat.id, call.message.message_id)
+                    bot.edit_message_text(f"❌ لا توجد نتائج لـ \"{html.escape(str(query))}\".", call.message.chat.id, call.message.message_id)
                     return
 
                 prefix = "search_scope"
                 keyboard = helpers.create_paginated_keyboard(videos, total_count, page, prefix, scope)
-                bot.edit_message_text(f"🔍 <b>نتائج البحث عن</b> \"<code>{query}</code>\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                bot.edit_message_text(f"🔍 <b>نتائج البحث عن</b> \"<code>{html.escape(str(query))}</code>\":", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
             # --- معالجات الأدمن ---
             elif action == "admin":
@@ -282,8 +295,14 @@ def register(bot, admin_ids):
                     bot.answer_callback_query(call.id, "غير مصرح لك.", show_alert=True)
                     return
 
-                sub_action = data[1]
-                
+                sub_action = data[1] if len(data) > 1 else ""
+
+                # عرض/تعديل عنوان الفيلم (display title) - للأدمن فقط
+                if sub_action.startswith("title"):
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.dispatch_title_action(bot, call, admin_ids, sub_action, data[2:])
+                    return
+
                 # معالجات التعليقات من لوحة الأدمن
                 if sub_action == "view_comments":
                     bot.answer_callback_query(call.id)
@@ -302,18 +321,12 @@ def register(bot, admin_ids):
                 
                 elif sub_action == "delete_old_comments":
                     bot.answer_callback_query(call.id)
-                    # حذف التعليقات الأقدم من 30 يوم افتراضياً
-                    markup = InlineKeyboardMarkup(row_width=2)
-                    markup.add(
-                        inline_button("🗑️ تأكيد الحذف 🔴", STYLE_DANGER, callback_data="confirm_delete_old_comments::30"),
-                        inline_button("↩️ إلغاء 🟢", STYLE_SUCCESS, callback_data="noop")
-                    )
-                    bot.send_message(
-                        user_id,
-                        "⚠️ <b>تأكيد الحذف</b>\n\n"
-                        "هل أنت متأكد من حذف التعليقات الأقدم من <b>30 يوم</b>؟",
-                        reply_markup=markup
-                    )
+                    comment_handlers.handle_delete_old_comments(bot, user_id, admin_ids, "30")
+                    return
+
+                elif sub_action == "edit_title":
+                    msg = bot.send_message(call.message.chat.id, "📝 أرسل رقم الفيديو (ID) الذي تريد تعديل عنوانه. (أو /cancel)")
+                    bot.register_next_step_handler(msg, comment_handlers.handle_title_video_id_input, bot)
                     return
 
                 if sub_action == "add_new_cat":
@@ -606,6 +619,7 @@ def register(bot, admin_ids):
 
             elif action == "video":
                 try:
+                    # يدعم الصيغة القديمة (video::id::message_id::chat_id) والصيغة الأخرى (video::id::chat_id::message_id)
                     _, video_id, message_id, chat_id = data
                     
                     # التحقق من صحة البيانات
@@ -616,6 +630,14 @@ def register(bot, admin_ids):
                     video_id_int = int(video_id)
                     message_id_int = int(message_id)
                     chat_id_int = int(chat_id)
+                    try:
+                        video_row = get_video_by_id(video_id_int)
+                    except Exception:
+                        video_row = None
+                    if video_row:
+                        # نستخدم أرقام الرسالة/القناة المحفوظة (أدق من بيانات الزر القديم)
+                        message_id_int = video_row.get('message_id') or message_id_int
+                        chat_id_int = video_row.get('chat_id') or chat_id_int
                     
                     # زيادة عداد المشاهدات وإضافة للسجل
                     increment_video_view_count(video_id_int)
@@ -724,25 +746,37 @@ def register(bot, admin_ids):
             # --- معالجات التعليقات ---
             elif action == "add_comment":
                 comment_handlers.handle_add_comment(bot, call)
-            
+
             elif action == "my_comments":
-                page = int(data[1]) if len(data) > 1 else 0
-                comment_handlers.show_user_comments(bot, call.message, page)
-                bot.answer_callback_query(call.id)
-            
+                # [إصلاح] كان يمرّر call.message (هوية البوت) بدلاً من المُستدعي
+                page = _safe_page(data[1] if len(data) > 1 else 0)
+                comment_handlers.show_user_comments(bot, user_id, page, caller=call)
+
+            elif action == "thread":
+                comment_handlers.open_member_thread(bot, call)
+
+            elif action == "thread_write":
+                comment_handlers.start_followup(bot, call, admin_ids)
+
+            elif action == "thread_view":
+                comment_handlers.view_admin_thread(bot, call, admin_ids)
+
+            elif action == "cancel_reply":
+                comment_handlers.handle_cancel_reply(bot, call, admin_ids)
+
             elif action == "admin_comments":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                page = int(data[1]) if len(data) > 1 else 0
+                page = _safe_page(data[1] if len(data) > 1 else 0)
                 comment_handlers.show_all_comments(bot, user_id, admin_ids, page, unread_only=False)
                 bot.answer_callback_query(call.id)
-            
+
             elif action == "admin_comments_unread":
                 if user_id not in admin_ids:
                     bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
-                page = int(data[1]) if len(data) > 1 else 0
+                page = _safe_page(data[1] if len(data) > 1 else 0)
                 comment_handlers.show_all_comments(bot, user_id, admin_ids, page, unread_only=True)
                 bot.answer_callback_query(call.id)
             

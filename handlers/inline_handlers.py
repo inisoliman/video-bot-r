@@ -12,6 +12,7 @@ import os
 
 import config
 import db_manager as db
+from utils import video_title
 
 logger = logging.getLogger(__name__)
 INLINE_CACHE_TIME = getattr(config, "INLINE_CACHE_TIME", 300)
@@ -168,8 +169,8 @@ def create_inline_result(video, use_document=False):
         if not file_id or len(file_id) < 10:
             return None
         
-        # العنوان: caption أو file_name
-        title = video.get('caption') or video.get('file_name') or 'فيديو بدون عنوان'
+        # العنوان: display_title المعدّل من الأدمن ← caption ← file_name
+        title = video_title(video, fallback='فيديو بدون عنوان')
         
         # تنظيف العنوان
         title = title.replace('\n', ' ').replace('\r', ' ').strip()
@@ -190,8 +191,13 @@ def create_inline_result(video, use_document=False):
         if len(description) > 60:
             description = description[:57] + "..."
         
-        # الكابشن الكامل
-        full_caption = video.get('caption') or title
+        # الكابشن الكامل (يُبنى من العنوان المعروض إن لم يوجد caption)
+        caption_text = video.get('caption')
+        title_text = video_title(video, fallback='')
+        full_caption = caption_text or title_text or title
+        if caption_text and title_text and title_text not in caption_text:
+            # العنوان المعدّل يظهر أولاً حتى يظهر التعديل في النتيجة
+            full_caption = f"{title_text}\n\n{caption_text}"
         final_caption = full_caption
         if description and description not in full_caption:
              final_caption = f"{full_caption}\n\n{description}"

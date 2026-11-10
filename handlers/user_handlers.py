@@ -200,8 +200,28 @@ def register(bot, channel_id, admin_ids):
     # --- معالجات التعليقات ---
     @bot.message_handler(commands=["my_comments"])
     def handle_my_comments_command(message):
-        """عرض تعليقات المستخدم"""
-        comment_handlers.show_user_comments(bot, message, page=0)
+        """عرض محادثات المستخدم"""
+        comment_handlers.show_user_comments(bot, message.from_user.id, page=0, message=message)
+
+    @bot.message_handler(commands=["title", "edit_title"])
+    def handle_title_command(message):
+        """تعديل عنوان العرض لفيديو (أدمن فقط): /title <ID> <العنوان الجديد>"""
+        if message.from_user.id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return
+        if message.chat.type != 'private':
+            bot.reply_to(message, "⛔ هذا الأمر متاح في المحادثة الخاصة فقط")
+            return
+        parts = (message.text or "").split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            bot.reply_to(message, "الاستخدام: /title <ID> <العنوان الجديد>")
+            return
+        video_id = int(parts[1])
+        if len(parts) >= 3 and parts[2].strip():
+            comment_handlers.start_title_edit(bot, message.from_user.id, video_id, admin_ids)
+            comment_handlers.process_title_text(bot, message, admin_ids)
+        else:
+            comment_handlers.start_title_edit(bot, message.from_user.id, video_id, admin_ids)
     
     @bot.message_handler(commands=["comments"])
     def handle_admin_comments_command(message):
@@ -233,10 +253,15 @@ def register(bot, channel_id, admin_ids):
     
     @bot.message_handler(commands=["cancel"])
     def handle_cancel_command(message):
-        """إلغاء العملية الحالية"""
+        """إلغاء العملية الحالية (تشمل طلب الرد على محادثة)"""
         clear_user_state(message.from_user.id)
         clear_user_waiting_state(message.from_user.id)
         bot.reply_to(message, "✅ تم إلغاء العملية")
+
+    try:
+        comment_handlers.ADMIN_IDS[:] = list(admin_ids)
+    except Exception as exc:
+        logger.warning(f"Could not publish admin list to comment handlers: {exc}")
     
     # معالج النصوص للتعليقات والردود
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private", content_types=["text"])
@@ -248,16 +273,22 @@ def register(bot, channel_id, admin_ids):
         if state:
             state_name = state.get('state')
             
-            # معالجة التعليق
+            # معالجة التعليق أو متابعة المحادثة
             if state_name == 'waiting_comment':
-                comment_handlers.process_comment_text(bot, message)
-                return
+                if comment_handlers.process_comment_text(bot, message):
+                    return
             
             # معالجة الرد (للأدمن)
             elif state_name == 'replying_comment':
                 if message.from_user.id in admin_ids:
-                    comment_handlers.process_reply_text(bot, message, admin_ids)
-                    return
+                    if comment_handlers.process_reply_text(bot, message, admin_ids):
+                        return
+
+            # تعديل عنوان العرض (للأدمن فقط)
+            elif state_name == 'editing_display_title':
+                if message.from_user.id in admin_ids:
+                    if comment_handlers.process_title_text(bot, message, admin_ids):
+                        return
         
         # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي
         handle_private_text_search_direct(message, bot)

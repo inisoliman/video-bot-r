@@ -263,6 +263,7 @@ def register(bot, admin_ids):
         keyboard.add(inline_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"))
         keyboard.add(inline_button("➡️ نقل فيديو بالرقم 🔵", STYLE_PRIMARY, callback_data="admin::move_video_by_id"),
                      inline_button("❌ حذف فيديوهات 🔴", STYLE_DANGER, callback_data="admin::delete_videos_by_ids"))
+        keyboard.add(inline_button("✏️ تعديل عنوان فيلم 🟣", STYLE_PRIMARY, callback_data="admin::edit_title"))
         keyboard.add(inline_button("🔄 تحديث البيانات القديمة 🟣", STYLE_PRIMARY, callback_data="admin::update_metadata"))
 
         # ─── قسم: إدارة التعليقات ───
