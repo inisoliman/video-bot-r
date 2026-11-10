@@ -1,0 +1,14 @@
+# Local database backups (contain file_ids and user rows) - never commit
+docs/backup.sql
+backup.sql
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Agent / editor local state
+.brain/
+.cline/
+.clinerules/
+.codex/
+.vscode/

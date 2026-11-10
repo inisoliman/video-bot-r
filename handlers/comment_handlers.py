@@ -7,10 +7,12 @@
 
 import json
 import logging
+import re
 import uuid
 from telebot import types
 import db_manager as db
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
+from utils import MAX_DISPLAY_TITLE_LENGTH
 from .thread_format import (
     STATUS_ANSWERED,
     STATUS_READ,
@@ -955,10 +957,141 @@ def confirm_delete_comment(bot, call, admin_ids):
 # ==============================================================================
 
 STATE_EDITING_TITLE = 'editing_display_title'
+# انتظار رقم الفيديو لتدفق تعديل العنوان (يحل مكان register_next_step_handler)
+STATE_TITLE_VIDEO_ID = 'waiting_title_video_id'
+# البحث بالاسم والصيانة: يستقبل «الاسم الحالي» أو «قديم => جديد»
+STATE_TITLE_NAME = 'title_rename_search'
+# بعد اختيار الفيديو: يستقبل الاسم الجديد
+STATE_TITLE_NEW_NAME = 'title_rename_new'
+# زر إلغاء طلب رقم الفيديو (قبل معرفة الرقم)
+CALLBACK_CANCEL_TITLE_ID = 'admin::cancel_title_id'
 
 
 def _title_context(state):
     return _state_context(state) if state and state.get('state') == STATE_EDITING_TITLE else {}
+
+
+def _title_id_context(state):
+    return _state_context(state) if state and state.get('state') == STATE_TITLE_VIDEO_ID else {}
+
+
+_ARABIC_INDIC_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
+
+
+def parse_title_video_id(text):
+    """تحويل إدخال الأدمن إلى رقم فيديو: يقبل الأرقام العربية-الهندية والمسافات و'#' بادئة."""
+    cleaned = str(text or '').translate(_ARABIC_INDIC_DIGITS)
+    cleaned = cleaned.replace('#', ' ').replace('＃', ' ')
+    cleaned = ' '.join(cleaned.split())
+    return _parse_int(cleaned)
+
+
+def _title_id_prompt(tried=None, error=None):
+    """نص طلب رقم الفيديو: يوضّح الأخطاء ويبقي الإدخال متاحاً للمحاولة من جديد."""
+    lines = []
+    if error:
+        lines.append(error)
+        lines.append("")
+    lines.append("📝 <b>تعديل عنوان فيلم - رقم الفيديو</b>")
+    lines.append("")
+    if tried:
+        lines.append(f"أرسل رقم الفيديو (ID) جديد ({safe_html(tried, 20)}):")
+    else:
+        lines.append("أرسل رقم الفيديو (ID):")
+    lines.append("✏️ اكتب الرقم فقط، مثلاً: <code>12</code> أو <code>#12</code>")
+    lines.append("💡 الأرقام تظهر في قائمة الفيديوهات وفي محادثات التعليقات (فيديو #ID).")
+    lines.append("↩️ للإلغاء أرسل /cancel")
+    return "\n".join(lines)
+
+
+def _title_video_id_prompt_markup():
+    """زر إلغاء مستقل عن dispatch_title_action (لا يعتمد على شكل call.data)."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data=CALLBACK_CANCEL_TITLE_ID))
+    return markup
+
+
+def prompt_title_video_id(bot, user_id):
+    """بدء تدفق تعديل العنوان: يحفظ الحالة في DB ويرسل طلب رقم الفيديو."""
+    if not _is_admin(user_id, ADMIN_IDS):
+        _safe_send(bot, user_id, "⛔ هذا الأمر للإدارة فقط")
+        return False
+    try:
+        db.set_user_state(user_id, STATE_TITLE_VIDEO_ID, {"admin_id": user_id})
+    except Exception as exc:
+        logger.error("Could not store title video id state for %s: %s", user_id, exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر بدء تعديل العنوان (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+        return False
+    _safe_send(bot, user_id, _title_id_prompt(), _title_video_id_prompt_markup())
+    return True
+
+
+def fetch_video_title_source(video_id):
+    """قراءة مصدر عنوان الفيديو عبر dunder module (يعمل مع الاستبدال في الاختبارات)."""
+    getter = getattr(db, 'get_video_title_source', None)
+    if getter is None:
+        return None
+    return getter(video_id)
+
+
+def _title_prompt_markup():
+    """أزرار طلب العنوان الجديد (إلغاء فقط قبل إدخال نص)."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data=CALLBACK_CANCEL_TITLE_ID))
+    return markup
+
+
+def cancel_title_video_id(bot, call, user_id=None):
+    """إلغاء طلب رقم الفيديو (زر أو أمر): يمسح الحالة ويعيد المحادثة لمسارها العادي."""
+    has_call = call is not None
+    caller = user_id if user_id is not None else call.from_user.id
+    if not _is_admin(caller, ADMIN_IDS):
+        if has_call:
+            _answer(bot, call, "⛔ هذا الأمر للإدارة فقط", alert=True)
+        return
+    db.clear_user_state(caller)
+    if has_call:
+        _answer(bot, call, "✅ تم الإلغاء")
+    else:
+        _safe_send(bot, caller, "✅ تم الإلغاء")
+
+
+def process_title_video_id(bot, message, admin_ids=None):
+    """استقبال رقم الفيديو كنص عادي من الأدمن (بديل next_step)."""
+    user_id = message.from_user.id
+    resolved_admins = admin_ids if admin_ids is not None else ADMIN_IDS
+    try:
+        if not _message_is_private(message):
+            return False
+        state = fetch_user_state(user_id)
+        if not _title_id_context(state):
+            return False
+        if not _is_admin(user_id, resolved_admins):
+            db.clear_user_state(user_id)
+            _safe_send(bot, user_id, "⛔ لم تعد لديك صلاحية التعديل. لم يُحفظ شيء.")
+            return True
+        text = (message.text or "")
+        if text.strip() == "/cancel":
+            cancel_title_video_id(bot, None, user_id)
+            return True
+        video_id = parse_title_video_id(text)
+        if not video_id or video_id <= 0:
+            # الحالة تبقى كما هي ليحاول الأدمن مرة أخرى
+            _safe_send(bot, user_id,
+                       _title_id_prompt(tried=text,
+                                        error="❌ الرقم غير صالح: أرسل رقم الفيديو بالأرقام فقط."),
+                       _title_video_id_prompt_markup())
+            return True
+
+        if not start_title_edit(bot, user_id, video_id, resolved_admins):
+            # الرقم لم يُقبل: الرسالة صريحة من start_title_edit، والحالة تبقى إما للمحاولة
+            # من جديد (فيديو غير موجود) أو لتنفيذ /cancel عند أي خطأ آخر.
+            pass
+        return True
+    except Exception as e:
+        logger.error("Error in process_title_video_id: %s", e, exc_info=True)
+        _safe_send(bot, user_id, "❌ حدث خطأ أثناء قراءة رقم الفيديو، أرسل الرقم مرة أخرى أو /cancel")
+        return True
 
 
 def _strip_title_command(text, video_id=None):
@@ -1022,6 +1155,469 @@ def build_title_preview(video, draft):
     )
 
 
+# ==============================================================================
+# تعديل العنوان بالاسم: بحث يطابق الموجود ثم استبدال نص العنوان داخل البوت
+# ==============================================================================
+
+NAME_SEPARATOR_PATTERN = re.compile(r"\s*(?:—>|=>|==>|-{1,2}>|←|->)\s*")
+
+
+def _split_name_command(text):
+    """يعيد (القديم، الجديد): الجديد None إذا لم يوجد فاصل صالح."""
+    raw = (text or "").strip()
+    if not raw:
+        return None, None
+    parts = NAME_SEPARATOR_PATTERN.split(raw, maxsplit=1)
+    if len(parts) != 2:
+        return None, None
+    return parts[0].strip(), parts[1].strip()
+
+
+def parse_title_name_command(text):
+    """يفهم «الاسم القديم => الاسم الجديد» (=> أو -> أو —> أو ←)."""
+    old_name, new_name = _split_name_command(text)
+    return old_name, new_name
+
+
+def _title_rows(rows):
+    """تطبيع نتائج البحث (dict أو tuple) لتحتوي id و caption و display_title."""
+    normalized = []
+    for row in rows or []:
+        try:
+            values = dict(row)
+        except (TypeError, ValueError):
+            values = {}
+            for name, value in zip(('id', 'caption', 'file_name', 'display_title'), row):
+                values[name] = value
+        if values.get('id') is not None:
+            normalized.append(values)
+    return normalized
+
+
+def _title_search_terms(query):
+    """أزواج نص/كلمة البحث: النص كما هو، ثم بدونه رقم الفيديو الذي يُلحقه الأدمن."""
+    terms = []
+    raw = (query or "").strip()
+    if not raw:
+        return terms
+    terms.append((raw, raw))
+    stripped = _strip_trailing_video_id(raw)
+    if stripped:
+        terms.append((stripped, stripped))
+    return terms
+
+
+def _strip_trailing_video_id(text):
+    """يحذف رقم الفيديو الملحق في نهاية النص («75 - موت الجبار 75») أو يبدأ به."""
+    match = re.match(r"^(?P<name>.*?)(?:\s+|^)(?P<num>\d{1,7})$", text)
+    if match and match.group("name").strip():
+        return match.group("name").strip()
+    match = re.match(r"^(?P<num>\d{1,7})\s*[-–—.):]\s*(?P<name>.+)$", text)
+    if match and match.group("name").strip():
+        return match.group("name").strip()
+    return ""
+
+
+def _search_titles(query, limit=20):
+    """بحث في الأسماء الأصلية والعناوين المعدّلة معاً."""
+    terms = _title_search_terms(query)
+    try:
+        rows = []
+        for _term_text, term in terms:
+            search_term = f"%{term}%"
+            found = db.execute_query(
+                "SELECT id, caption, file_name, display_title FROM video_archive "
+                "WHERE caption ILIKE %s OR display_title ILIKE %s "
+                "ORDER BY (CASE WHEN caption ILIKE %s THEN 0 ELSE 1 END), id ASC LIMIT %s",
+                (search_term, search_term, search_term, limit),
+                fetch='all'
+            ) or []
+            if found:
+                rows = found
+                break
+        return _title_rows(rows), True
+    except Exception as exc:
+        message = str(exc).lower()
+        if 'display_title' in message and 'column' in message:
+            # قاعدة بيانات قديمة بلا عمود العنوان المعدّل: نرجع للكابشن فقط
+            try:
+                rows = []
+                for _term_text, term in terms:
+                    search_term = f"%{term}%"
+                    found = db.execute_query(
+                        "SELECT id, caption, file_name FROM video_archive "
+                        "WHERE caption ILIKE %s ORDER BY id ASC LIMIT %s",
+                        (search_term, limit), fetch='all'
+                    ) or []
+                    if found:
+                        rows = found
+                        break
+                return _title_rows(rows), True
+            except Exception as inner:
+                logger.error("Title search fallback failed: %s", inner, exc_info=True)
+                return [], False
+        logger.error("Title search failed: %s", exc, exc_info=True)
+        return [], False
+
+
+def _title_matches(query, video):
+    from utils import video_title
+    for term_text, _term in _title_search_terms(query):
+        wanted = term_text.casefold()
+        current = video_title(video, fallback='').strip().casefold()
+        original_first_line = (video.get('caption') or '').split('\n')[0].strip().casefold()
+        if current == wanted or original_first_line == wanted:
+            return True
+    return False
+
+
+def _choose_candidate(bot, user_id, video, query):
+    """عرض نتيجة واحدة مطابقة تماماً ثم طلب الاسم الجديد مباشرة."""
+    from utils import video_title
+    title_now = safe_html(video_title(video, fallback=''), 160) or "—"
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(inline_button("✅ نعم، هذا هو الفيديو 🟢", STYLE_SUCCESS,
+                             callback_data=f"title_name::pick::{video['id']}"))
+    markup.add(inline_button("↩️ إلغاء 🔴", STYLE_DANGER, callback_data=CALLBACK_CANCEL_TITLE_ID))
+    try:
+        db.set_user_state(user_id, STATE_TITLE_NAME, {"query": query, "admin_id": user_id})
+    except Exception as exc:
+        logger.error("Could not store title name state: %s", exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر بدء تعديل الاسم (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+        return
+    _safe_send(
+        bot,
+        user_id,
+        f"🔎 <b>وجدت هذا الفيديو</b>\n\n"
+        f"🔢 رقمه: <code>#{video['id']}</code>\n"
+        f"📹 اسمه الآن: <b>{title_now}</b>\n\n"
+        "أرسل الاسم الجديد الآن، أو اضغط «نعم، هذا هو الفيديو» ثم أرسل الاسم.",
+        markup,
+    )
+
+
+def _pick_candidate(bot, call, admin_ids, video_id):
+    """اختيار نتيجة من القائمة المقترحة (مع تحقق صلاحية وإعادة قراءة الفيديو)."""
+    user_id = call.from_user.id
+    if not _is_admin(user_id, admin_ids):
+        _answer(bot, call, "⛔ هذا الأمر للإدارة فقط", alert=True)
+        return
+    if not _call_is_private(call):
+        _refuse_non_private(bot, call)
+        return
+    state = fetch_user_state(user_id)
+    context = _title_name_context(state)
+    video_id = _parse_int(video_id)
+    if not video_id:
+        _answer(bot, call, "❌ رقم الفيديو غير صحيح", alert=True)
+        return
+    try:
+        video = db.get_video_title_source(video_id)
+    except Exception as exc:
+        logger.error("Could not read video %s: %s", video_id, exc, exc_info=True)
+        _answer(bot, call, "❌ تعذّر قراءة الفيديو. حاول مرة أخرى.", alert=True)
+        return
+    if not video:
+        _answer(bot, call, "❌ الفيديو لم يعد موجوداً.", alert=True)
+        return
+    from utils import video_title
+    query = (context.get('query') or '').strip() or video_title(video, fallback='')
+    target_caption = _replace_first_line(video.get('caption'), query)
+    try:
+        db.set_user_state(user_id, STATE_TITLE_NEW_NAME, {
+            "video_id": video_id,
+            "old_query": query,
+            "target_caption": target_caption,
+            "admin_id": user_id,
+        })
+    except Exception as exc:
+        logger.error("Could not store title new-name state: %s", exc, exc_info=True)
+        _answer(bot, call, "❌ فشل تجهيز الطلب. حاول مرة أخرى.", alert=True)
+        return
+    _answer(bot, call, "✅ تمام")
+    _safe_send(
+        bot,
+        user_id,
+        f"✍️ <b>أرسل الاسم الجديد للفيديو #{video_id}</b>\n\n"
+        f"<b>الاسم الحالي:</b>\n{safe_html(query, 160)}\n\n"
+        "اكتب الاسم فقط (يمكنك إضافة رقم في نهايته).\n"
+        "💡 <i>للإلغاء: /cancel</i>",
+    )
+
+
+def _replace_first_line(caption, new_title):
+    """يستبدل أول سطر من الكابشن (نص العنوان) بالاسم الجديد مع بقاء الوصف."""
+    text = caption or ''
+    lines = text.split('\n')
+    if not lines:
+        return new_title
+    prefix = ''
+    match = re.match(r"^(\s*[0-9]+[\).\-]?\s+)", lines[0])
+    if match:
+        prefix = match.group(1)
+    lines[0] = f"{prefix}{new_title}"
+    return '\n'.join(lines)
+
+
+def _title_name_context(state):
+    if not state or state.get('state') not in (STATE_TITLE_NAME, STATE_TITLE_NEW_NAME):
+        return {}
+    return _state_context(state)
+
+
+def prompt_title_name(bot, user_id):
+    """زر «تعديل اسم الفيديو»: يطلب الاسم الحالي للبحث عنه."""
+    if not _is_admin(user_id, ADMIN_IDS):
+        _safe_send(bot, user_id, "⛔ هذا الأمر للإدارة فقط")
+        return False
+    try:
+        db.set_user_state(user_id, STATE_TITLE_NAME, {"admin_id": user_id})
+    except Exception as exc:
+        logger.error("Could not store title name state for %s: %s", user_id, exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر بدء تعديل العنوان (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+        return False
+    _safe_send(
+        bot,
+        user_id,
+        "✏️ <b>تعديل اسم الفيديو الظاهر</b>\n\n"
+        "أرسل الاسم الحالي للفيديو كما يظهر وفي نهايته رقمه إن أردت، مثل:\n"
+        "<code>75 - موت الجبار</code>\n"
+        "<code>75 - موت الجبار 75</code>\n\n"
+        "أو مباشرة اكتب القديم والجديد:\n"
+        "<code>75 - موت الجبار => الاسم الجديد</code>\n\n"
+        "🔢 لم تذكر رقم الفيديو في الفيديو نفسه؟ حتى الرقم وحده بعد الاسم مقبول.\n"
+        "💡 <i>للإلغاء: /cancel</i>",
+        _title_video_id_prompt_markup(),
+    )
+    return True
+
+
+def process_title_name_text(bot, message, admin_ids=None):
+    """يستقبل الاسم القديم (بحث) أو «قديم => جديد» من الأدمن."""
+    user_id = message.from_user.id
+    resolved_admins = admin_ids if admin_ids is not None else ADMIN_IDS
+    try:
+        if not _message_is_private(message):
+            return False
+        state = fetch_user_state(user_id)
+        if not state or state.get('state') != STATE_TITLE_NAME:
+            return False
+        if not _is_admin(user_id, resolved_admins):
+            db.clear_user_state(user_id)
+            _safe_send(bot, user_id, "⛔ لم تعد لديك صلاحية التعديل. لم يُحفظ شيء.")
+            return True
+        text = (message.text or "").strip()
+        if not text:
+            return True
+        if text == "/cancel":
+            cancel_title_video_id(bot, None, user_id)
+            return True
+
+        old_name, new_name = _split_name_command(text)
+        if new_name is not None:
+            if not new_name:
+                # «اسم =>» بلا اسم جديد: رسالة واضحة بدل رسالة «لم أجد» المضللة
+                _safe_send(
+                    bot,
+                    user_id,
+                    "❌ لم تُكتب قيمة الاسم الجديد بعد الفاصل.\n"
+                    "أرسل: <code>الاسم القديم => الاسم الجديد</code>، أو أرسل الاسم الحالي وحده للبحث.",
+                )
+                return True
+            _start_direct_rename(bot, user_id, old_name, new_name, resolved_admins)
+            return True
+
+        _search_and_ask(bot, user_id, text)
+        return True
+    except Exception as exc:
+        logger.error("Error in process_title_name_text: %s", exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ حدث خطأ، حاول مرة أخرى أو /cancel")
+        return True
+
+
+def _search_and_ask(bot, user_id, query):
+    rows, ok = _search_titles(query, limit=10)
+    if not ok:
+        _safe_send(bot, user_id, "❌ تعذّر البحث الآن (خطأ في قاعدة البيانات). أرسل الاسم مرة أخرى.")
+        return
+    if not rows:
+        _safe_send(
+            bot,
+            user_id,
+            f"🙁 لم أجد أي فيديو باسم يحتوي «{safe_html(query, 80)}».\n\n"
+            "جرّب جزءاً أقصر من الاسم، أو أرسل رقم الفيديو مباشرة.",
+            _title_video_id_prompt_markup(),
+        )
+        return
+    matches = [row for row in rows if _title_matches(query, row)]
+    if len(matches) == 1:
+        _choose_candidate(bot, user_id, matches[0], query)
+        return
+    if len(matches) > 1:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for row in matches[:5]:
+            from utils import video_title
+            label = f"#{row['id']} — {video_title(row, fallback='')}"
+            markup.add(inline_button(label[:60], STYLE_PRIMARY,
+                                     callback_data=f"title_name::pick::{row['id']}"))
+        markup.add(inline_button("↩️ إلغاء 🔴", STYLE_DANGER, callback_data=CALLBACK_CANCEL_TITLE_ID))
+        _safe_send(
+            bot,
+            user_id,
+            f"🔎 وجدت {len(matches)} فيديو يطابق «{safe_html(query, 80)}». اختر واحداً:",
+            markup,
+        )
+        return
+
+    # لا تطابق تام: نعرض أقرب النتائج ونطلب استكمال الاسم/الرقم
+    from utils import video_title
+    lines = []
+    for row in rows[:8]:
+        lines.append(f"#{row['id']} — {safe_html(video_title(row, fallback=''), 70)}")
+    _safe_send(
+        bot,
+        user_id,
+        f"🔎 لم أجد اسماً مطابقاً تماماً لـ «{safe_html(query, 80)}»، لكن هذه نتائج قريبة:\n\n"
+        + "\n".join(lines)
+        + "\n\nأرسل رقم الفيديو من القائمة، أو أرسل الاسم كاملاً كما هو.\n"
+        "💡 يمكنك أيضاً إرسال: <code>اسم قديم => اسم جديد</code>",
+        _title_video_id_prompt_markup(),
+    )
+
+
+def _start_direct_rename(bot, user_id, old_name, new_name, admin_ids):
+    """«اسم قديم => اسم جديد»: يبحث عن القديم، ويطلب التأكيد إن تعددت النتائج."""
+    rows, ok = _search_titles(old_name, limit=20)
+    if not ok:
+        _safe_send(bot, user_id, "❌ تعذّر البحث الآن (خطأ في قاعدة البيانات). أرسل الاسم مرة أخرى.")
+        return
+    matches = [row for row in rows if _title_matches(old_name, row)]
+    if not matches:
+        _safe_send(
+            bot,
+            user_id,
+            f"🙁 لم أجد فيديو باسم «{safe_html(old_name, 80)}». جرّب اسماً أقصر.",
+            _title_video_id_prompt_markup(),
+        )
+        return
+    if len(matches) > 1:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for row in matches[:5]:
+            from utils import video_title
+            markup.add(inline_button(
+                f"#{row['id']} — {video_title(row, fallback='')}"[:60], STYLE_PRIMARY,
+                callback_data=f"title_name::pick::{row['id']}"))
+        markup.add(inline_button("↩️ إلغاء 🔴", STYLE_DANGER, callback_data=CALLBACK_CANCEL_TITLE_ID))
+        _safe_send(
+            bot,
+            user_id,
+            f"🔎 «{safe_html(old_name, 80)}» يطابق {len(matches)} فيديو. اختر واحداً:",
+            markup,
+        )
+        return
+    video = matches[0]
+    _apply_name_rename(bot, user_id, video['id'], old_name, new_name, video.get('caption'),
+                       admin_ids)
+
+
+def process_title_new_name(bot, message, admin_ids=None):
+    """استقبال الاسم الجديد بعد اختيار الفيديو مع إعادة التحقق من قاعدة البيانات."""
+    user_id = message.from_user.id
+    resolved_admins = admin_ids if admin_ids is not None else ADMIN_IDS
+    try:
+        if not _message_is_private(message):
+            return False
+        state = fetch_user_state(user_id)
+        context = _title_name_context(state)
+        if not context:
+            return False
+        if not _is_admin(user_id, resolved_admins):
+            db.clear_user_state(user_id)
+            _safe_send(bot, user_id, "⛔ لم تعد لديك صلاحية التعديل. لم يُحفظ شيء.")
+            return True
+        text = (message.text or "").strip()
+        if text == "/cancel":
+            cancel_title_video_id(bot, None, user_id)
+            return True
+        video_id = _parse_int(context.get('video_id'))
+        old_query = context.get('old_query') or ''
+        if not video_id or not old_query:
+            db.clear_user_state(user_id)
+            _safe_send(bot, user_id, "⚠️ انتهت صلاحية الطلب. ابدأ من جديد من لوحة الإدارة.")
+            return True
+        if not text:
+            # الاسم الفارغ: رسالة صريحة والحالة تبقى ليُرسل الاسم من جديد (بدون كتابة في DB)
+            _safe_send(
+                bot,
+                user_id,
+                f"❌ الاسم الجديد فارغ. أرسل اسماً صالحاً للفيديو #{video_id} أو /cancel.",
+            )
+            return True
+        if len(text) > MAX_DISPLAY_TITLE_LENGTH:
+            _safe_send(
+                bot,
+                user_id,
+                f"❌ الاسم طويل جداً (الحد {MAX_DISPLAY_TITLE_LENGTH} حرفاً). أرسل اسماً أقصر أو /cancel.",
+            )
+            return True
+        video = db.get_video_title_source(video_id)
+        if not video:
+            db.clear_user_state(user_id)
+            _safe_send(bot, user_id, "❌ الفيديو لم يعد موجوداً.")
+            return True
+        _apply_name_rename(bot, user_id, video_id, old_query, text, video.get('caption'),
+                           resolved_admins)
+        return True
+    except Exception as exc:
+        logger.error("Error in process_title_new_name: %s", exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ حدث خطأ، حاول مرة أخرى أو /cancel")
+        return True
+
+
+def _apply_name_rename(bot, user_id, video_id, old_query, new_name, caption, admin_ids):
+    """
+    تنفيذ التعديل: الاسم الجديد يصبح display_title (وعند الحاجة أول سطر الكابشن).
+
+    Returns:
+        bool: هل نجح التعديل
+    """
+    from utils import MAX_DISPLAY_TITLE_LENGTH
+    new_name = (new_name or '').strip()
+    if not new_name:
+        _safe_send(bot, user_id, "❌ الاسم الجديد فارغ. أرسل اسماً صالحاً أو /cancel.")
+        return False
+    if len(new_name) > MAX_DISPLAY_TITLE_LENGTH:
+        _safe_send(bot, user_id, f"❌ الاسم طويل جداً (الحد {MAX_DISPLAY_TITLE_LENGTH} حرفاً).")
+        return False
+    if not _is_admin(user_id, admin_ids):
+        db.clear_user_state(user_id)
+        _safe_send(bot, user_id, "⛔ لم تعد لديك صلاحية التعديل. لم يُحفظ شيء.")
+        return False
+    try:
+        ok = db.set_display_title(video_id, new_name)
+    except Exception as exc:
+        logger.error("Title rename failed for %s: %s", video_id, exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ فشل الحفظ في قاعدة البيانات. حاول مرة أخرى.")
+        return False
+    if not ok:
+        _safe_send(bot, user_id, "❌ لم يُعثر على الفيديو في قاعدة البيانات. لم يُحفظ شيء.")
+        return False
+    try:
+        db.clear_user_state(user_id)
+    except Exception:
+        pass
+    _safe_send(
+        bot,
+        user_id,
+        f"✅ <b>تم تعديل اسم الفيديو #{video_id}</b>\n\n"
+        f"<b>الاسم القديم:</b>\n{safe_html(old_query, 120)}\n\n"
+        f"<b>الاسم الجديد:</b>\n<b>{safe_html(new_name, 160)}</b>\n\n"
+        "☝️ داخل البوت فقط (البحث والقوائم وتعليقاته). كابشن القناة لم يُعدَّل.\n"
+        f"↩️ للتراجع: أرسل <code>{safe_html(new_name, 60)} => {safe_html(old_query, 60)}</code>",
+    )
+    return True
+
+
 def start_title_edit(bot, user_id, video_id, admin_ids, state=None):
     """بدء تدفق تعديل العنوان لفيديو محدد (يتحقق من الحقوق ومن وجود الفيديو)."""
     if not _is_admin(user_id, admin_ids):
@@ -1031,29 +1627,59 @@ def start_title_edit(bot, user_id, video_id, admin_ids, state=None):
     if not video_id:
         _safe_send(bot, user_id, "❌ رقم الفيديو غير صحيح")
         return False
-    video = db.get_video_title_source(video_id)
+    try:
+        video = db.get_video_title_source(video_id)
+    except Exception as exc:
+        logger.error("Could not read video %s for title edit: %s", video_id, exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر قراءة بيانات الفيديو (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+        return False
     if not video:
-        _safe_send(bot, user_id, f"❌ لا يوجد فيديو بالرقم {safe_html(video_id, 12)}")
+        _safe_send(
+            bot,
+            user_id,
+            f"❌ لا يوجد فيديو بالرقم #{safe_html(video_id, 12)}\n"
+            "💡 الأرقام تظهر في قائمة الفيديوهات وفي محادثات التعليقات. "
+            "تحقق من الرقم وأرسله مرة أخرى (أو /cancel للإلغاء).",
+        )
         return False
 
     draft = _title_from_context(state) if state else ''
     if draft:
-        db.set_user_state(user_id, STATE_EDITING_TITLE,
-                          {"video_id": video_id, "title": draft, "admin_id": user_id})
+        try:
+            db.set_user_state(user_id, STATE_EDITING_TITLE,
+                              {"video_id": video_id, "title": draft, "admin_id": user_id})
+        except Exception as exc:
+            logger.error("Could not store title draft state: %s", exc, exc_info=True)
+            _safe_send(bot, user_id, "❌ تعذّر تجهيز تعديل العنوان (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+            return False
         _safe_send(bot, user_id, build_title_preview(video, draft),
                    _title_keyboard(video_id, video, draft=draft))
         return True
 
-    db.set_user_state(user_id, STATE_EDITING_TITLE, {"video_id": video_id, "admin_id": user_id})
-    _safe_send(
+    try:
+        db.set_user_state(user_id, STATE_EDITING_TITLE, {"video_id": video_id, "admin_id": user_id})
+    except Exception as exc:
+        logger.error("Could not store title edit state: %s", exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر بدء تعديل العنوان (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+        return False
+    prompt = _safe_send(
         bot,
         user_id,
         f"✏️ <b>تعديل عنوان الفيلم #{video_id}</b>\n\n"
         f"العنوان الحالي:\n<b>{safe_html(_current_title(video), 160)}</b>\n\n"
         "أرسل العنوان الجديد الآن (أو /cancel للإلغاء).\n"
-        "💡 يمكنك أيضاً إرسال <code>/title العنوان الجديد</code> في أي وقت.",
-        _title_keyboard(video_id, video, draft=None),
+        "💡 يمكنك أيضاً إرسال النص مباشرة، أو الرد على هذه الرسالة.",
+        _title_prompt_markup(),
     )
+    # ربط رسالة الطلب بالحالة: يُقبل النص الحر أو الرد على هذه الرسالة
+    prompt_id = _parse_int(getattr(prompt, 'message_id', None))
+    if prompt_id:
+        try:
+            db.set_user_state(user_id, STATE_EDITING_TITLE,
+                              {"video_id": video_id, "admin_id": user_id,
+                               "prompt_message_id": prompt_id})
+        except Exception as exc:
+            logger.warning("Could not bind title prompt message: %s", exc)
     return True
 
 
@@ -1063,17 +1689,10 @@ def _current_title(video):
 
 
 def handle_title_video_id_input(bot, message, admin_ids=None):
-    """استقبال رقم الفيديو في تدفق تعديل العنوان (next_step: (message, bot))."""
-    user_id = message.from_user.id
-    resolved_admins = admin_ids if admin_ids is not None else ADMIN_IDS
-    if getattr(message, 'text', None) == "/cancel":
-        db.clear_user_state(user_id)
-        _safe_send(bot, user_id, "✅ تم الإلغاء")
-        return
-    if not _message_is_private(message):
-        return
-    if not start_title_edit(bot, user_id, message.text, resolved_admins):
-        return
+    """استقبال رقم الفيديو في تدفق تعديل العنوان (متوافق للخلف): يفوض إلى process_title_video_id."""
+    if not getattr(message, 'text', None):
+        return False
+    return process_title_video_id(bot, message, admin_ids)
 
 
 
@@ -1156,7 +1775,13 @@ def _apply_title_change(bot, user_id, video_id, value, admin_ids):
             _safe_send(bot, user_id, f"❌ {safe_html(result, 200)}")
             return False
         value = result
-    if not db.get_video_title_source(video_id):
+    try:
+        existing = db.get_video_title_source(video_id)
+    except Exception as exc:
+        logger.error("Could not verify video %s before saving title: %s", video_id, exc, exc_info=True)
+        _safe_send(bot, user_id, "❌ تعذّر التحقق من الفيديو (خطأ في قاعدة البيانات). لم يُحفظ شيء.")
+        return False
+    if not existing:
         db.clear_user_state(user_id)
         _safe_send(bot, user_id, "❌ الفيديو لم يعد موجوداً. لم يُحفظ شيء.")
         return False
@@ -1196,7 +1821,12 @@ def process_title_text(bot, message, admin_ids):
         draft = _strip_title_command(message.text, video_id)
         from utils import validate_display_title
         ok, value = validate_display_title(draft)
-        video = db.get_video_title_source(video_id)
+        try:
+            video = db.get_video_title_source(video_id)
+        except Exception as exc:
+            logger.error("Could not read video %s for title edit: %s", video_id, exc, exc_info=True)
+            _safe_send(bot, user_id, "❌ تعذّر قراءة بيانات الفيديو (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+            return True
         if not video:
             db.clear_user_state(user_id)
             _safe_send(bot, user_id, "❌ الفيديو لم يعد موجوداً.")
@@ -1205,7 +1835,8 @@ def process_title_text(bot, message, admin_ids):
             _safe_send(bot, user_id, f"❌ {safe_html(value, 200)}")
             return True
         db.set_user_state(user_id, STATE_EDITING_TITLE,
-                          {"video_id": video_id, "title": value, "admin_id": user_id})
+                          {"video_id": video_id, "title": value, "admin_id": user_id,
+                           "prompt_message_id": _bound_reply_message_id(context)})
         _safe_send(bot, user_id, build_title_preview(video, value),
                    _title_keyboard(video_id, video, draft=value))
         return True

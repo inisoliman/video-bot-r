@@ -460,10 +460,17 @@ def search_videos(query, page=0, category_id=None, quality=None, status=None):
 
     where_string = " AND ".join(where_clauses)
 
+    # ترتيب: العنوان المعدّل أولاً عند مطابقته، ثم الأحدث
+    order_sql = (
+        "ORDER BY (CASE WHEN display_title ILIKE %s THEN 0 ELSE 1 END) ASC, id DESC"
+        if query
+        else "ORDER BY id DESC"
+    )
+
     # استعلام جلب الفيديوهات
-    videos_query = f"SELECT * FROM video_archive WHERE {where_string} ORDER BY id DESC LIMIT %s OFFSET %s"
-    final_params_videos = tuple(params + [VIDEOS_PER_PAGE, offset])
-    videos = execute_query(videos_query, final_params_videos, fetch="all")
+    videos_query = f"SELECT * FROM video_archive WHERE {where_string} {order_sql} LIMIT %s OFFSET %s"
+    videos_params = list(params) + ([search_term] if query else []) + [VIDEOS_PER_PAGE, offset]
+    videos = execute_query(videos_query, tuple(videos_params), fetch="all")
 
     # استعلام جلب العدد الإجمالي
     count_query = f"SELECT COUNT(*) as count FROM video_archive WHERE {where_string}"
@@ -1147,16 +1154,42 @@ def set_display_title(video_id, display_title):
     Returns:
         True إذا تم التحديث
     """
-    row = execute_query(
+    result = execute_query(
         "UPDATE video_archive SET display_title = %s WHERE id = %s RETURNING id",
         (display_title, video_id),
         fetch='one',
         commit=True
     )
-    if row:
+    if result:
         clear_search_cache()
         return True
     return False
+
+
+def bulk_set_display_title(video_ids, display_title):
+    """
+    تعيين عنوان عرض واحد لعدة فيديوهات (None لاستعادة الأصل).
+
+    Returns:
+        عدد الصفوف التي تغيّرت فعلاً
+    """
+    ids = []
+    for raw in video_ids or []:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            continue
+        ids.append(value)
+    if not ids:
+        return 0
+    rows = execute_query(
+        "UPDATE video_archive SET display_title = %s WHERE id = ANY(%s) RETURNING id",
+        (display_title, ids),
+        fetch='all',
+        commit=True
+    ) or []
+    clear_search_cache()
+    return len(rows)
 
 
 def get_video_title_source(video_id):

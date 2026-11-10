@@ -289,6 +289,24 @@ def register(bot, channel_id, admin_ids):
                 if message.from_user.id in admin_ids:
                     if comment_handlers.process_title_text(bot, message, admin_ids):
                         return
+
+            # انتظار رقم الفيديو لتعديل عنوانه (للأدمن فقط): يُقبل النص الحر ويُعاد الطلب عند الخطأ
+            elif state_name == 'waiting_title_video_id':
+                if message.from_user.id in admin_ids:
+                    if comment_handlers.process_title_video_id(bot, message, admin_ids):
+                        return
+
+            # تعديل اسم الفيديو الظاهر: الاسم الحالي للبحث أو «قديم => جديد»
+            elif state_name == 'title_rename_search':
+                if message.from_user.id in admin_ids:
+                    if comment_handlers.process_title_name_text(bot, message, admin_ids):
+                        return
+
+            # بعد اختيار الفيديو: الاسم الجديد
+            elif state_name == 'title_rename_new':
+                if message.from_user.id in admin_ids:
+                    if comment_handlers.process_title_new_name(bot, message, admin_ids):
+                        return
         
         # إذا لم تكن هناك حالة، استخدم معالج البحث الافتراضي
         handle_private_text_search_direct(message, bot)

@@ -292,7 +292,7 @@ def register(bot, admin_ids):
             # --- معالجات الأدمن ---
             elif action == "admin":
                 if user_id not in admin_ids:
-                    bot.answer_callback_query(call.id, "غير مصرح لك.", show_alert=True)
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
                     return
 
                 sub_action = data[1] if len(data) > 1 else ""
@@ -325,11 +325,23 @@ def register(bot, admin_ids):
                     return
 
                 elif sub_action == "edit_title":
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل رقم الفيديو (ID) الذي تريد تعديل عنوانه. (أو /cancel)")
-                    bot.register_next_step_handler(msg, comment_handlers.handle_title_video_id_input, bot)
+                    # تدفق بالحالة في DB بدل next_step (لا يعمل بثبات في وضع webhook)
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.prompt_title_video_id(bot, user_id)
                     return
 
-                if sub_action == "add_new_cat":
+                elif sub_action == "cancel_title_id":
+                    # إلغاء طلب رقم الفيديو قبل إرسال الرقم
+                    comment_handlers.cancel_title_video_id(bot, call, user_id)
+                    return
+
+                elif sub_action == "rename_title":
+                    # تعديل اسم الفيديو الظاهر بالبحث عن الاسم الحالي
+                    bot.answer_callback_query(call.id)
+                    comment_handlers.prompt_title_name(bot, user_id)
+                    return
+
+                elif sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
                     keyboard.add(inline_button("📂 تصنيف رئيسي جديد 🟢", STYLE_SUCCESS, callback_data="admin::add_cat_main"))
                     keyboard.add(inline_button("🌿 تصنيف فرعي 🔵", STYLE_PRIMARY, callback_data="admin::add_cat_sub_select_parent"))
@@ -763,6 +775,22 @@ def register(bot, admin_ids):
 
             elif action == "cancel_reply":
                 comment_handlers.handle_cancel_reply(bot, call, admin_ids)
+
+            elif action == "admin_title":
+                # معاينة/حفظ/تعديل/استعادة عنوان الفيديو (كان لا يصل إلى أي معالج)
+                sub_action = data[1] if len(data) > 1 else ""
+                if user_id not in admin_ids:
+                    bot.answer_callback_query(call.id, "⛔ هذا الأمر للإدارة فقط", show_alert=True)
+                    return
+                comment_handlers.dispatch_title_action(bot, call, admin_ids, sub_action, data[2:])
+
+            elif action == "title_name":
+                # اختيار الفيديو من نتائج البحث بالاسم ثم طلب الاسم الجديد
+                sub_action = data[1] if len(data) > 1 else ""
+                if sub_action == "pick" and len(data) > 2:
+                    comment_handlers._pick_candidate(bot, call, admin_ids, data[2])
+                else:
+                    bot.answer_callback_query(call.id, "❌ طلب غير صالح", show_alert=True)
 
             elif action == "admin_comments":
                 if user_id not in admin_ids:

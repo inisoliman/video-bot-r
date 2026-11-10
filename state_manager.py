@@ -10,6 +10,9 @@ DELEGATED_STATES = frozenset({
     'waiting_comment',
     'replying_comment',
     'editing_display_title',
+    'waiting_title_video_id',
+    'title_rename_search',
+    'title_rename_new',
 })
 
 # حالات تعتمد على نص المستخدم مباشرة: لا يجب أن تستهلك أوامر /command
@@ -17,6 +20,9 @@ TEXT_INPUT_STATES = frozenset({
     'waiting_comment',
     'replying_comment',
     'editing_display_title',
+    'waiting_title_video_id',
+    'title_rename_search',
+    'title_rename_new',
     'waiting_search_query',
 })
 
