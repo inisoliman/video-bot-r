@@ -2,10 +2,12 @@
 
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+import functools
 import logging
 import os
 import re
 from telebot.apihelper import ApiTelegramException
+from telebot.handler_backends import ContinueHandling
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 from miniapp import miniapp_url
 
@@ -20,7 +22,32 @@ from db_manager import (
 
 from state_manager import state_handler, clear_user_waiting_state, set_user_waiting_for_input, States
 
-from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER, create_hierarchical_category_keyboard
+from . import admin_broadcast
+# تدفق البث (زر -> حالة مخزّنة -> رسالة -> عامل): يبقى مخفياً في module منفصل
+from .admin_broadcast import (  # noqa: F401  (أسماء متوافقة مع استيرادات قديمة)
+    STATE_BROADCAST as STATE_BROADCAST_MESSAGE,
+    CALLBACK_CANCEL_BROADCAST,
+    cancel_broadcast,
+    handle_broadcast_message,
+    handle_rich_broadcast,
+    has_active_job as broadcast_active_for,
+    prompt_broadcast,
+    run_broadcast,
+)
+# تدفق الحقول الآمن عبر الحالة المخزّنة (بدل next_step/admin_steps)
+from . import admin_flows
+for _name in ('begin_category', 'receive_category_name', 'begin_channel_add',
+              'receive_channel_id', 'receive_channel_name', 'begin_channel_remove',
+              'receive_channel_remove', 'remove_channel_now', 'list_channels',
+              'begin_move', 'receive_move_ids', 'move_now',
+              'begin_delete', 'receive_delete_ids', 'delete_now',
+              'begin_miniapp_limit', 'receive_miniapp_limit', 'begin_miniapp_ip',
+              'receive_miniapp_ip', 'handle_flow_message', 'cancel_flow',
+              'delete_category_with_contents', 'move_category_contents'):
+    globals()[_name] = getattr(admin_flows, _name)
+del _name
+
+from .helpers import create_categories_keyboard, CALLBACK_DELIMITER, create_hierarchical_category_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +246,12 @@ def _open_library_for_ip(bot, admin_ids, message):
 
 def register(bot, admin_ids):
     def check_admin(func):
+        @functools.wraps(func)
         def wrapper(message):
+            # لوحة الأدمن خاصة فقط: لا أوامر إدارة من مجموعات/قنوات
+            if getattr(getattr(message, 'chat', None), 'type', None) != 'private':
+                bot.reply_to(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
+                return
             if message.from_user.id in admin_ids:
                 return func(message)
             else:
@@ -231,28 +263,45 @@ def register(bot, admin_ids):
     def admin_panel(message):
         send_admin_panel(bot, message.chat.id)
 
-    @bot.message_handler(func=lambda message: message.text and message.chat.type == "private"
-                         and (message.text or "").strip().isdigit()
-                         and 1 <= len((message.text or "").strip()) <= 6)
-    @check_admin
-    def miniapp_limit_value(message):
-        """رقم حد فتح المكتبة (يُطلب من admin::set_miniapp_limit ثم يأتي رقماً هنا)."""
-        _set_miniapp_hourly_limit(bot, message.chat.id, int(message.text.strip()))
-
     @bot.message_handler(func=lambda message: message.text == MINIAPP_IP_BUTTON_TEXT)
     @check_admin
     def miniapp_open_by_ip(message):
-        """بديل الأجهزة التي لا تفتح Web App: يطلب IP ثم يعرض زر فتح للمكتبة."""
-        keyboard = InlineKeyboardMarkup(row_width=1)
-        keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
-        waiting = bot.send_message(message.chat.id, MINIAPP_IP_PROMPT, reply_markup=keyboard)
-        bot.register_next_step_handler(waiting, lambda msg: _open_library_for_ip(bot, admin_ids, msg))
+        """بديل الأجهزة التي لا تفتح Web App: يطلب IP بحالة مخزّنة ثم يعرض زر الفتح."""
+        begin_miniapp_ip(bot, message.from_user.id, admin_ids)
 
     @bot.message_handler(commands=["cancel"])
     @check_admin
     def cancel_step(message):
-        if message.chat.id in admin_steps:
-            del admin_steps[message.chat.id]
+        cleared = clear_user_waiting_state(message.chat.id)
+        if cleared is True:
             bot.send_message(message.chat.id, "✅ تم إلغاء العملية الحالية بنجاح.")
         else:
-            bot.send_message(message.chat.id, "لا توجد عملية لإلغائها.")
+            bot.send_message(message.chat.id, "❌ تعذّر إلغاء العملية (خطأ في قاعدة البيانات). حاول مرة أخرى.")
+
+    @bot.message_handler(
+        content_types=["text", "photo", "video", "document", "audio", "voice",
+                       "animation", "sticker"],
+        func=lambda message: message.chat.type == "private",
+    )
+    @check_admin
+    def admin_state_input(message):
+        """رسائل الأدمن التالية لتدفق مخزّن (بث/تصنيف/قناة/نقل/حذف/إعدادات/صور مصغرة).
+
+        تُسجَّل قبل معالج النص العام في user_handlers. Telebot يتوقف عند أول معالج
+        مطابق ما لم يرجع ContinueHandling؛ لذلك عندما لا تخصّ الرسالة أي تدفق جديد
+        نرجع ContinueHandling كي تصل للعناوين/التعليقات/البحث. وعندما تخصّ تدفقاً
+        نعالجها ونتوقف (لا تمرير مزدوج ولا تحويلها إلى مدينة أخرى).
+        """
+        handled = bool(handle_broadcast_message(bot, admin_ids, message))
+        if not handled:
+            handled = bool(handle_flow_message(bot, admin_ids, message))
+        if not handled:
+            try:
+                from . import thumbnails as thumbnail_flows
+            except ImportError:
+                thumbnail_flows = None
+            if thumbnail_flows is not None:
+                handled = bool(thumbnail_flows.handle_message(bot, admin_ids, message))
+        if handled:
+            return None
+        return ContinueHandling()

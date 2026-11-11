@@ -231,6 +231,33 @@ covered by the offline suite:
 13. Send `/library` in private (or press «📱 مكتبة الفيديو»): the Mini App opens with
     thumbnail cards; search, a category chip, next/previous, and the favorite button
     persist after reloading the app.
+14. Admin panel → «📢 بث رسالة»: send a text **and** then a photo; every subscriber gets a
+    copy (`copy_message`), and the final message reports confirmed successes, failures and
+    users removed only after a blocked/deactivated error plus a successful delete.
+15. Admin panel → «➕ إضافة تصنيف» / «➕ إضافة قناة»: send valid input, then invalid input
+    (a `/command`, `@username` for a channel, a letter instead of an ID); the bot asks
+    again and keeps the pending request, and `/cancel` ends it without changes.
+16. Admin panel → «📸 تحديث يدوي»: send a video ID, then a photo; send a non-photo first
+    and confirm the retry prompt. «🖼️ صورة افتراضية» should reject non-photo input.
+17. Press a panel heading (e.g. «🗂️ إدارة التصنيفات»): the tap is acknowledged instead
+    of failing.
+
+### Admin panel notes and limitations
+- Admin input flows (broadcast, category, channel, move/delete, Mini App setting/IP,
+  thumbnails) use persisted `user_states`, not `register_next_step_handler`, so they keep
+  working in webhook mode. Prompts are bound to the admin's private chat; non-admins and
+  group chats are refused without mutation.
+- Channel IDs for «قنوات الاشتراك» must be numeric (`-100…`). `@username` is rejected
+  explicitly because `required_channels.channel_id` stores a BIGINT.
+- Admin panel commands and callbacks are refused outside a private chat (except navigation/acknowledgement); prompt ownership requires the stored admin_id.
+- Category delete-with-contents and move-then-delete run as one transaction (single commit, full rollback on failure); categories with child categories are refused before any write, an unconfirmed commit is reported as review-the-category-first with no automatic retry, and a failed recipient/channel/category lookup never displays as an empty list.
+- A broadcast runs in one background thread **per admin, within each process** at a bounded
+  rate (at most 20 copies per second). Duplicate clicks are refused
+  while it runs, but the job is not a distributed queue: a process restart (or a second
+  worker) neither resumes nor deduplicates it. Recipient lookup failures never count as
+  an empty audience.
+- Thumbnail and video deletion/move/category actions are never exercised against live
+  Telegram/PostgreSQL in the offline suite; steps 9–17 above are the verification path.
 
 ## 🛠️ Development
 ```bash
@@ -242,7 +269,10 @@ The suite is offline by design: `tests/__init__.py` sets `TELEGRAM_HTTP_BLOCKED=
 `tests/support.py` blocks `telebot` HTTP plus `psycopg2.connect` before production
 modules are imported. No live database or Telegram call is made, and **no live
 PostgreSQL/Telegram integration is verified by these tests** — the smoke checklist above
-is the only end-to-end verification path.
+is the only end-to-end verification path. Admin-panel coverage lives in
+`tests/test_admin_panel.py` (broadcast) and `tests/test_admin_panel_flows.py` (category,
+channel, move/delete, Mini App, thumbnails, maintenance guards); `tests/test_db_pool.py`
+covers thread-safe checkout and stale-connection disposal with fakes.
 
 `legacy/` contains the original polling-mode files and is not used in production.
 

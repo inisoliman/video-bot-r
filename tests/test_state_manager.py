@@ -19,6 +19,7 @@ class StateManagerRoutingTest(support.OfflineTestCase):
 
         def fake_clear(user_id):
             self.cleared.append(user_id)
+            return True  # تأكيد القاعدة (الفشل يُعاد كقيمة False)
 
         state_manager.get_user_state = fake_get
         state_manager.clear_user_state = fake_clear
@@ -51,6 +52,30 @@ class StateManagerRoutingTest(support.OfflineTestCase):
         self.state = {"state": "replying_comment", "context": {"comment_id": 7}}
         self.assertFalse(self.manager.handle_message(support.make_message("reply text"), support.FakeBot()))
 
+    def test_handler_exception_reports_cleanup_failure_when_clear_not_confirmed(self):
+        self.state = {"state": "custom_state", "context": {}}
+
+        def boom(message, bot, context):
+            raise RuntimeError("handler failed")
+
+        self.module.clear_user_state = lambda user_id: False
+        self.manager.register_handler("custom_state", boom)
+        bot = support.FakeBot()
+        self.assertTrue(self.manager.handle_message(support.make_message("x"), bot))
+        self.assertIn("تعذّر تنظيف الحالة", bot.last_text())
+        self.assertNotIn("تم إلغاء", bot.last_text())
+
+    def test_handler_exception_claims_cancel_only_when_clear_confirmed(self):
+        self.state = {"state": "custom_state", "context": {}}
+
+        def boom(message, bot, context):
+            raise RuntimeError("handler failed")
+
+        self.module.clear_user_state = lambda user_id: True
+        self.manager.register_handler("custom_state", boom)
+        bot = support.FakeBot()
+        self.assertTrue(self.manager.handle_message(support.make_message("x"), bot))
+        self.assertIn("تم إلغاء", bot.last_text())
     def test_registered_state_handler_runs(self):
         self.state = {"state": "custom_state", "context": {}}
         called = []

@@ -20,16 +20,53 @@ from db_manager import (
     delete_videos_by_ids, get_video_by_id, get_all_user_ids,
     get_subscriber_count, get_bot_stats, add_required_channel,
     remove_required_channel, increment_video_view_count,
-    get_unread_comments_count
+    get_unread_comments_count, get_bot_stats_or_none, get_bot_subscriber_count_or_none
 )
 from . import helpers
 from . import admin_handlers
 from . import comment_handlers  # إضافة معالجات التعليقات
-from .helpers import admin_steps, create_hierarchical_category_keyboard  # إضافة استيراد الدالة الجديدة
+try:
+    from . import thumbnails as thumbnail_flows
+except ImportError:  # الصور المصغرة غير مسجّلة: أزرارها تبلغ صراحةً
+    thumbnail_flows = None
+from .helpers import create_hierarchical_category_keyboard
 from update_metadata import run_update_and_report_progress
 from state_manager import States
 
 logger = logging.getLogger(__name__)
+
+# أدوات الصيانة: قفل واحد لكل أداة حتى لا يتكرر التشغيل بنقرات/رسائل مكررة
+_MAINTENANCE_LOCK = threading.Lock()
+_MAINTENANCE_ACTIVE = set()
+# إجراءات لوحة الأدمن المسموح بها في غير المحادثة الخاصة (عرض/تنقل فقط، بلا تغيير)
+ADMIN_READ_ONLY_ACTIONS = frozenset({'noop', 'back_to_main'})
+
+
+def _reserve_maintenance(name):
+    with _MAINTENANCE_LOCK:
+        if name in _MAINTENANCE_ACTIVE:
+            return False
+        _MAINTENANCE_ACTIVE.add(name)
+        return True
+
+
+def _release_maintenance(name):
+    with _MAINTENANCE_LOCK:
+        _MAINTENANCE_ACTIVE.discard(name)
+
+
+def _run_maintenance(name, target, args):
+    """يشغّل أداة الصيانة ثم يحرر القفل دائماً (فشل الأداة لا يقفل الزر للأبد)."""
+    try:
+        target(*args)
+    except Exception as exc:
+        logger.error("Maintenance %s failed: %s", name, type(exc).__name__, exc_info=True)
+        try:
+            args[0].send_message(args[1], "❌ توقفت عملية الصيانة بخطأ غير متوقع. راجع السجل.")
+        except Exception:
+            pass
+    finally:
+        _release_maintenance(name)
 
 def register(bot, admin_ids):
     def _split(data):
@@ -296,6 +333,13 @@ def register(bot, admin_ids):
                     return
 
                 sub_action = data[1] if len(data) > 1 else ""
+                # لوحة الأدمن تعمل في المحادثة الخاصة فقط: لا افتراض «خاص» عند غياب المحادثة
+                chat = getattr(getattr(call, 'message', None), 'chat', None)
+                in_private = getattr(chat, 'type', None) == 'private'
+                if sub_action not in ADMIN_READ_ONLY_ACTIONS and not in_private:
+                    bot.answer_callback_query(call.id, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط",
+                                              show_alert=True)
+                    return
 
                 # عرض/تعديل عنوان الفيلم (display title) - للأدمن فقط
                 if sub_action.startswith("title"):
@@ -342,9 +386,12 @@ def register(bot, admin_ids):
                     return
 
                 elif sub_action == "set_miniapp_limit":
-                    # إعدادات التطبيق المصغّر: إعادة اللوحة مع زر تحديد الحد
-                    bot.answer_callback_query(call.id)
-                    admin_handlers.handle_set_miniapp_limit(bot, user_id)
+                    # حالة مخزّنة waiting_miniapp_limit بدل الرقم الحر التالي
+                    if admin_handlers.begin_miniapp_limit(bot, user_id, admin_ids):
+                        bot.answer_callback_query(call.id)
+                    else:
+                        bot.answer_callback_query(call.id, "❌ تعذّر بدء تحديد الحد (قاعدة البيانات).",
+                                                  show_alert=True)
                     return
 
                 elif sub_action == "add_new_cat":
@@ -355,9 +402,7 @@ def register(bot, admin_ids):
                     bot.edit_message_text("➕ <b>اختر نوع التصنيف الذي تريد إضافته:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "add_cat_main":
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": None}
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل اسم التصنيف الرئيسي الجديد. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    admin_handlers.begin_category(bot, user_id, admin_ids)
 
                 elif sub_action == "add_cat_sub_select_parent":
                     # 🌟 استخدام الكيبورد الهرمي الجديد
@@ -371,11 +416,10 @@ def register(bot, admin_ids):
                     bot.edit_message_text("🎯 <b>اختر التصنيف الأب:</b>", call.message.chat.id, call.message.message_id, reply_markup=move_keyboard)
 
                 elif sub_action == "add_cat_sub_set_parent":
-                    parent_id = int(data[2])
-                    helpers.admin_steps[call.message.chat.id] = {"parent_id": parent_id}
-                    parent_cat = get_category_by_id(parent_id)
-                    msg = bot.send_message(call.message.chat.id, f"📝 الآن أرسل اسم التصنيف الفرعي الجديد تحت 📂 \"{parent_cat['name']}\". (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_new_category, bot)
+                    if len(data) < 3 or not str(data[2]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ رقم التصنيف الأب غير صالح.", show_alert=True)
+                        return
+                    admin_handlers.begin_category(bot, user_id, admin_ids, int(data[2]))
 
                 elif sub_action == "delete_category_select":
                     # 🌟 استخدام الكيبورد الهرمي الجديد
@@ -389,23 +433,45 @@ def register(bot, admin_ids):
                     bot.edit_message_text("🗑️ <b>اختر التصنيف الذي تريد حذفه:</b>", call.message.chat.id, call.message.message_id, reply_markup=delete_keyboard)
 
                 elif sub_action == "delete_category_confirm":
+                    if len(data) < 3 or not str(data[2]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ رقم التصنيف غير صالح.", show_alert=True)
+                        return
                     category_id = int(data[2])
                     category = get_category_by_id(category_id)
+                    if not category:
+                        bot.answer_callback_query(call.id, "❌ التصنيف غير موجود.", show_alert=True)
+                        return
                     keyboard = InlineKeyboardMarkup(row_width=1)
                     keyboard.add(inline_button("🗑️ حذف التصنيف مع كل فيديوهاته 🔴", STYLE_DANGER, callback_data=f"admin::delete_cat_and_videos::{category_id}"))
                     keyboard.add(inline_button("📦 نقل فيديوهاته لتصنيف آخر 🔵", STYLE_PRIMARY, callback_data=f"admin::delete_cat_move_videos_select_dest::{category_id}"))
                     keyboard.add(inline_button("↩️ إلغاء 🟢", STYLE_SUCCESS, callback_data="admin::cancel_delete_cat"))
-                    bot.edit_message_text(f"⚠️ <b>أنت على وشك حذف</b> \"<code>{category['name']}</code>\"\n\nماذا أفعل بالفيديوهات؟", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+                    bot.edit_message_text(
+                        f"⚠️ <b>أنت على وشك حذف</b> "
+                        f"\"<code>{html.escape(str(category.get('name') or category_id))}</code>\""
+                        "\n\nماذا أفعل بالفيديوهات؟",
+                        call.message.chat.id, call.message.message_id, reply_markup=keyboard,
+                        parse_mode="HTML")
 
                 elif sub_action == "delete_cat_and_videos":
-                    category_id = int(data[2])
-                    category = get_category_by_id(category_id)
-                    delete_category_and_contents(category_id)
-                    bot.edit_message_text(f"✅ <b>تم حذف التصنيف</b> \"<code>{category['name']}</code>\" <b>وكل محتوياته.</b>", call.message.chat.id, call.message.message_id)
+                    if len(data) < 3 or not str(data[2]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ رقم التصنيف غير صالح.", show_alert=True)
+                        return
+                    admin_handlers.delete_category_with_contents(bot, user_id, admin_ids, data[2], call=call)
+                    return
 
                 elif sub_action == "delete_cat_move_videos_select_dest":
+                    if len(data) < 3 or not str(data[2]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ رقم التصنيف غير صالح.", show_alert=True)
+                        return
                     old_category_id = int(data[2])
-                    all_categories = get_categories_tree()
+                    # قارئ أدمن صارم: فشل القاعدة ليس «لا يوجد تصنيف آخر»
+                    try:
+                        all_categories = admin_handlers.fetch_admin_categories()
+                    except Exception as exc:
+                        logger.error("Admin category list failed: %s", type(exc).__name__)
+                        bot.answer_callback_query(call.id, "❌ تعذّرت قراءة التصنيفات من قاعدة البيانات.",
+                                                  show_alert=True)
+                        return
                     categories = [cat for cat in all_categories if cat['id'] != old_category_id]
 
                     if not categories:
@@ -421,114 +487,146 @@ def register(bot, admin_ids):
                     bot.edit_message_text("🎯 <b>اختر التصنيف الذي ستُنقل إليه الفيديوهات:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "delete_cat_move_videos_confirm":
-                    old_category_id = int(data[2])
-                    new_category_id = int(data[3])
-                    category_to_delete = get_category_by_id(old_category_id)
-                    move_videos_from_category(old_category_id, new_category_id)
-                    delete_category_by_id(old_category_id)
-                    new_cat = get_category_by_id(new_category_id)
-                    bot.edit_message_text(f"✅ <b>تم نقل الفيديوهات إلى</b> \"<code>{new_cat['name']}</code>\" <b>وحذف التصنيف</b> \"<code>{category_to_delete['name']}</code>\".", call.message.chat.id, call.message.message_id)
+                    if len(data) < 4 or not str(data[2]).isdigit() or not str(data[3]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ بيانات النقل غير مكتملة. لم يتغير شيء.", show_alert=True)
+                        return
+                    admin_handlers.move_category_contents(bot, user_id, admin_ids, data[2], data[3], call=call)
+                    return
 
                 elif sub_action == "cancel_delete_cat":
                     bot.edit_message_text("👍 <b>تم إلغاء عملية حذف التصنيف.</b>", call.message.chat.id, call.message.message_id)
 
                 elif sub_action == "move_video_by_id":
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل رقم الفيديو (ID) أو أرقام متعددة مفصولة بمسافة للنقل الجماعي. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_move_by_id_input, bot)
+                    admin_handlers.begin_move(bot, user_id, admin_ids)
 
                 elif sub_action == "delete_videos_by_ids":
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل أرقام الفيديوهات (IDs) التي تريد حذفها، مفصولة بمسافة أو فاصلة. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_delete_by_ids_input, bot)
+                    admin_handlers.begin_delete(bot, user_id, admin_ids)
 
                 elif sub_action == "move_confirm":
-                    # [الإصلاح] تصحيح استخراج البيانات
-                    # data[0] = "admin"
-                    # data[1] = "move_confirm"
-                    # data[2] = category_id (التصنيف الجديد)
-                    
-                    # التحقق من وجود البيانات المطلوبة
+                    new_category_id = data[2] if len(data) > 2 else ''
+                    # التصنيف الهدف: رقم موجب أو "none" (بلا تصنيف)؛ غيرهما مرفوض
+                    if new_category_id != 'none' and not (
+                            str(new_category_id).isdigit() and int(new_category_id) > 0):
+                        bot.answer_callback_query(call.id, "❌ بيانات النقل غير مكتملة.", show_alert=True)
+                        return
+                    # الأرقام تُقرأ من الحالة المخزّنة (لا ذاكرة عملية)
+                    admin_handlers.move_now(bot, user_id, admin_ids, new_category_id, call=call)
+                    return
+
+                elif sub_action == "confirm_delete_ids":
+                    admin_handlers.delete_now(bot, user_id, admin_ids, call=call)
+                    return
+
+                elif sub_action == "cancel_flow":
+                    admin_handlers.cancel_flow(bot, user_id, admin_ids, call=call)
+                    return
+
+                elif sub_action == "remove_channel_confirm":
                     if len(data) < 3:
-                        bot.edit_message_text(
-                            "❌ خطأ: بيانات النقل غير كاملة.", 
-                            call.message.chat.id, 
-                            call.message.message_id
-                        )
+                        bot.answer_callback_query(call.id, "❌ بيانات القناة غير مكتملة.", show_alert=True)
                         return
-                    
-                    new_category_id = int(data[2])  # [الإصلاح] تغيير من data[3] إلى data[2]
-                    
-                    # استرجاع أرقام الفيديوهات من admin_steps
-                    step_data = admin_steps.get(call.message.chat.id, {})
-                    video_ids = step_data.get("video_ids", [])
-                    
-                    if not video_ids:
-                        bot.edit_message_text(
-                            "❌ خطأ: لم يتم العثور على أرقام الفيديوهات.", 
-                            call.message.chat.id, 
-                            call.message.message_id
-                        )
+                    admin_handlers.remove_channel_now(bot, user_id, admin_ids, data[2])
+                    bot.answer_callback_query(call.id)
+                    return
+
+                elif sub_action in ("update_metadata", "heal_archive"):
+                    # نقرات متعددة: قفل واحد لكل أداة صيانة (لا تشغيل مزدوج لنفس العملية)
+                    if not _reserve_maintenance(sub_action):
+                        bot.answer_callback_query(call.id, "⏳ هذه العملية قيد التنفيذ بالفعل. انتظر انتهاءها.",
+                                                  show_alert=True)
                         return
-
-                    # نقل الفيديوهات (فردي أو جماعي)
-                    moved_count = move_videos_bulk(video_ids, new_category_id)
-                    category = get_category_by_id(new_category_id)
-
-                    # رسالة مختلفة للنقل الفردي أو الجماعي
-                    if len(video_ids) == 1:
-                        message_text = f"✅ تم نقل الفيديو رقم {video_ids[0]} بنجاح إلى تصنيف \"{category['name']}\"."
-                    else:
-                        message_text = (
-                            f"✅ تم نقل {moved_count} فيديو بنجاح إلى تصنيف \"{category['name']}\".\n\n"
-                            f"📝 الأرقام المنقولة: {', '.join(map(str, video_ids))}"
-                        )
-
-                    bot.edit_message_text(message_text, call.message.chat.id, call.message.message_id)
-                    
-                    # تنظيف البيانات المؤقتة
-                    if call.message.chat.id in admin_steps:
-                        del admin_steps[call.message.chat.id]
-
-                elif sub_action == "update_metadata":
-                    msg = bot.edit_message_text("⏳ تم إرسال طلب تحديث البيانات...", call.message.chat.id, call.message.message_id)
-                    update_thread = threading.Thread(target=run_update_and_report_progress, args=(bot, msg.chat.id, msg.message_id))
-                    update_thread.start()
-
-                elif sub_action == "heal_archive":
-                    msg = bot.edit_message_text("⏳ تم إرسال طلب إصلاح شامل للأرشيف (جلب الصور المصغرة)...", call.message.chat.id, call.message.message_id)
-                    from scripts.heal_archive import run_heal_archive
-                    heal_thread = threading.Thread(target=run_heal_archive, args=(bot, msg.chat.id, msg.message_id))
-                    heal_thread.start()
+                    label = ("⏳ تم إرسال طلب تحديث البيانات..." if sub_action == "update_metadata"
+                             else "⏳ تم إرسال طلب إصلاح شامل للأرشيف (جلب الصور المصغرة)...")
+                    try:
+                        msg = bot.edit_message_text(label, call.message.chat.id, call.message.message_id)
+                        if sub_action == "update_metadata":
+                            job = run_update_and_report_progress
+                            args = (bot, call.message.chat.id, call.message.message_id)
+                        else:
+                            from scripts.heal_archive import run_heal_archive
+                            job = run_heal_archive
+                            args = (bot, call.message.chat.id, call.message.message_id)
+                        threading.Thread(target=_run_maintenance, args=(sub_action, job, args),
+                                         daemon=True).start()
+                    except Exception as exc:
+                        _release_maintenance(sub_action)
+                        logger.error("Could not start maintenance %s: %s", sub_action, type(exc).__name__)
+                        bot.answer_callback_query(call.id, "❌ تعذّر بدء عملية الصيانة.", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    return
 
                 elif sub_action == "list_documents":
-                    from scripts.convert_docs_to_video import get_document_videos
-                    docs = get_document_videos()
+                    # قارئ أدمن صارم محدود: فشل القراءة لا يُعرض كـ«لا مستندات»
+                    try:
+                        docs = admin_handlers.fetch_document_videos_for_admin()
+                    except Exception as exc:
+                        logger.error("Admin document list failed: %s", type(exc).__name__)
+                        bot.answer_callback_query(call.id, "❌ تعذّر جلب المستندات من قاعدة البيانات.",
+                                                  show_alert=True)
+                        return
+                    if docs is None:
+                        bot.answer_callback_query(call.id, "❌ تعذّر جلب المستندات من قاعدة البيانات.",
+                                                  show_alert=True)
+                        return
                     if not docs:
                         bot.answer_callback_query(call.id, "✅ لا يوجد ملفات مسجلة كمستندات!", show_alert=True)
                         return
-                    text = f"📄 الملفات المسجلة كمستندات ({len(docs)}):\n\n"
+                    # نصوص عادية مهربة فقط (لا Markdown/HTML من بيانات القاعدة)
+                    lines = [f"📄 الملفات المسجلة كمستندات ({len(docs)}):", ""]
                     for doc in docs[:30]:
-                        title = (doc.get('caption') or doc.get('file_name') or 'بدون عنوان')[:40]
-                        text += f"• ID: {doc['id']} - {title}\n"
+                        title = str(doc.get('caption') or doc.get('file_name') or 'بدون عنوان')[:40]
+                        lines.append(f"• ID: {doc.get('id')} - {title}")
                     if len(docs) > 30:
-                        text += f"\n... و{len(docs) - 30} ملف آخر"
-                    text += f"\n\n💡 اضغط 'تحويل الكل إلى فيديو' لتحويلها تلقائياً."
-                    bot.send_message(call.message.chat.id, text)
+                        lines.append(f"... و{len(docs) - 30} ملف آخر")
+                    lines.append("")
+                    lines.append("💡 اضغط 'تحويل الكل إلى فيديو' لتحويلها تلقائياً.")
+                    bot.send_message(call.message.chat.id, "\n".join(lines))
+                    bot.answer_callback_query(call.id)
+                    return
 
                 elif sub_action == "convert_all_docs":
-                    msg = bot.edit_message_text("⏳ جارِ بدء عملية تحويل المستندات إلى فيديوهات...", call.message.chat.id, call.message.message_id)
-                    from scripts.convert_docs_to_video import run_convert_all_docs
-                    convert_thread = threading.Thread(target=run_convert_all_docs, args=(bot, msg.chat.id, msg.message_id))
-                    convert_thread.start()
+                    # قفل تكرار النقر: تشغيل واحد فقط لكل عملية تحويل
+                    if not _reserve_maintenance(sub_action):
+                        bot.answer_callback_query(call.id, "⏳ التحويل قيد التنفيذ بالفعل.", show_alert=True)
+                        return
+                    try:
+                        from scripts.convert_docs_to_video import run_convert_all_docs
+                        bot.edit_message_text("⏳ جارِ بدء عملية تحويل المستندات إلى فيديوهات...",
+                                              call.message.chat.id, call.message.message_id)
+                        threading.Thread(target=_run_maintenance,
+                                         args=(sub_action, run_convert_all_docs,
+                                               (bot, call.message.chat.id, call.message.message_id)),
+                                         daemon=True).start()
+                    except Exception as exc:
+                        _release_maintenance(sub_action)
+                        logger.error("Could not start document conversion: %s", type(exc).__name__)
+                        bot.answer_callback_query(call.id, "❌ تعذّر بدء التحويل.", show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    return
 
-                elif sub_action == "set_default_thumb":
-                    from state_manager import set_user_waiting_for_input
-                    bot.send_message(call.message.chat.id, "🖼️ من فضلك أرسل الصورة التي تريد تعيينها كصورة مصغرة افتراضية للفيديوهات. (أو /cancel)")
-                    set_user_waiting_for_input(user_id, States.WAITING_DEFAULT_THUMB)
+                elif sub_action in ("set_default_thumb", "manual_thumb"):
+                    # الصور المصغرة: تحقق كامل داخل handlers.thumbnails (فشل البدء يُبلغ عنه)
+                    if thumbnail_flows is None:
+                        bot.answer_callback_query(call.id, "❌ ميزة الصور المصغرة غير متاحة.",
+                                                  show_alert=True)
+                        return
+                    ok, shown = thumbnail_flows.begin(bot, user_id, admin_ids, sub_action)
+                    if not ok:
+                        bot.answer_callback_query(call.id, f"❌ تعذّر بدء العملية: {shown}",
+                                                  show_alert=True)
+                        return
+                    bot.answer_callback_query(call.id)
+                    return
 
-                elif sub_action == "manual_thumb":
-                    from state_manager import set_user_waiting_for_input
-                    bot.send_message(call.message.chat.id, "📸 من فضلك أرسل رقم الفيديو (ID) الذي تريد تحديث صورته المصغرة يدوياً. (أو /cancel)")
-                    set_user_waiting_for_input(user_id, States.WAITING_VIDEO_ID_FOR_THUMB)
+                elif sub_action == "cancel_thumb":
+                    if thumbnail_flows is None:
+                        bot.answer_callback_query(call.id, "❌ ميزة الصور المصغرة غير متاحة.",
+                                                  show_alert=True)
+                        return
+                    thumbnail_flows.cancel(bot, user_id, admin_ids, call)
+                    return
 
                 elif sub_action == "set_active":
                     # 🌟 استخدام الكيبورد الهرمي الجديد
@@ -542,50 +640,83 @@ def register(bot, admin_ids):
                     bot.edit_message_text("🔘 <b>اختر التصنيف الذي تريد تفعيله:</b>", call.message.chat.id, call.message.message_id, reply_markup=keyboard)
 
                 elif sub_action == "setcat":
+                    # تفعيل تصنيف موجود فقط، وتأكيد النجاح صراحةً (لا مبلغ نجاح بلا حفظ)
+                    if len(data) < 3 or not str(data[2]).isdigit():
+                        bot.answer_callback_query(call.id, "❌ رقم التصنيف غير صالح.", show_alert=True)
+                        return
                     category_id = int(data[2])
-                    if set_active_category_id(category_id):
-                        category = get_category_by_id(category_id)
-                        bot.edit_message_text(f"✅ <b>تم تفعيل التصنيف</b> \"<code>{category['name']}</code>\" <b>بنجاح.</b>", call.message.chat.id, call.message.message_id)
+                    category = get_category_by_id(category_id)
+                    if not category:
+                        bot.answer_callback_query(call.id, "❌ التصنيف غير موجود. لم يتغير شيء.",
+                                                  show_alert=True)
+                        return
+                    name = html.escape(str(category.get('name') or category_id))
+                    if set_active_category_id(category_id) is True:
+                        bot.edit_message_text(
+                            f"✅ <b>تم تفعيل التصنيف</b> \"<code>{name}</code>\" <b>بنجاح.</b>",
+                            call.message.chat.id, call.message.message_id, parse_mode="HTML")
+                    else:
+                        bot.answer_callback_query(call.id, "❌ تعذّر حفظ التصنيف النشط (قاعدة البيانات).",
+                                                  show_alert=True)
+                    return
 
                 elif sub_action == "add_channel":
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل معرف القناة (مثال: -1001234567890 أو @username). (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_add_channel_step1, bot)
+                    admin_handlers.begin_channel_add(bot, user_id, admin_ids)
 
                 elif sub_action == "remove_channel":
-                    msg = bot.send_message(call.message.chat.id, "📝 أرسل معرف القناة التي تريد إزالتها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_remove_channel_step, bot)
+                    admin_handlers.begin_channel_remove(bot, user_id, admin_ids)
 
                 elif sub_action == "list_channels":
-                    admin_handlers.handle_list_channels(call.message, bot)
+                    admin_handlers.list_channels(bot, call.message.chat.id)
 
                 elif sub_action == "broadcast":
-                    msg = bot.send_message(call.message.chat.id, "📢 أرسل الرسالة التي تريد بثها. (أو /cancel)")
-                    bot.register_next_step_handler(msg, admin_handlers.handle_rich_broadcast, bot)
+                    # تدفق مخزّن في DB بدل next_step (غير موثوق في وضع webhook)
+                    admin_handlers.prompt_broadcast(bot, user_id, admin_ids)
+                    bot.answer_callback_query(call.id)
+                    return
+
+                elif sub_action == "cancel_broadcast":
+                    admin_handlers.cancel_broadcast(bot, user_id, admin_ids, call)
+                    return
 
                 elif sub_action == "sub_count":
-                    count = get_subscriber_count()
-                    bot.send_message(call.message.chat.id, f"👤 إجمالي عدد المشتركين: *{count}*", parse_mode="Markdown")
+                    count = get_bot_subscriber_count_or_none()
+                    if count is None:
+                        bot.answer_callback_query(call.id, "❌ تعذّر جلب عدد المشتركين من قاعدة البيانات.",
+                                                  show_alert=True)
+                        return
+                    bot.send_message(call.message.chat.id, f"👤 إجمالي عدد المشتركين: {count}")
+                    bot.answer_callback_query(call.id)
+                    return
 
                 elif sub_action == "stats":
-                    stats = get_bot_stats()
+                    stats = get_bot_stats_or_none()
+                    if stats is None:
+                        bot.answer_callback_query(call.id, "❌ تعذّر جلب الإحصائيات من قاعدة البيانات.",
+                                                  show_alert=True)
+                        return
                     popular = get_popular_videos()
-                    stats_text = (f"📊 *إحصائيات المحتوى*\n\n"
-                                f"- إجمالي الفيديوهات: *{stats['video_count']}*\n"
-                                f"- إجمالي التصنيفات: *{stats['category_count']}*\n"
-                                f"- إجمالي المشاهدات: *{stats['total_views']}*\n"
-                                f"- إجمالي التقييمات: *{stats['total_ratings']}*")
+                    stats_text = (f"📊 <b>إحصائيات المحتوى</b>\n\n"
+                                f"- إجمالي الفيديوهات: {stats['video_count']}\n"
+                                f"- إجمالي التصنيفات: {stats['category_count']}\n"
+                                f"- إجمالي المشاهدات: {stats['total_views']}\n"
+                                f"- إجمالي التقييمات: {stats['total_ratings']}")
 
                     if popular["most_viewed"]:
                         most_viewed = popular["most_viewed"][0]
-                        title = (most_viewed['caption'] or "").split('\n')[0] or "فيديو"
-                        stats_text += f"\n\n🔥 الأكثر مشاهدة: {title} ({most_viewed['view_count']} مشاهدة)"
+                        title = ((most_viewed.get('caption') or "").split('\n')[0] or "فيديو")[:80]
+                        stats_text += (f"\n\n🔥 الأكثر مشاهدة: {html.escape(title)} "
+                                       f"({most_viewed.get('view_count') or 0} مشاهدة)")
 
                     if popular["highest_rated"] and popular["highest_rated"][0].get('avg_rating') is not None:
                         highest_rated = popular["highest_rated"][0]
-                        title = (highest_rated['caption'] or "").split('\n')[0] or "فيديو"
-                        stats_text += f"\n⭐ الأعلى تقييماً: {title} ({highest_rated['avg_rating']:.1f}/5)"
+                        title = ((highest_rated.get('caption') or "").split('\n')[0] or "فيديو")[:80]
+                        stats_text += (f"\n⭐ الأعلى تقييماً: {html.escape(title)} "
+                                       f"({float(highest_rated['avg_rating']):.1f}/5)")
 
-                    bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown")
+                    bot.send_message(call.message.chat.id, stats_text, parse_mode="HTML")
+                    bot.answer_callback_query(call.id)
+                    return
 
             elif action == "popular":
                 sub_action = data[1]
@@ -859,7 +990,8 @@ def register(bot, admin_ids):
             
             # [تم حذف الكود المكرر - المعالجة تتم في action == "admin" أعلاه]
             elif action == "noop":
-                pass  # لا تفعل شيئاً
+                # عناوين اللوحة/أزرار عرض فقط: يُؤكَّد النقر بدل السقوط في استثناء
+                bot.answer_callback_query(call.id)
 
         except telebot.apihelper.ApiTelegramException as e:
             logger.error(f"Telegram API error in callback query: {e}", exc_info=True)

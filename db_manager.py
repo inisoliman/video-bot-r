@@ -377,6 +377,28 @@ def execute_query(query, params=None, fetch=None, commit=False):
     return result
 
 
+def execute_query_strict(query, params=None, fetch=None, commit=False):
+    """نسخة صارمة من execute_query: أي فشل قاعدة بيانات يُرفع بدل تحويله إلى []/None.
+
+    مسار قراءة/كتابة أدمن فقط (مثل قائمة جمهور البث) حيث لا يمكن الخلط بين فشل
+    القاعدة ونتيجة حقيقية فارغة. لا إعادة محاولة هنا مطلقاً.
+    """
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=DictCursor) as c:
+            c.execute(query, params)
+            if fetch == "one":
+                result = c.fetchone()
+            elif fetch == "all":
+                result = c.fetchall()
+            else:
+                result = True
+            if commit:
+                conn.commit()
+                if fetch is None:
+                    result = True
+    return result
+
+
 def row_count(row, key='count', default=0):
     """
     قراءة عدّاد من صف استعلام بأمان (DictRow أو tuple أو None).
@@ -645,6 +667,51 @@ def get_subscriber_count():
     res = execute_query("SELECT COUNT(*) as count FROM bot_users", fetch="one")
     return row_count(res)
 
+
+def fetch_all_user_ids():
+    """
+    أرقام المشتركين للبث مع تمييز فشل القراءة عن قائمة فارغة حقيقية.
+
+    execute_query(fetch='all') يعيد [] عند أي خطأ في القاعدة، فلا يمكن التمييز به
+    بين «لا مشتركين» و«القاعدة متاحة-بدون». نستخدم المسار الصارم هنا فقط.
+
+    Returns:
+        tuple: (list_of_user_ids, unavailable_error_or_None)
+    """
+    try:
+        res = execute_query_strict("SELECT user_id FROM bot_users", fetch="all")
+    except Exception as exc:
+        logger.error("Broadcast audience query failed: %s", type(exc).__name__)
+        return None, exc
+    return [r['user_id'] for r in res], None
+
+def get_bot_subscriber_count_or_none():
+    """عدد المشتركين أو None إذا تعذّرت القراءة (لا تُعرض الأصفار كأنها حقيقية)."""
+    try:
+        res = execute_query_strict("SELECT COUNT(*) as count FROM bot_users", fetch="one")
+    except Exception as exc:
+        logger.error("Subscriber count query failed: %s", type(exc).__name__)
+        return None
+    return row_count(res)
+
+def get_bot_stats_or_none():
+    """إحصائيات المحتوى أو None إذا تعذّرت أي قراءة."""
+    queries = (
+        ('video_count', "SELECT COUNT(*) as count FROM video_archive", 'count'),
+        ('category_count', "SELECT COUNT(*) as count FROM categories", 'count'),
+        ('total_views', "SELECT COALESCE(SUM(view_count), 0) as sum FROM video_archive", 'sum'),
+        ('total_ratings', "SELECT COUNT(*) as count FROM video_ratings", 'count'),
+    )
+    stats = {}
+    for key, sql, column in queries:
+        try:
+            row = execute_query_strict(sql, fetch="one")
+        except Exception as exc:
+            logger.error("Stats query failed (%s): %s", key, type(exc).__name__)
+            return None
+        stats[key] = row_count(row, key=column)
+    return stats
+
 def get_bot_stats():
     stats = {}
     stats['video_count'] = (execute_query("SELECT COUNT(*) as count FROM video_archive", fetch="one") or {'count': 0})['count']
@@ -654,10 +721,44 @@ def get_bot_stats():
     return stats
 
 def add_required_channel(channel_id, channel_name):
-    return execute_query("INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) ON CONFLICT(channel_id) DO NOTHING", (int(channel_id), channel_name), commit=True)
+    """إضافة قناة إلزامية: ``channel_id`` رقمي فقط (واجهة الإضافة ترفض @username).
+
+    Returns:
+        True فقط إذا أُدرج صف فعلاً (ON CONFLICT DO NOTHING بلا صف = False/مكررة)،
+        وFalse عند فشل القاعدة (لا نجاح وهمي).
+    """
+    try:
+        rows = execute_query_strict(
+            "INSERT INTO required_channels (channel_id, channel_name) VALUES (%s, %s) "
+            "ON CONFLICT(channel_id) DO NOTHING RETURNING id",
+            (int(channel_id), channel_name), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Required channel insert failed: %s", type(exc).__name__)
+        return False
+    return bool(rows)
 
 def remove_required_channel(channel_id):
-    return execute_query("DELETE FROM required_channels WHERE channel_id = %s", (int(channel_id),), commit=True)
+    """حذف قناة إلزامية عددياً مع تأكيد الحذف.
+
+    Returns:
+        True عند تأكيد حذف صف واحد على الأقل، وFalse عندما لا يوجد صف أو تعذّر
+        التحقق (فشل القاعدة لا يُعرض كإزالة ناجحة).
+    """
+    try:
+        res = execute_query_strict("DELETE FROM required_channels WHERE channel_id = %s RETURNING id", (int(channel_id),), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Could not remove required channel %s: %s", channel_id, type(exc).__name__)
+        return False
+    return bool(res)
+
+
+def find_required_channel(channel_id=None, name=None):
+    """قناة إلزامية بالرقم (أو بالاسم ظاهراً) أو None؛ فشل القاعدة يُرفع للمستدعي."""
+    if channel_id is not None:
+        return execute_query_strict("SELECT * FROM required_channels WHERE channel_id = %s", (int(channel_id),), fetch="one")
+    if name:
+        return execute_query_strict("SELECT * FROM required_channels WHERE channel_name = %s", (name,), fetch="one")
+    return None
 
 def get_required_channels():
     return execute_query("SELECT * FROM required_channels", fetch="all")
@@ -672,6 +773,180 @@ def delete_videos_by_ids(video_ids):
     if not video_ids: return 0
     res = execute_query("DELETE FROM video_archive WHERE id = ANY(%s) RETURNING id", (video_ids,), fetch="all", commit=True)
     return len(res) if isinstance(res, list) else 0
+
+
+def delete_videos_by_ids_reported(video_ids):
+    """
+    حذف الفيديوهات مع تمييز الفشل عن «لا شيء لحذفه».
+
+    Returns:
+        tuple: (deleted_count_or_None, unavailable_error_or_None)
+    """
+    if not video_ids:
+        return 0, None
+    try:
+        res = execute_query_strict("DELETE FROM video_archive WHERE id = ANY(%s) RETURNING id",
+                                   (video_ids,), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Video delete failed: %s", type(exc).__name__)
+        return None, exc
+    return len(res), None
+
+
+def count_existing_video_ids(video_ids):
+    """كم من الأرقام موجود فعلاً في الأرشيف؛ يرفع عند تعذّر القراءة (لا صفر وهمي)."""
+    if not video_ids:
+        return 0
+    res = execute_query_strict("SELECT id FROM video_archive WHERE id = ANY(%s)", (video_ids,), fetch="all")
+    return len(res)
+
+
+def move_videos_bulk_reported(video_ids, new_category_id):
+    """نقل الفيديوهات مع تمييز الفشل عن «لا شيء لنقله».
+
+    Returns:
+        tuple: (moved_count_or_None, unavailable_error_or_None)
+    """
+    if not video_ids:
+        return 0, None
+    query = "UPDATE video_archive SET category_id = %s WHERE id = ANY(%s) RETURNING id"
+    try:
+        res = execute_query_strict(query, (new_category_id, video_ids), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Bulk move failed: %s", type(exc).__name__)
+        return None, exc
+    return len(res), None
+
+
+def move_videos_from_category_reported(old_category_id, new_category_id):
+    """نقل محتويات تصنيف إلى آخر مع تمييز الفشل عن النجاح الصفري."""
+    try:
+        res = execute_query_strict("UPDATE video_archive SET category_id = %s WHERE category_id = %s RETURNING id",
+                                   (new_category_id, old_category_id), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Category contents move failed: %s", type(exc).__name__)
+        return None, exc
+    return len(res), None
+
+
+def delete_category_by_id_reported(category_id):
+    """حذف تصنيف مع التمييز بين النجاح و«غير موجود» وفشل القاعدة."""
+    try:
+        res = execute_query_strict("DELETE FROM categories WHERE id = %s RETURNING id",
+                                   (category_id,), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Category delete failed: %s", type(exc).__name__)
+        return None, exc
+    return (1 if res else 0), None
+
+
+def fetch_admin_categories():
+    """جميع التصنيفات لهذا العرض الأدمن؛ يرفع عند فشل القاعدة (لا قائمة فارغة وهمية)."""
+    return execute_query_strict("SELECT id, name, parent_id FROM categories ORDER BY name",
+                                fetch="all")
+
+
+def fetch_admin_required_channels():
+    """قنوات الاشتراك لعرض الأدمن؛ يرفع عند فشل القاعدة (لا قائمة فارغة وهمية)."""
+    return execute_query_strict("SELECT channel_id, channel_name FROM required_channels",
+                                fetch="all")
+
+
+class CommitOutcomeUnknown(Exception):
+    """فشل الالتزام: نتيجة المعاملة غير مؤكدة (لا إعادة محاولة ولا ادّعاء تراجع)."""
+
+
+_CHILD_CATEGORY_SQL = ("SELECT id FROM categories WHERE parent_id = %s "
+                       "ORDER BY id LIMIT 1")
+
+
+def delete_category_with_contents_atomic(category_id):
+    """حذف تصنيف وكل فيديوهاته على اتصال واحد والتزام واحد.
+
+    الخطوات داخل معاملة: صف التصنيف يُقفل (FOR UPDATE) ويُتحقق، ثم يُرفض أي تصنيف
+    له تصنيفات فرعية، وبعدها فقط تُحذف الفيديوهات ثم التصنيف. أي فشل في العبارات
+    => تراجع ولا تغييرات ولا التزام. فشل الالتزام نفسه يُرفع كـ CommitOutcomeUnknown
+    (النتيجة غير مؤكدة) ولا يُعاد تشغيلها تلقائياً.
+
+    Returns:
+        dict: {'status': 'deleted', 'videos': n, 'category': 1}
+              أو {'status': 'missing'} أو {'status': 'has_children'}.
+    """
+    with get_db_connection() as conn:
+        commits = 0
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute("SELECT id FROM categories WHERE id = %s FOR UPDATE",
+                          (category_id,))
+                if not c.fetchone():
+                    conn.rollback()
+                    return {'status': 'missing', 'videos': 0, 'category': 0}
+                c.execute(_CHILD_CATEGORY_SQL, (category_id,))
+                if c.fetchone():
+                    conn.rollback()
+                    return {'status': 'has_children', 'videos': 0, 'category': 0}
+                c.execute("DELETE FROM video_archive WHERE category_id = %s", (category_id,))
+                videos_deleted = c.rowcount if c.rowcount and c.rowcount > 0 else 0
+                c.execute("DELETE FROM categories WHERE id = %s", (category_id,))
+                if not c.rowcount:
+                    raise RuntimeError('category delete reported no rows')
+            commits += 1
+            conn.commit()
+            return {'status': 'deleted', 'videos': videos_deleted, 'category': 1}
+        except Exception as exc:
+            if commits:
+                # لا تراجع ولا إعادة: قد تكون المعاملة التزمت فعلاً
+                logger.error("Category delete commit outcome unknown: %s", type(exc).__name__)
+                raise CommitOutcomeUnknown('category delete commit failed') from exc
+            _rollback_quietly(conn)
+            raise
+
+
+def move_category_contents_atomic(old_category_id, new_category_id):
+    """نقل فيديوهات تصنيف إلى آخر ثم حذفه: التزام واحد، أو تراجع كامل.
+
+    القفل والتحقق (وجود التصنيفين + عدم وجود تصنيفات فرعية للتصنيف المصدر) يحدثان
+    قبل أي UPDATE/DELETE. رفض: 'missing' أو 'has_children' بلا أي كتابة أو التزام.
+    فشل الالتزام يُرفع كـ CommitOutcomeUnknown.
+    """
+    with get_db_connection() as conn:
+        commits = 0
+        try:
+            with conn.cursor(cursor_factory=DictCursor) as c:
+                c.execute("SELECT id FROM categories WHERE id IN (%s, %s) ORDER BY id FOR UPDATE",
+                          (old_category_id, new_category_id))
+                found = {row['id'] for row in c.fetchall()}
+                if old_category_id not in found or new_category_id not in found:
+                    conn.rollback()
+                    return {'status': 'missing', 'videos': 0}
+                c.execute(_CHILD_CATEGORY_SQL, (old_category_id,))
+                if c.fetchone():
+                    conn.rollback()
+                    return {'status': 'has_children', 'videos': 0}
+                c.execute("UPDATE video_archive SET category_id = %s WHERE category_id = %s",
+                          (new_category_id, old_category_id))
+                moved = c.rowcount if c.rowcount and c.rowcount > 0 else 0
+                c.execute("DELETE FROM categories WHERE id = %s", (old_category_id,))
+                if not c.rowcount:
+                    raise RuntimeError('category delete reported no rows')
+            commits += 1
+            conn.commit()
+            return {'status': 'moved', 'videos': moved}
+        except Exception as exc:
+            if commits:
+                logger.error("Category move commit outcome unknown: %s", type(exc).__name__)
+                raise CommitOutcomeUnknown('category move commit failed') from exc
+            _rollback_quietly(conn)
+            raise
+
+
+def fetch_document_videos_for_admin():
+    """مستندات الأرشيف لعرض الأدمن؛ يرفع عند فشل القاعدة (لا [] وهمية)."""
+    return execute_query_strict(
+        "SELECT id, caption, file_name FROM video_archive "
+        "WHERE content_type = 'DOCUMENT' OR content_type IS NULL ORDER BY id ASC",
+        fetch="all")
+
 
 def delete_category_and_contents(category_id):
     execute_query("DELETE FROM video_archive WHERE category_id = %s", (category_id,), commit=True)
@@ -748,12 +1023,19 @@ def get_user_history(user_id, page=0):
 
 # --- دالة حذف المشترك (لحل خطأ البث 403) ---
 def delete_bot_user(user_id):
-    """حذف المستخدم من جدول المشتركين."""
-    execute_query("DELETE FROM user_states WHERE user_id = %s", (user_id,), commit=True)
-    execute_query("DELETE FROM user_favorites WHERE user_id = %s", (user_id,), commit=True)
-    execute_query("DELETE FROM user_history WHERE user_id = %s", (user_id,), commit=True)
-    execute_query("DELETE FROM video_ratings WHERE user_id = %s", (user_id,), commit=True)
-    return execute_query("DELETE FROM bot_users WHERE user_id = %s", (user_id,), commit=True)
+    """حذف المستخدم من جدول المشتركين.
+
+    Returns:
+        True فقط بعد تأكيد حذف الصف من ``bot_users`` وبقية الجداول المرتبطة.
+    """
+    for table in ('user_states', 'user_favorites', 'user_history', 'video_ratings'):
+        if execute_query("DELETE FROM %s WHERE user_id = %%s" % table, (user_id,), commit=True) is not True:
+            logger.warning("Broadcast cleanup failed while deleting %s row from %s", user_id, table)
+            return False
+    if execute_query("DELETE FROM bot_users WHERE user_id = %s", (user_id,), commit=True) is not True:
+        logger.warning("Broadcast cleanup failed while deleting %s from bot_users", user_id)
+        return False
+    return True
 
 def move_videos_bulk(video_ids, new_category_id):
     """
@@ -1425,17 +1707,22 @@ def get_miniapp_video_thumbnail(video_id):
 def update_video_thumbnail(video_id, thumbnail_file_id):
     """
     تحديث thumbnail_file_id للفيديو.
-    
+
     Args:
         video_id: رقم الفيديو
         thumbnail_file_id: معرف الصورة المصغرة من Telegram
-    
+
     Returns:
-        True إذا نجح التحديث، False إذا فشل
+        True فقط إذا تحدّث صف فعلاً (RETURNING id)؛ فيديو غير موجود أو فشل القاعدة = False
     """
-    sql = "UPDATE video_archive SET thumbnail_file_id = %s WHERE id = %s"
-    result = execute_query(sql, (thumbnail_file_id, video_id), commit=True)
-    return result is not None
+    try:
+        rows = execute_query_strict(
+            "UPDATE video_archive SET thumbnail_file_id = %s WHERE id = %s RETURNING id",
+            (thumbnail_file_id, video_id), fetch="all", commit=True)
+    except Exception as exc:
+        logger.error("Thumbnail update failed: %s", type(exc).__name__)
+        return False
+    return bool(rows)
 
 def get_videos_without_thumbnail(limit=20):
     """
