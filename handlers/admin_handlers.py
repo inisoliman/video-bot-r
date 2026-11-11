@@ -1,12 +1,13 @@
 # handlers/admin_handlers.py
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 import logging
+import os
 import re
-import time
 from telebot.apihelper import ApiTelegramException
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
+from miniapp import miniapp_url
 
 from db_manager import (
     add_category, get_all_user_ids, add_required_channel, remove_required_channel,
@@ -23,221 +24,196 @@ from .helpers import admin_steps, create_categories_keyboard, CALLBACK_DELIMITER
 
 logger = logging.getLogger(__name__)
 
-# --- Top-level functions for callbacks and next_step_handlers ---
+# ==============================================================================
+# التطبيق المصغّر (Mini App) في لوحة الأدمن
+# ==============================================================================
+MINIAPP_HOURLY_SETTING_KEY = 'miniapp_hourly_limit_per_ip'
+DEFAULT_MINIAPP_HOURLY_LIMIT = 0        # 0 = بلا حد للمكتبة
+MAX_MINIAPP_HOURLY_LIMIT = 100000
+MINIAPP_IP_BUTTON_TEXT = "📱 فتح المكتبة بعنوان IP يدوي"
+MINIAPP_IP_PROMPT = "✏️ أرسل عنوان IP (مثال: 203.0.113.7) لعرض زر فتح المكتبة معه:"
+_INITDATA_QUERY_PARAM = 'tgWebAppData'  # يفتح الرابط كتطبيق مصغّر داخل تيليجرام
 
-def handle_rich_broadcast(message, bot):
-    if check_cancel(message, bot): return
-    user_ids = get_all_user_ids()
-    sent_count, failed_count, removed_count = 0, 0, 0
-    bot.send_message(message.chat.id, f"بدء إرسال الرسالة إلى {len(user_ids)} مشترك...")
-    for user_id in user_ids:
-        try:
-            bot.copy_message(user_id, message.chat.id, message.message_id)
-            sent_count += 1
-        except ApiTelegramException as e:
-            if 'bot was blocked by the user' in e.description:
-                delete_bot_user(user_id)
-                removed_count += 1
-                logger.warning(f"Failed to send broadcast to {user_id}: Bot was blocked. User deleted.")
-            else:
-                failed_count += 1
-                logger.warning(f"Failed to send broadcast to {user_id}: {e}")
-        except Exception as e:
-            failed_count += 1
-            logger.error(f"Unexpected error broadcasting to {user_id}: {e}")
-        time.sleep(0.1)
-    bot.send_message(message.chat.id,
-                     f"✅ اكتمل البث!\n\n- رسائل ناجحة: {sent_count}\n- رسائل فاشلة (لم يتم إرسالها): {failed_count}\n- مشتركين محذوفين (لأنهم حظروا البوت): {removed_count}")
 
-def handle_add_new_category(message, bot):
-    if check_cancel(message, bot): return
-    category_name = message.text.strip()
-    step_data = admin_steps.pop(message.chat.id, {})
-    parent_id = step_data.get("parent_id")
-    success, result = add_category(category_name, parent_id=parent_id)
-    if success:
-        parent_info = ""
-        if parent_id:
-            parent_cat = get_category_by_id(parent_id)
-            if parent_cat:
-                parent_info = f" تحت التصنيف 📂 \"{parent_cat['name']}\""
-        bot.reply_to(message, f"✅ تم إنشاء التصنيف الجديد بنجاح: \"{category_name}\"{parent_info}.")
-    else:
-        bot.reply_to(message, f"❌ خطأ في إنشاء التصنيف: {result[1] if isinstance(result, tuple) else result}")
-
-def handle_add_channel_step1(message, bot):
-    if check_cancel(message, bot): return
-    channel_id = message.text.strip()
-    admin_steps[message.chat.id] = {"channel_id": channel_id}
-    msg = bot.send_message(message.chat.id, "الآن أرسل اسم القناة (مثال: قناة الأفلام). (أو /cancel)")
-    bot.register_next_step_handler(msg, handle_add_channel_step2, bot)
-
-def handle_add_channel_step2(message, bot):
-    if check_cancel(message, bot): return
-    channel_name = message.text.strip()
-    channel_id = admin_steps.pop(message.chat.id, {}).get("channel_id")
-    if not channel_id: return
-    if add_required_channel(channel_id, channel_name):
-        bot.send_message(message.chat.id, f"✅ تم إضافة القناة \"{channel_name}\" (ID: `{channel_id}`).", parse_mode="Markdown")
-    else:
-        bot.send_message(message.chat.id, "❌ حدث خطأ أثناء إضافة القناة. تأكد من أن المعرف صحيح.")
-
-def handle_remove_channel_step(message, bot):
-    if check_cancel(message, bot): return
-    channel_id = message.text.strip()
-    if remove_required_channel(channel_id):
-        bot.send_message(message.chat.id, f"✅ تم إزالة القناة (ID: `{channel_id}`) من القنوات المطلوبة.", parse_mode="Markdown")
-    else:
-        bot.send_message(message.chat.id, "❌ حدث خطأ أو القناة غير موجودة.")
-
-def handle_list_channels(message, bot):
-    channels = get_required_channels()
-    if channels:
-        response = "📋 *القنوات المطلوبة:*\n" + "\n".join([f"- {ch['channel_name']} (ID: `{ch['channel_id']}`)" for ch in channels])
-        bot.send_message(message.chat.id, response, parse_mode="Markdown")
-    else:
-        bot.send_message(message.chat.id, "لا توجد قنوات مطلوبة حالياً.")
-
-def handle_delete_by_ids_input(message, bot):
-    if check_cancel(message, bot): return
+def _miniapp_active():
+    """True فقط عندما يكون APP_URL رابط HTTPS صالحاً (وإلا لا يُضاف أي زر)."""
     try:
-        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
-        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
-        if not video_ids:
-            msg = bot.reply_to(message, "لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
-            bot.register_next_step_handler(msg, handle_delete_by_ids_input, bot)
-            return
-        deleted_count = delete_videos_by_ids(video_ids)
-        bot.reply_to(message, f"✅ تم حذف {deleted_count} فيديو بنجاح.")
-    except Exception as e:
-        logger.error(f"Error in handle_delete_by_ids_input: {e}", exc_info=True)
-        bot.reply_to(message, "حدث خطأ. تأكد من إدخال أرقام فقط مفصولة بمسافات أو فواصل.")
+        return bool(miniapp_url())
+    except Exception as exc:
+        logger.warning(f"Mini App admin buttons skipped: {type(exc).__name__}")
+        return False
 
-def handle_move_by_id_input(message, bot):
-    """معالج النقل الفردي والجماعي للفيديوهات - محدث بالشجرة الهرمية"""
-    if check_cancel(message, bot): 
-        return
 
+def _miniapp_open_url(ip_address=None):
+    """رابط التطبيق المصغّر (وخيار IP يدوي لفحص حد الفتح من جهاز الأدمن)."""
+    base = miniapp_url()
+    if not base:
+        return None
+    query = f"{_INITDATA_QUERY_PARAM}=%7B%7D"
+    if ip_address:
+        query += f"&ip={ip_address}"
+    url = f"{base}?{query}"
+    return url if len(url) <= 512 else None  # أقصى طول يقبله تيليجرام لعناوين Web App
+
+
+def _setting(key, default=''):
+    """قراءة إعداد من bot_settings بأمان (فشل القاعدة لا يعطّل اللوحة)."""
     try:
-        # قراءة الأرقام المدخلة (يدعم رقم واحد أو أرقام متعددة)
-        video_ids_str = re.split(r'[,\s\n]+', message.text.strip())
-        video_ids = [int(num) for num in video_ids_str if num.isdigit()]
+        from db_manager import get_bot_setting
+        value = get_bot_setting(key, default)
+    except Exception as exc:
+        logger.warning(f"Mini App setting {key} unavailable: {type(exc).__name__}")
+        return default
+    return value
 
-        if not video_ids:
-            msg = bot.reply_to(message, "❌ لم يتم إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
-            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
-            return
 
-        # التحقق من وجود الفيديوهات
-        valid_videos = []
-        invalid_ids = []
+def _int_setting(key, default, maximum):
+    try:
+        value = int(str(_setting(key, str(default)) or default).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(value, maximum))
 
-        for vid_id in video_ids:
-            video = get_video_by_id(vid_id)
-            if video:
-                valid_videos.append(vid_id)
-            else:
-                invalid_ids.append(vid_id)
 
-        if not valid_videos:
-            msg = bot.reply_to(message, "❌ لا توجد فيديوهات صحيحة بالأرقام المدخلة. حاول مرة أخرى أو أرسل /cancel.")
-            bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
-            return
+def miniapp_hourly_limit_by_ip():
+    """حد فتح المكتبة لكل IP في الساعة (0 = بلا حد) - يقرأه miniapp لكل صفحة."""
+    return _int_setting(MINIAPP_HOURLY_SETTING_KEY, DEFAULT_MINIAPP_HOURLY_LIMIT,
+                        MAX_MINIAPP_HOURLY_LIMIT)
 
-        # حفظ أرقام الفيديوهات في admin_steps
-        admin_steps[message.chat.id] = {"video_ids": valid_videos}
 
-        # 🌟 استخدام الكيبورد الهرمي الجديد بدلاً من البناء اليدوي
-        move_keyboard = create_hierarchical_category_keyboard("admin::move_confirm", add_back_button=False)
-        move_keyboard.add(inline_button("🔙 إلغاء", STYLE_DANGER, callback_data="back_to_main"))
-
-        # رسالة مختلفة للنقل الفردي أو الجماعي
-        if len(valid_videos) == 1:
-            message_text = f"✅ تم اختيار الفيديو رقم {valid_videos[0]}\n\n🎯 اختر التصنيف الجديد:"
-        else:
-            message_text = (
-                f"✅ تم اختيار {len(valid_videos)} فيديو للنقل\n\n"
-                f"📝 الأرقام: {', '.join(map(str, valid_videos))}\n\n"
-            )
-            if invalid_ids:
-                message_text += f"⚠️ أرقام غير موجودة (تم تجاهلها): {', '.join(map(str, invalid_ids))}\n\n"
-            message_text += "🎯 اختر التصنيف الجديد:"
-
-        bot.reply_to(message, message_text, reply_markup=move_keyboard)
-
+def parse_admin_ip(text):
+    """عنوان IPv4/IPv6 صالح من نص الأدمن، أو None."""
+    value = (text or '').strip()
+    try:
+        import ipaddress
+        return str(ipaddress.ip_address(value)) if value else None
     except ValueError:
-        msg = bot.reply_to(message, "❌ الرجاء إدخال أرقام صحيحة. حاول مرة أخرى أو أرسل /cancel.")
-        bot.register_next_step_handler(msg, handle_move_by_id_input, bot)
-    except Exception as e:
-        logger.error(f"Error in handle_move_by_id_input: {e}", exc_info=True)
-        bot.reply_to(message, "❌ حدث خطأ غير متوقع.")
+        return None
 
-def check_cancel(message, bot):
-    if message.text == "/cancel":
-        if message.chat.id in admin_steps:
-            del admin_steps[message.chat.id]
-        clear_user_waiting_state(message.chat.id)
-        bot.send_message(message.chat.id, "تم إلغاء العملية.")
-        return True
-    return False
 
-# --- معالجات الحالات الجديدة (Thumbnail Management) ---
-
-@state_handler(States.WAITING_DEFAULT_THUMB)
-def handle_set_default_thumb(message, bot, context):
-    if check_cancel(message, bot): return
-    
-    if message.content_type != 'photo':
-        bot.reply_to(message, "❌ يرجى إرسال صورة فقط. أو أرسل /cancel لإلغاء العملية.")
-        return
-    
-    # الحصول على رابط الصورة (أكبر حجم)
-    file_id = message.photo[-1].file_id
-    if set_default_thumbnail(file_id):
-        clear_user_waiting_state(message.from_user.id)
-        bot.reply_to(message, "✅ تم تعيين الصورة المصغرة الافتراضية بنجاح!")
+def _set_miniapp_hourly_limit(bot, chat_id, value):
+    """حفظ حد فتح المكتبة وإرسال تأكيد."""
+    from db_manager import set_bot_setting
+    if set_bot_setting(MINIAPP_HOURLY_SETTING_KEY, str(value)):
+        suffix = " (بلا حد)" if value == 0 else ""
+        bot.send_message(chat_id, f"✅ حد فتح المكتبة لكل IP أصبح {value} في الساعة.{suffix}")
     else:
-        bot.reply_to(message, "❌ حدث خطأ أثناء حفظ الصورة.")
+        bot.send_message(chat_id, "⚠️ تعذر حفظ الحد في قاعدة البيانات. حاول مجدداً.")
+    return True
 
-@state_handler(States.WAITING_VIDEO_ID_FOR_THUMB)
-def handle_manual_thumb_id(message, bot, context):
-    if check_cancel(message, bot): return
-    
-    if not message.text or not message.text.isdigit():
-        bot.reply_to(message, "❌ يرجى إرسال رقم الفيديو (ID) فقط. مثال: 123")
-        return
-    
-    video_id = int(message.text)
-    video = get_video_by_id(video_id)
-    
-    if not video:
-        bot.reply_to(message, f"❌ لم يتم العثور على فيديو بالرقم {video_id}. جرب رقماً آخر.")
-        return
-    
-    # الانتقال للحالة التالية مع حفظ ID الفيديو في السياق
-    set_user_waiting_for_input(message.from_user.id, States.WAITING_NEW_THUMB_FOR_VIDEO, {"video_id": video_id})
-    bot.reply_to(message, f"🎯 تم اختيار الفيديو: {video['caption'][:50]}...\n\nالآن أرسل الصورة المصغرة الجديدة لهذا الفيديو:")
 
-@state_handler(States.WAITING_NEW_THUMB_FOR_VIDEO)
-def handle_manual_thumb_image(message, bot, context):
-    if check_cancel(message, bot): return
-    
-    video_id = context.get("video_id")
-    if not video_id:
-        clear_user_waiting_state(message.from_user.id)
-        bot.reply_to(message, "❌ حدث خطأ في النظام (ID مفقود).")
-        return
+def miniapp_limit_prompt(bot, chat_id):
+    """طلب قيمة الحد من الأدمن (الرقم التالي من الأدمن يُحفظ)."""
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
+    bot.send_message(chat_id,
+                     f"⏱️ أرسل حد فتح المكتبة لكل IP في الساعة (0 = بلا حد، "
+                     f"الحد الأقصى {MAX_MINIAPP_HOURLY_LIMIT}):",
+                     reply_markup=keyboard)
+    return True
 
-    if message.content_type != 'photo':
-        bot.reply_to(message, "❌ يرجى إرسال صورة فقط لهذا الفيديو.")
-        return
 
-    file_id = message.photo[-1].file_id
-    if update_video_thumbnail(video_id, file_id):
-        clear_user_waiting_state(message.from_user.id)
-        bot.reply_to(message, f"✅ تم تحديث الصورة المصغرة للفيديو رقم {video_id} بنجاح!")
-    else:
-        bot.reply_to(message, "❌ حدث خطأ أثناء تحديث الصورة.")
+def build_admin_panel():
+    """لوحة تحكم الأدمن كاملة (تُبنى عند كل طلب، فلا حالة مشتركة).
+
+    أزرار التطبيق المصغّر تُضاف فقط عندما يكون APP_URL رابط HTTPS صالحاً.
+    """
+    keyboard = InlineKeyboardMarkup(row_width=2)
+
+    # ─── قسم: إدارة التصنيفات ───
+    keyboard.add(inline_button("╭─ 🗂️ إدارة التصنيفات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("➕ إضافة تصنيف 🟢", STYLE_SUCCESS, callback_data="admin::add_new_cat"),
+                 inline_button("🗑️ حذف تصنيف 🔴", STYLE_DANGER, callback_data="admin::delete_category_select"))
+    keyboard.add(inline_button("🔘 تعيين التصنيف النشط 🟡", STYLE_PRIMARY, callback_data="admin::set_active"))
+
+    # ─── قسم: إدارة الفيديوهات ───
+    keyboard.add(inline_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("➡️ نقل فيديو بالرقم 🔵", STYLE_PRIMARY, callback_data="admin::move_video_by_id"),
+                 inline_button("❌ حذف فيديوهات 🔴", STYLE_DANGER, callback_data="admin::delete_videos_by_ids"))
+    keyboard.add(inline_button("✏️ تعديل اسم الفيديو 🟣", STYLE_PRIMARY, callback_data="admin::rename_title"))
+    keyboard.add(inline_button("🔢 تعديل عنوان فيلم برقم 🟣", STYLE_PRIMARY, callback_data="admin::edit_title"))
+    keyboard.add(inline_button("🔄 تحديث البيانات القديمة 🟣", STYLE_PRIMARY, callback_data="admin::update_metadata"))
+
+    # ─── قسم: إدارة التعليقات ───
+    keyboard.add(inline_button("╭─ 💬 إدارة التعليقات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("💬 عرض التعليقات 🔵", STYLE_PRIMARY, callback_data="admin::view_comments"),
+                 inline_button("📊 الإحصائيات 🟣", STYLE_PRIMARY, callback_data="admin::comments_stats"))
+    keyboard.add(inline_button("🧹 حذف التعليقات القديمة 🟡", STYLE_DANGER, callback_data="admin::delete_old_comments"),
+                 inline_button("🗑️ حذف الكل 🔴", STYLE_DANGER, callback_data="admin::delete_all_comments"))
+
+    # ─── قسم: قنوات الاشتراك ───
+    keyboard.add(inline_button("╭─ 📢 قنوات الاشتراك ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("➕ إضافة قناة 🟢", STYLE_SUCCESS, callback_data="admin::add_channel"),
+                 inline_button("➖ إزالة قناة 🔴", STYLE_DANGER, callback_data="admin::remove_channel"))
+    keyboard.add(inline_button("📋 عرض القنوات 🔵", STYLE_PRIMARY, callback_data="admin::list_channels"))
+
+    # ─── قسم: الصور المصغرة ───
+    keyboard.add(inline_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("🖼️ صورة افتراضية 🟡", STYLE_PRIMARY, callback_data="admin::set_default_thumb"),
+                 inline_button("📸 تحديث يدوي 🔵", STYLE_PRIMARY, callback_data="admin::manual_thumb"))
+
+    # ─── قسم: أدوات الصيانة ───
+    keyboard.add(inline_button("╭─ 🛠️ أدوات الصيانة ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("✨ إصلاح شامل للأرشيف 🟣", STYLE_PRIMARY, callback_data="admin::heal_archive"))
+    keyboard.add(inline_button("📄 عرض المستندات 🔵", STYLE_PRIMARY, callback_data="admin::list_documents"),
+                 inline_button("🔄 تحويل → فيديو 🟢", STYLE_SUCCESS, callback_data="admin::convert_all_docs"))
+
+    # ─── قسم: البث والإحصائيات ───
+    keyboard.add(inline_button("╭─ 📊 البث والإحصائيات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(inline_button("📢 بث رسالة 🟠", STYLE_SUCCESS, callback_data="admin::broadcast"))
+    keyboard.add(inline_button("📊 إحصائيات البوت 🟣", STYLE_PRIMARY, callback_data="admin::stats"),
+                 inline_button("👤 عدد المشتركين 🔵", STYLE_PRIMARY, callback_data="admin::sub_count"))
+
+    # ─── التطبيق المصغّر (Mini App): يظهر فقط مع APP_URL https ───
+    if _miniapp_active():
+        # InlineKeyboardButton المباشر: تيليجرام لا يقبل style مع web_app
+        open_url = _miniapp_open_url()
+        if open_url:
+            keyboard.add(InlineKeyboardButton("📱 مكتبة الميني أب 🟣", web_app=WebAppInfo(url=open_url)),
+                         row_width=1)
+        keyboard.add(inline_button("⏱️ حد فتح المكتبة/ساعة لكل IP 🔵", STYLE_PRIMARY,
+                                   callback_data="admin::set_miniapp_limit"), row_width=1)
+        keyboard.add(inline_button(f"⏱️ الحد الحالي: {miniapp_hourly_limit_by_ip()} في الساعة 🟣",
+                                   STYLE_PRIMARY, callback_data="noop"), row_width=1)
+    return keyboard
+
+
+ADMIN_PANEL_TEXT = "🎛️ أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:"
+
+
+def send_admin_panel(bot, chat_id):
+    """إرسال لوحة الأدمن (وتحمل أزرار التطبيق المصغّر عند تفعيله)."""
+    bot.send_message(chat_id, ADMIN_PANEL_TEXT, reply_markup=build_admin_panel())
+    return True
+
+
+def handle_set_miniapp_limit(bot, chat_id):
+    """زر حد فتح المكتبة: يعيد اللوحة ويطلب الرقم التالي (0 = بلا حد)."""
+    send_admin_panel(bot, chat_id)
+    miniapp_limit_prompt(bot, chat_id)
+    return True
+
+
+def _open_library_for_ip(bot, admin_ids, message):
+    """رسالة IP من الأدمن -> زر web_app للمكتبة بعنوانه."""
+    if message.from_user.id not in admin_ids:
+        bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+        return False
+    ip_address = parse_admin_ip(message.text)
+    if not ip_address:
+        bot.send_message(message.chat.id, "❌ عنوان IP غير صالح (مثال: 203.0.113.7).")
+        return False
+    url = _miniapp_open_url(ip_address)
+    if not url:
+        bot.send_message(message.chat.id, "⚠️ المكتبة غير متاحة: تحقق من APP_URL.")
+        return False
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton(f"📱 فتح المكتبة لـ {ip_address}",
+                                      web_app=WebAppInfo(url=url)))
+    bot.send_message(message.chat.id, "📱 افتح المكتبة من الزر أدناه:", reply_markup=keyboard)
+    return True
+
+
 
 # --- Handler Registration ---
 
@@ -250,58 +226,27 @@ def register(bot, admin_ids):
                 bot.reply_to(message, "ليس لديك صلاحية الوصول إلى هذا الأمر.")
         return wrapper
 
-    def generate_admin_panel():
-        keyboard = InlineKeyboardMarkup(row_width=2)
-
-        # ─── قسم: إدارة التصنيفات ───
-        keyboard.add(inline_button("╭─ 🗂️ إدارة التصنيفات ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("➕ إضافة تصنيف 🟢", STYLE_SUCCESS, callback_data="admin::add_new_cat"),
-                     inline_button("🗑️ حذف تصنيف 🔴", STYLE_DANGER, callback_data="admin::delete_category_select"))
-        keyboard.add(inline_button("🔘 تعيين التصنيف النشط 🟡", STYLE_PRIMARY, callback_data="admin::set_active"))
-
-        # ─── قسم: إدارة الفيديوهات ───
-        keyboard.add(inline_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("➡️ نقل فيديو بالرقم 🔵", STYLE_PRIMARY, callback_data="admin::move_video_by_id"),
-                     inline_button("❌ حذف فيديوهات 🔴", STYLE_DANGER, callback_data="admin::delete_videos_by_ids"))
-        keyboard.add(inline_button("✏️ تعديل اسم الفيديو 🟣", STYLE_PRIMARY, callback_data="admin::rename_title"))
-        keyboard.add(inline_button("🔢 تعديل عنوان فيلم برقم 🟣", STYLE_PRIMARY, callback_data="admin::edit_title"))
-        keyboard.add(inline_button("🔄 تحديث البيانات القديمة 🟣", STYLE_PRIMARY, callback_data="admin::update_metadata"))
-
-        # ─── قسم: إدارة التعليقات ───
-        keyboard.add(inline_button("╭─ 💬 إدارة التعليقات ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("💬 عرض التعليقات 🔵", STYLE_PRIMARY, callback_data="admin::view_comments"),
-                     inline_button("📊 الإحصائيات 🟣", STYLE_PRIMARY, callback_data="admin::comments_stats"))
-        keyboard.add(inline_button("🧹 حذف التعليقات القديمة 🟡", STYLE_DANGER, callback_data="admin::delete_old_comments"),
-                     inline_button("🗑️ حذف الكل 🔴", STYLE_DANGER, callback_data="admin::delete_all_comments"))
-
-        # ─── قسم: قنوات الاشتراك ───
-        keyboard.add(inline_button("╭─ 📢 قنوات الاشتراك ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("➕ إضافة قناة 🟢", STYLE_SUCCESS, callback_data="admin::add_channel"),
-                     inline_button("➖ إزالة قناة 🔴", STYLE_DANGER, callback_data="admin::remove_channel"))
-        keyboard.add(inline_button("📋 عرض القنوات 🔵", STYLE_PRIMARY, callback_data="admin::list_channels"))
-
-        # ─── قسم: الصور المصغرة ───
-        keyboard.add(inline_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("🖼️ صورة افتراضية 🟡", STYLE_PRIMARY, callback_data="admin::set_default_thumb"),
-                     inline_button("📸 تحديث يدوي 🔵", STYLE_PRIMARY, callback_data="admin::manual_thumb"))
-
-        # ─── قسم: أدوات الصيانة ───
-        keyboard.add(inline_button("╭─ 🛠️ أدوات الصيانة ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("✨ إصلاح شامل للأرشيف 🟣", STYLE_PRIMARY, callback_data="admin::heal_archive"))
-        keyboard.add(inline_button("📄 عرض المستندات 🔵", STYLE_PRIMARY, callback_data="admin::list_documents"),
-                     inline_button("🔄 تحويل → فيديو 🟢", STYLE_SUCCESS, callback_data="admin::convert_all_docs"))
-
-        # ─── قسم: البث والإحصائيات ───
-        keyboard.add(inline_button("╭─ 📊 البث والإحصائيات ─╮", STYLE_PRIMARY, callback_data="noop"))
-        keyboard.add(inline_button("📢 بث رسالة 🟠", STYLE_SUCCESS, callback_data="admin::broadcast"))
-        keyboard.add(inline_button("📊 إحصائيات البوت 🟣", STYLE_PRIMARY, callback_data="admin::stats"),
-                     inline_button("👤 عدد المشتركين 🔵", STYLE_PRIMARY, callback_data="admin::sub_count"))
-        return keyboard
-
     @bot.message_handler(commands=["admin"])
     @check_admin
     def admin_panel(message):
-        bot.send_message(message.chat.id, "🎛️ أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:", reply_markup=generate_admin_panel())
+        send_admin_panel(bot, message.chat.id)
+
+    @bot.message_handler(func=lambda message: message.text and message.chat.type == "private"
+                         and (message.text or "").strip().isdigit()
+                         and 1 <= len((message.text or "").strip()) <= 6)
+    @check_admin
+    def miniapp_limit_value(message):
+        """رقم حد فتح المكتبة (يُطلب من admin::set_miniapp_limit ثم يأتي رقماً هنا)."""
+        _set_miniapp_hourly_limit(bot, message.chat.id, int(message.text.strip()))
+
+    @bot.message_handler(func=lambda message: message.text == MINIAPP_IP_BUTTON_TEXT)
+    @check_admin
+    def miniapp_open_by_ip(message):
+        """بديل الأجهزة التي لا تفتح Web App: يطلب IP ثم يعرض زر فتح للمكتبة."""
+        keyboard = InlineKeyboardMarkup(row_width=1)
+        keyboard.add(inline_button("↩️ إلغاء 🟡", STYLE_DANGER, callback_data="back_to_main"))
+        waiting = bot.send_message(message.chat.id, MINIAPP_IP_PROMPT, reply_markup=keyboard)
+        bot.register_next_step_handler(waiting, lambda msg: _open_library_for_ip(bot, admin_ids, msg))
 
     @bot.message_handler(commands=["cancel"])
     @check_admin

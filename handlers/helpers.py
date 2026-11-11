@@ -20,6 +20,7 @@ from db_manager import (
     get_videos_ratings_bulk,  # إضافة الدالة الجديدة
 )
 from utils import video_title, clean_display_title
+from miniapp import miniapp_url, MINIAPP_KEYBOARD_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,16 @@ def main_menu(bot_username=None):
         keyboard_button("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS),
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
+    # زر التطبيق المصغّر يظهر فقط عندما يكون APP_URL رابط HTTPS صالحاً.
+    # لا نضع web_app هنا لأن بعض عملاء تيليجرام لا تدعمها في لوحة المفاتيح
+    # الرئيسية؛ الضغط على الزر يصل كرسالة نصية ويعالجها user_handlers.
+    try:
+        miniapp_active = bool(miniapp_url())
+    except Exception as exc:
+        logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
+        miniapp_active = False
+    if miniapp_active:
+        markup.row(keyboard_button(MINIAPP_KEYBOARD_TEXT, STYLE_PRIMARY))
     
     return markup
 

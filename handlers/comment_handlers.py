@@ -12,7 +12,7 @@ import uuid
 from telebot import types
 import db_manager as db
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
-from utils import MAX_DISPLAY_TITLE_LENGTH
+from utils import MAX_DISPLAY_TITLE_LENGTH, video_title
 from .thread_format import (
     STATUS_ANSWERED,
     STATUS_READ,
@@ -32,6 +32,12 @@ STATE_REPLYING_COMMENT = 'replying_comment'
 THREAD_PAGE_SIZE = getattr(db, 'THREAD_PAGE_SIZE', 10)
 # قائمة الأدمن - تُحدَّث عند تسجيل المعالجات (user_handlers.register)
 ADMIN_IDS = []
+# البوت المستخدم في إشعارات الأدمن الفورية (يُضبط أيضاً عند التسجيل)
+_admin_notify_bot = None
+# مفاتيح الإشعارات المُرسلة: (comment_id, followup) - إشعار واحد لكل استفسار/متابعة
+_NOTIFIED_KEYS = []
+# حد مقتطف الإشعار (مهروب قبل التقليم)
+ADMIN_ALERT_EXCERPT_LENGTH = 200
 PAGE_SIZE = getattr(db, 'VIDEOS_PER_PAGE', 10)
 
 
@@ -315,6 +321,11 @@ def process_comment_text(bot, message):
             return True
 
         db.clear_user_state(user_id)
+        # إشعار فوري للأدمن (فشله لا يؤثر على تأكيد العضو أبداً)
+        _notify_admins_new_comment(
+            comment_id, followup=False, bot=bot, body=text,
+            comment={"id": comment_id, "video_id": video_id, "user_id": user_id,
+                     "username": username, "comment_text": text})
         _safe_send(
             bot,
             user_id,
@@ -348,7 +359,7 @@ def _append_followup(bot, user_id, comment_id, text):
     if not message_id:
         _safe_send(bot, user_id, "❌ فشل إرسال رسالتك، حاول مرة أخرى")
         return False
-    _notify_admins_new_comment(comment_id, followup=True)
+    _notify_admins_new_comment(comment_id, followup=True, bot=bot, body=text)
     _safe_send(
         bot,
         user_id,
@@ -359,9 +370,116 @@ def _append_followup(bot, user_id, comment_id, text):
     return True
 
 
-def _notify_admins_new_comment(comment_id, followup=False):
-    """علامة لطبقة المستخدمين: تُستدعى من هناك بعد جلب قائمة الأدمن (لا يوجد دخول عالمي هنا)."""
-    return None
+def _notify_admins_new_comment(comment_id, followup=False, comment=None, bot=None, body=None):
+    """
+    إشعار فوري لكل الأدمن (من handlers.user_handlers عند التسجيل) باستفسار/متابعة جديدة.
+
+    - لا يرمي استثناء أبداً: فشل إشعار أي أدمن يُسجَّل كتحذير ولا يفشل عمل العضو.
+    - لا يعيد إرسال الإشعار لنفس العنوان (comment_id, followup) مرتين.
+    - ``comment``/``body`` يُمرَّران من السياق (الرد في المحادثة) لتفادي استعلامات إضافية.
+    """
+    try:
+        key = (int(comment_id), bool(followup))
+    except (TypeError, ValueError):
+        return False
+    if key in _NOTIFIED_KEYS:
+        return False
+    _NOTIFIED_KEYS.append(key)
+    try:
+        notifier = bot if bot is not None else _admin_notify_bot
+        if notifier is None:
+            logger.warning("Admin notification for comment %s skipped: no bot bound", comment_id)
+            return False
+        comment = comment or db.get_comment_by_id(comment_id)
+        if not comment:
+            logger.warning("Could not load comment %s for admin notification", comment_id)
+            return False
+        text = _admin_alert_content(comment, followup, body)
+        markup = _admin_alert_markup(comment_id)
+        for admin_id in sorted(set(int(a) for a in ADMIN_IDS)):
+            if int(admin_id) == _author_id(comment):
+                continue
+            try:
+                notifier.send_message(admin_id, text, parse_mode="HTML", reply_markup=markup)
+            except Exception as exc:
+                logger.warning("Could not notify admin %s about comment %s: %s",
+                               admin_id, comment_id, exc)
+        return True
+    except Exception as exc:
+        logger.warning("Admin notification for comment %s failed: %s", comment_id, exc)
+        return False
+
+
+def _author_id(comment):
+    try:
+        return int(comment.get('user_id'))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+_TITLE_FIELDS = ('display_title', 'video_caption', 'caption', 'video_name', 'file_name')
+
+
+def _has_title(comment):
+    return any(comment.get(field) for field in _TITLE_FIELDS)
+
+
+def _video_for(comment_id):
+    """أفضل جهد لجلب صف الفيديو لعنوان الإشعار من رقم التعليق (رمز تعليق فقط)."""
+    getter = getattr(db, 'get_comment_by_id', None)
+    if getter is None:
+        return None
+    try:
+        fetched = getter(comment_id)
+    except Exception as exc:
+        logger.warning("Could not load placeholder comment %s: %s", comment_id, exc)
+        return None
+    video_id = _parse_int((fetched or {}).get('video_id'))
+    if not video_id:
+        return None
+    video_getter = getattr(db, 'get_video_title_source', None)
+    if video_getter is None:
+        return None
+    try:
+        return video_getter(video_id)
+    except Exception as exc:
+        logger.warning("Could not load video %s for comment %s: %s", video_id, comment_id, exc)
+        return None
+
+
+def _admin_alert_markup(comment_id):
+    """أزرار الإشعار الفوري: رد الآن + عرض المحادثة كاملة."""
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        inline_button("✍️ رد الآن 🟢", STYLE_SUCCESS, callback_data=f"reply_comment::{comment_id}"),
+        inline_button("👁️ المحادثة كاملة 🔵", STYLE_PRIMARY, callback_data=f"thread_view::{comment_id}::0"),
+    )
+    return markup
+
+
+def _admin_alert_content(comment, followup=False, body=None):
+    """نص الإشعار: العنوان + العضو + مقتطف قصير مهروب + رقم المحادثة."""
+    comment_id = _parse_int(comment.get('id')) or comment.get('id')
+    excerpt_source = body or comment.get('comment_text')
+    if followup and not excerpt_source:
+        try:
+            latest = db.get_latest_thread_message(comment_id)
+        except Exception:
+            latest = None
+        excerpt_source = (latest or {}).get('body')
+    header = "➕ <b>رسالة متابعة جديدة</b>" if followup else "📥 <b>استفسار جديد</b>"
+    # عند عدم توفر عنوان محفوظ في الصف نعيد تعبئة العنوان من جدول الفيديو (أفضل جهد)
+    title_source = comment if _has_title(comment) else (_video_for(comment_id) or comment)
+    title = safe_html(video_title(title_source), 80) or "غير متوفر"
+    text = (
+        f"{header}\n"
+        f"💬 محادثة #{safe_html(comment_id, 20)}\n"
+        f"📹 الفيديو: {title}\n"
+        f"👤 العضو: @{safe_html(comment.get('username') or 'مستخدم', 40)} "
+        f"(ID: {safe_html(comment.get('user_id'), 20)})\n\n"
+        f"<b>المقتطف:</b>\n<blockquote>{safe_html(excerpt_source, ADMIN_ALERT_EXCERPT_LENGTH)}</blockquote>"
+    )
+    return text
 
 
 def show_user_comments(bot, user_id, page=0, caller=None, message=None):

@@ -19,6 +19,7 @@ from telebot.types import Update
 # استيراد الوحدات المخصصة
 from db_manager import verify_and_repair_schema
 from handlers import register_all_handlers
+from handlers.commands import publish_command_menu
 from state_manager import state_manager
 from history_cleaner import start_history_cleanup
 
@@ -1166,6 +1167,21 @@ def telegram_file_proxy(file_path):
     except HTTPException:
         raise
 
+@app.route("/admin/publish_commands", methods=["POST"])
+@management_route
+def admin_publish_commands():
+    """إعادة نشر قائمة الأوامر (BotCommand) للأعضاء والأدمن. يعيد التقرير فقط بلا أسرار."""
+    try:
+        report = publish_command_menu(bot, ADMIN_IDS)
+        logger.info("✅ Command menu re-published from management route")
+        return jsonify({"status": "success", "report": report})
+    except HTTPException:
+        raise
+    except Exception as e:
+        # لا نكشف أي توكن أو تفاصيل حساسة
+        logger.error(f"Publish commands error: {type(e).__name__}")
+        return jsonify({"status": "error", "message": "server_error"}), 500
+
 @app.route("/admin/diagnose_file_ids", methods=["GET", "POST"])
 @management_route
 def admin_diagnose_file_ids():
@@ -1945,6 +1961,32 @@ def _set_ready_state(state, detail=None):
     app.config["READY_DETAIL"] = detail
     return state
 
+
+def _miniapp_hourly_limit():
+    """حد فتح المكتبة لكل IP في الساعة (إعداد الأدمن، 0 = بلا حد)."""
+    try:
+        from handlers.admin_handlers import miniapp_hourly_limit_by_ip
+        return miniapp_hourly_limit_by_ip()
+    except Exception as exc:
+        logger.warning(f"⚠️ Mini App hourly limit unavailable: {type(exc).__name__}")
+        return 0
+
+
+def _register_miniapp():
+    """تسجيل التطبيق المصغّر: فشله لا يؤثر على البوت أو الجهوزية إطلاقاً."""
+    try:
+        from miniapp import register_miniapp
+        registered = register_miniapp(app, bot, hourly_limit_provider=_miniapp_hourly_limit)
+        if registered:
+            logger.info("✅ Mini App routes ready under /app")
+        else:
+            logger.info("Mini App routes were already registered")
+        return bool(registered)
+    except Exception as exc:
+        # لا نص خطأ خام في السجلات (قد يحوي تفاصيل إعداد)
+        logger.warning(f"⚠️ Mini App not registered (bot unaffected): {type(exc).__name__}")
+        return False
+
 def init_bot():
     logger.info("🤖 Initializing bot...")
     _set_ready_state("initializing")
@@ -1966,6 +2008,17 @@ def init_bot():
         logger.error(f"❌ Handlers error: {e}")
         _set_ready_state("handlers_error", "handler registration failed")
         return False
+
+    try:
+        # قائمة الأوامر الأصلية (BotCommand): فشلها لا يؤثر على الجهوزية إطلاقاً
+        report = publish_command_menu(bot, ADMIN_IDS)
+        if report.get("default"):
+            logger.info("✅ Command menu published (default + %s admin scopes)",
+                        len(report.get("admins") or {}))
+        else:
+            logger.warning("⚠️ Command menu not published for default scope")
+    except Exception as e:
+        logger.warning(f"⚠️ Command menu publish failed (readiness unaffected): {type(e).__name__}")
     
     try:
         # إعداد webhook: لا حذف مسبق، ولا حذف للتحديثات المعلّقة إلا بالطلب الصريح
@@ -1990,6 +2043,11 @@ def init_bot():
     start_history_cleanup()
     
     return True
+
+
+# --- التطبيق المصغّر (Mini App): مسارات /app إضافية، معزولة عن فشل الإقلاع ---
+_register_miniapp()
+
 
 # --- تشغيل التطبيق ---
 if __name__ == "__main__":

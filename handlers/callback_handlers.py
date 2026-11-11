@@ -341,6 +341,12 @@ def register(bot, admin_ids):
                     comment_handlers.prompt_title_name(bot, user_id)
                     return
 
+                elif sub_action == "set_miniapp_limit":
+                    # إعدادات التطبيق المصغّر: إعادة اللوحة مع زر تحديد الحد
+                    bot.answer_callback_query(call.id)
+                    admin_handlers.handle_set_miniapp_limit(bot, user_id)
+                    return
+
                 elif sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
                     keyboard.add(inline_button("📂 تصنيف رئيسي جديد 🟢", STYLE_SUCCESS, callback_data="admin::add_cat_main"))

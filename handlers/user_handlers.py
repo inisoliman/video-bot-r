@@ -1,8 +1,9 @@
 # handlers/user_handlers.py
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 import logging
+from urllib.parse import quote
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 
 from db_manager import (
@@ -18,12 +19,110 @@ from .helpers import (
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
 from utils import extract_video_metadata
+from miniapp import MINIAPP_KEYBOARD_TEXT, miniapp_url
 from state_manager import (
     set_user_waiting_for_input, States, get_user_waiting_context, 
     clear_user_waiting_state, state_handler 
 )
 
 logger = logging.getLogger(__name__)
+
+# --- التطبيق المصغّر (Mini App) ---
+LIBRARY_COMMAND = "library"
+LIBRARY_BUTTON_TEXT = "📱 فتح مكتبة الفيديوهات"
+# المعامل الذي يحقنه تيليجرام عند فتح رابط web_app (داخله الـ initData الحقيقي)
+_INITDATA_QUERY_PARAM = "tgWebAppData"
+# الأوامر التي يسجّلها هذا الملف فعلياً (الأمر الوحيد: handlers/commands.py)؛
+# تُستخدم لمطابقة القائمة المنشورة بالمُسجَّل فعلاً
+REGISTERED_COMMANDS = frozenset({
+    "start", "search", LIBRARY_COMMAND, "my_comments", "myid", "cancel",
+    "title", "edit_title", "comments", "delete_all_comments", "delete_user_comments",
+    "delete_old_comments", "comments_stats",
+})
+
+
+def library_webapp_url():
+    """رابط يفتح التطبيق المصغّر من داخل تيليجرام كرابط web_app صالح.
+
+    Telegram.WebApp.openTelegramLink لا يفتح تطبيقات الويب إنما روابط t.me،
+    والرابط العادي ``https://host/app`` يُفتح في المتصفح خارج تيليجرام. المعامل
+    ``tgWebAppData`` (يحقنه تيليجرام بالـ initData الحقيقي) يجعل الرابط يُفتح
+    كتطبيق مصغّر داخل تيليجرام. تيليجرام يقبل عناوين الويب المصغّر حتى 512 حرفاً.
+    """
+    base = miniapp_url()
+    if not base:
+        return None
+    limit = 512 - len(f"?{_INITDATA_QUERY_PARAM}=")
+    base = base.encode("utf-8")[:limit].decode("utf-8", "ignore")
+    return f"{base}?{_INITDATA_QUERY_PARAM}={quote('{}', safe='')}"
+
+
+def build_library_markup():
+    """لوحة زر واحدة تفتح التطبيق المصغّر، أو None إذا لم يكن APP_URL بصيغة https."""
+    url = library_webapp_url()
+    if not url:
+        return None
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    # InlineKeyboardButton المباشر (لا نمط ملوّن): تيليجرام يرفض style مع web_app
+    keyboard.add(InlineKeyboardButton(LIBRARY_BUTTON_TEXT, web_app=WebAppInfo(url=url)))
+    return keyboard
+
+
+def miniapp_webapp_url():
+    """مرادف لـ library_webapp_url (يبقى الاسم متاحاً للمستدعين القدامى)."""
+    return library_webapp_url()
+
+
+def _registered_command_names(bot):
+    """الأوامر المسجّلة فعلاً على bot (قراءة فقط؛ None إذا تعذّرت المعرفة).
+
+    pyTelegramBotAPI 4.x يخزّن ``bot.message_handlers`` كقائمة قواميس
+    ``{"function", "pass_bot", "filters"}`` حيث ``filters["commands"]`` = أسماء
+    الأوامر؛ الإصدارات/الاختبارات الأقدم تعرّض كائنات ``_handlers`` بخاصية filters.
+    """
+    handlers = None
+    for attribute in ("message_handlers", "_message_handlers", "_handlers"):
+        collected = getattr(bot, attribute, None)
+        if isinstance(collected, (list, tuple)) and collected:
+            handlers = collected
+            break
+    if not handlers:
+        return None
+    registered = set()
+    for handler in handlers:
+        filters = handler.get("filters") if isinstance(handler, dict) else getattr(handler, "filters", None)
+        if not isinstance(filters, dict):
+            continue
+        for item in filters.get("commands") or []:
+            name = item if isinstance(item, str) else getattr(item, "commands", None)
+            if isinstance(name, str):
+                registered.add(name.strip().lower())
+            elif name:
+                registered.update(str(c).lower() for c in name)
+    return registered
+
+
+def _reconcile_published_menu(bot):
+    """لا يُنشر أمر بلا معالج: قائمة الأوامر المنشورة تُطابق ما سُجّل فعلاً.
+
+    أثناء register() نعرف بدقة الأوامر المسجّلة (حتى مع bot وهمي في الاختبارات)،
+    لذلك نحذف من MEMBER_COMMANDS أي اسم من REGISTERED_COMMANDS يفتقد معالجاً.
+    """
+    registered = _registered_command_names(bot)
+    if registered is None:
+        return None
+    try:
+        from .commands import MEMBER_COMMANDS
+    except ImportError:
+        return None
+    for index in range(len(MEMBER_COMMANDS) - 1, -1, -1):
+        name = MEMBER_COMMANDS[index][0]
+        # حذف فقط ما نتوقع أن نكون سجّلناه هنا، حتى لا تُمس أوامر الإدارة
+        if name in REGISTERED_COMMANDS and name not in registered:
+            del MEMBER_COMMANDS[index]
+            logger.warning(f"⚠️ /{name} has no handler; removed from the published command menu")
+    return MEMBER_COMMANDS
+
 
 def register(bot, channel_id, admin_ids):
 
@@ -94,7 +193,8 @@ def register(bot, channel_id, admin_ids):
             "• 🔍 البحث عن فيديوهات معينة\n\n"
             f"🔍 *بحث سريع في أي محادثة:*\n"
             f"اكتب: `@{bot_info.username} كلمة البحث`\n\n"
-            "استمتع بوقتك! 😊"
+            + ("📱 المكتبة المصغّرة متاحة عبر /library\n\n" if library_webapp_url() else "")
+            + "استمتع بوقتك! 😊"
         )
         
         bot.reply_to(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="Markdown")
@@ -102,6 +202,18 @@ def register(bot, channel_id, admin_ids):
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):
         bot.reply_to(message, f"معرف حسابك هو: `{message.from_user.id}`", parse_mode="Markdown")
+
+    @bot.message_handler(commands=[LIBRARY_COMMAND])
+    def handle_library_command(message):
+        """فتح مكتبة الفيديوهات كتطبيق مصغّر داخل تيليجرام (خاص فقط)."""
+        if message.chat.type != "private":
+            bot.reply_to(message, "📱 مكتبة الفيديوهات متاحة في المحادثة الخاصة فقط. أرسل /library هناك.")
+            return
+        markup = build_library_markup()
+        if markup is not None:
+            bot.reply_to(message, "📱 <b>مكتبة الفيديوهات</b>\nافتح التطبيق المصغّر من الزر أدناه:", reply_markup=markup)
+        else:
+            bot.reply_to(message, "📱 مكتبة الفيديوهات غير متاحة حالياً. استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")
 
     # [تعديل] المطابقة بـ `in` لتدعم النصوص القديمة والجديدة (بعد إضافة الدوائر الملوّنة 🟢🔴🟡🔵🟣🟠)
     @bot.message_handler(func=lambda message: message.text and "عرض كل الفيديوهات" in message.text)
@@ -132,6 +244,15 @@ def register(bot, channel_id, admin_ids):
     @bot.message_handler(func=lambda message: message.text and "الفيديوهات الشائعة" in message.text)
     def handle_popular_videos_button(message):
         show_popular_videos(message)
+
+    @bot.message_handler(func=lambda message: message.text and MINIAPP_KEYBOARD_TEXT in message.text)
+    def handle_miniapp_button(message):
+        """زر لوحة المفاتيح الرئيسية يحمل نفس نص الأولوية: الضغط يفتح المكتبة."""
+        markup = build_library_markup()
+        if markup is None:
+            bot.reply_to(message, "📱 مكتبة الفيديوهات غير متاحة حالياً. استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")
+            return
+        bot.reply_to(message, "📱 <b>مكتبة الفيديوهات</b>\nافتح التطبيق المصغّر من الزر أدناه:", reply_markup=markup)
 
     @bot.message_handler(func=lambda message: message.text and message.text.startswith("🔍 بحث"))
     def handle_search_button(message):
@@ -260,8 +381,15 @@ def register(bot, channel_id, admin_ids):
 
     try:
         comment_handlers.ADMIN_IDS[:] = list(admin_ids)
+        comment_handlers._admin_notify_bot = bot
     except Exception as exc:
         logger.warning(f"Could not publish admin list to comment handlers: {exc}")
+
+    # لا يُنشر أمر في القائمة بلا معالج مسجّل (يُحذف /library تلقائياً إن غاب)
+    try:
+        _reconcile_published_menu(bot)
+    except Exception as exc:
+        logger.warning(f"Could not reconcile command menu: {type(exc).__name__}")
     
     # معالج النصوص للتعليقات والردود
     @bot.message_handler(func=lambda message: message.text and not message.text.startswith("/") and message.chat.type == "private", content_types=["text"])

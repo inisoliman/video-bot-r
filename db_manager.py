@@ -1357,6 +1357,71 @@ def search_videos_for_inline(query, offset=0, limit=50):
         limit, offset                           # Limit & Offset
     ), fetch="all")
 
+# ==============================================================================
+# التطبيق المصغّر (Mini App) - دوال قراءة فقط
+# ==============================================================================
+
+def get_miniapp_categories():
+    """التصنيفات مع عدد الفيديوهات في كل تصنيف (قراءة فقط، بلا بيانات حساسة)."""
+    query = """
+        SELECT c.id AS id, c.name AS name, c.parent_id AS parent_id,
+               COUNT(v.id) AS count
+        FROM categories c
+        LEFT JOIN video_archive v ON v.category_id = c.id
+        GROUP BY c.id, c.name, c.parent_id
+        ORDER BY c.name
+    """
+    rows = execute_query(query, fetch="all") or []
+    result = []
+    for row in rows:
+        result.append({
+            'id': row.get('id'),
+            'name': row.get('name') or '',
+            'parent_id': row.get('parent_id'),
+            'count': int(row_count(row, 'count')),
+        })
+    return result
+
+
+def get_miniapp_video(video_id):
+    """فيديو واحد لحاجات التطبيق المصغّر: بلا file_id ولا chat_id في النتيجة."""
+    query = """
+        SELECT v.id AS id, v.caption AS caption, v.file_name AS file_name,
+               v.display_title AS display_title, v.metadata AS metadata,
+               v.view_count AS view_count, v.thumbnail_file_id AS has_thumbnail,
+               c.name AS category_name
+        FROM video_archive v
+        LEFT JOIN categories c ON v.category_id = c.id
+        WHERE v.id = %s
+    """
+    row = execute_query(query, (video_id,), fetch="one")
+    if not row:
+        return None
+    return {
+        'id': row.get('id'),
+        'caption': row.get('caption'),
+        'file_name': row.get('file_name'),
+        'display_title': row.get('display_title'),
+        'metadata': row.get('metadata'),
+        'view_count': row.get('view_count') or 0,
+        'has_thumbnail': bool(row.get('has_thumbnail')),
+        'category_name': row.get('category_name'),
+    }
+
+
+def get_miniapp_video_thumbnail(video_id):
+    """thumbnail_file_id للفيديو - للاستخدام الداخلي فقط (وسيط الصور في miniapp)."""
+    row = execute_query("SELECT thumbnail_file_id FROM video_archive WHERE id = %s",
+                        (video_id,), fetch="one")
+    if not row:
+        return None
+    try:
+        value = row['thumbnail_file_id']
+    except (KeyError, IndexError, TypeError):
+        return None
+    return str(value) if value else None
+
+
 def update_video_thumbnail(video_id, thumbnail_file_id):
     """
     تحديث thumbnail_file_id للفيديو.

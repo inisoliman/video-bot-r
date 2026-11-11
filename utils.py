@@ -72,10 +72,10 @@ def video_title(video, fallback=VIDEO_TITLE_FALLBACK):
     title = clean_display_title(_field(video, 'display_title'))
     if title:
         return title
-    title = clean_display_title(_field(video, 'caption'))
+    title = clean_display_title(_field(video, 'caption') or _field(video, 'video_caption'))
     if title:
         return title
-    title = clean_display_title(_field(video, 'file_name'))
+    title = clean_display_title(_field(video, 'file_name') or _field(video, 'video_name'))
     return title or fallback
 
 

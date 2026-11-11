@@ -12,3 +12,6 @@ __pycache__/
 .clinerules/
 .codex/
 .vscode/
+
+# Local visual QA artifacts
+docs/screenshots/

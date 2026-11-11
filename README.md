@@ -8,8 +8,15 @@ webhook service on Render (`python webhook_bot.py`), with PostgreSQL for storage
 - ✅ **Webhook Mode**: Flask entry point, `POST /bot<token>` receives Telegram updates
 - ✅ **Inquiry threads**: private member/admin conversations per video comment, with
   unread badges, pagination and legacy replies kept readable
+- ✅ **Instant admin alerts**: every new inquiry/follow-up pings the admins with a
+  one-tap "رد الآن" button (reply) and "المحادثة كاملة"
 - ✅ **Display titles**: admins can set an archive-only title without renaming the
-  channel message (`caption`/`file_name`/`file_id` stay untouched)
+  channel message (`caption`/`file_name`/`file_id` stay untouched): by name
+  (`old => new`) or by ID
+- ✅ **Native command menu**: `setMyCommands` publishes Arabic descriptions for members
+  and an extended admin-only list per admin chat; the ☰ menu button opens them
+- ✅ **Mini App library** (`/app`): in-Telegram grid of cards with thumbnails, live
+  search, category chips, paging and favorites (identity from validated `initData`)
 - ✅ **Connection Pooling**: optimized PostgreSQL connections
 - ✅ **Additive auto-migration**: schema bootstrap runs on every boot
   (`verify_and_repair_schema`), only `CREATE ... IF NOT EXISTS` / `ADD COLUMN IF NOT
@@ -18,6 +25,17 @@ webhook service on Render (`python webhook_bot.py`), with PostgreSQL for storage
 - ✅ **Favorites, history, ratings, categories, search, inline mode**
 - ✅ **Admin tools**: `/admin/*` maintenance routes (authenticated, see below)
 - ✅ **Offline test suite**: `tests/` runs without network, database or Telegram
+
+### Library (pyTelegramBotAPI 4.37.1)
+The client library is pinned to `4.37.1` (Bot API 10.2/10.3 era). The upgrade was
+audited against the previous `4.33.0` before applying: the only API removals are
+inline-result thumbnail aliases, a `Bot(...)` constructor flag and the old
+`MenuButtonWebApp` shape — none of them used by this bot. `4.33.0` already supported
+`style=`, `WebAppInfo`, `MenuButton*` and `set_my_commands`, so the upgrade by itself
+adds no user-facing feature; it mainly keeps the client current and adds `aiohttp`
+as a hard dependency (installed by `pip install -r requirements.txt`). HTML Widgets
+(Bot API 10.4) are **not** exposed by the library yet, so the bot does not use them.
+Details: `docs/pytba-upgrade-audit.md`.
 
 ## 🚀 Deployment (Render.com)
 
@@ -39,6 +57,7 @@ accepted as an alternative name in older deployments.
 | `WEBHOOK_MANAGEMENT_TOKEN` | unset | Bearer token for `/set_webhook`, `/webhook_info` and `/admin/*`. Unset ⇒ those routes answer **503** and the bot still runs. |
 | `WEBHOOK_SECRET` | `default_secret` | Telegram `secret_token` for the webhook. Also used as the management token **only** when set to a real (non-default) value. |
 | `WEBHOOK_DROP_PENDING` | `0` | `1` makes boot-time `setWebhook` drop pending updates. Leave unset to keep queued updates. |
+| `MINIAPP_BOT_USERNAME` | bot `@username` from `getMe` | Username used for the "open in Telegram" deep link inside the Mini App. |
 | `PORT` | `10000` | HTTP port (Render sets this automatically). |
 
 The literal default `default_secret` is never accepted as a credential, so an
@@ -103,6 +122,11 @@ token is added server-side and never appears in a client-visible URL or in the l
 | `GET` | `/webhook_info` | management token | Webhook status (URL redacted) |
 | `GET` | `/thumbnail/<file_id>` | – | Redirect to the token-free file proxy |
 | `GET` | `/telegram_file/<path>` | – | Server-side Telegram file redirect |
+| `GET` | `/app` | – | Mini App library page (inside Telegram) |
+| `GET` | `/app/api/library`, `/app/api/categories`, `/app/api/video/<id>` | – | Mini App read APIs (no `file_id`/`chat_id` in responses) |
+| `POST` | `/app/api/favorite` | Telegram `initData` (validated) | Add/remove a favorite for the signed-in user |
+| `GET` | `/app/thumb/<video_id>` | – | Redirect to `/thumbnail/...` without exposing `file_id` |
+| `POST` | `/admin/publish_commands` | management token | Re-publish the bot command menu |
 | `GET/POST` | `/admin/*` | management token | Maintenance tools |
 
 No global rate limit is applied: the webhook has a per-IP guard, management routes have
@@ -131,6 +155,16 @@ Take a database backup before the first deploy of a new version:
 ```bash
 pg_dump --no-owner --format=custom "$DATABASE_URL" > backup_before_deploy.dump
 ```
+
+If `pg_dump` is not installed on the machine, this repository ships an equivalent
+read-only plain-SQL dump (single `REPEATABLE READ` snapshot, `COPY` data):
+
+```bash
+DATABASE_URL=... python scripts/pg_backup.py docs/backup.sql
+```
+
+`docs/backup.sql` contains every `file_id` and user row: it is **gitignored** and must
+never be committed or shared.
 
 ### Manual rollback
 The changes are additive, so a rollback is a code rollback plus *optional* cleanup —
@@ -172,11 +206,22 @@ covered by the offline suite:
 8. Post a video in the archive channel and confirm the bot indexes it
    (`channel_post` handling) without dropping other updates.
 9. Confirm `/admin/db_stats` returns 401 without the management token and 200 with it.
+10. Open the ☰ menu: member commands appear with Arabic descriptions; as an admin the
+    extended list appears in your private chat (re-publish with
+    `POST /admin/publish_commands` if it looks stale).
+11. Admin panel → «✏️ تعديل اسم الفيديو»: type an existing name, confirm the match, send
+    the new name; the new title shows in search/lists and the channel caption is
+    unchanged.
+12. A member sends a new inquiry: every admin receives an alert with «رد الآن» that
+    opens the reply prompt for that exact thread.
+13. Send `/library` in private (or press «📱 مكتبة الفيديو»): the Mini App opens with
+    thumbnail cards; search, a category chip, next/previous, and the favorite button
+    persist after reloading the app.
 
 ## 🛠️ Development
 ```bash
 python -m unittest discover -s tests -v
-python -m compileall -q handlers db_manager.py state_manager.py webhook_bot.py utils.py tests
+python -m compileall -q handlers db_manager.py state_manager.py webhook_bot.py utils.py miniapp.py tests scripts
 ```
 
 The suite is offline by design: `tests/__init__.py` sets `TELEGRAM_HTTP_BLOCKED=1` and
