@@ -3,7 +3,8 @@
 # ملف: miniapp.py
 # الوصف: مكتبة الفيديوهات كتطبيق مصغّر (Telegram Mini App / Web App).
 #        يضيف مسارات قراءة فقط تحت /app، وصفحة HTML واحدة مكتفية بذاتها
-#        (بلا CDN)، ووسيطاً للصور المصغرة، وتوثيقاً لتوقيع initData.
+#        (بلا CDN عدا سكربت Telegram Web App الرسمي)، ووسيطاً للصور المصغرة،
+#        وتوثيقاً لتوقيع initData.
 #        كل الكود هنا إضافي: لا يعدّل أي سلوك قائم في البوت.
 # ==============================================================================
 
@@ -372,6 +373,12 @@ header{position:sticky;top:0;z-index:5;background:var(--bg);
 .search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);
   font-size:16px;padding:11px 0}
 .search input::placeholder{color:var(--muted)}
+.chips-wrap{position:relative}
+.chips-wrap::before,.chips-wrap::after{content:"";position:absolute;top:10px;bottom:2px;
+  width:24px;z-index:1;pointer-events:none;opacity:0;transition:opacity .15s}
+.chips-wrap::before{inset-inline-start:0;background:linear-gradient(to left,var(--bg),transparent)}
+.chips-wrap::after{inset-inline-end:0;background:linear-gradient(to right,var(--bg),transparent)}
+.chips-wrap.fade-start::before,.chips-wrap.fade-end::after{opacity:1}
 .chips{display:flex;gap:8px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none;
   -webkit-overflow-scrolling:touch}
 .chips::-webkit-scrollbar{display:none}
@@ -429,8 +436,10 @@ main{padding:12px 14px}
     <input id="q" type="search" inputmode="search" autocomplete="off" enterkeyhint="search"
            placeholder="ابحث عن فيلم أو مسلسل…" aria-label="بحث">
   </div>
-  <div class="chips" id="chips" role="group" aria-label="التصنيفات">
-    <button class="chip" type="button" data-cat="" aria-pressed="true">الكل</button>
+  <div class="chips-wrap" id="chipsWrap">
+    <div class="chips" id="chips" role="group" aria-label="التصنيفات">
+      <button class="chip" type="button" data-cat="" aria-pressed="true">الكل</button>
+    </div>
   </div>
 </header>
 <main>
@@ -444,10 +453,14 @@ main{padding:12px 14px}
   <button class="btn retry" id="retry" type="button" hidden>إعادة المحاولة</button>
 </main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script async src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 (function () {
   "use strict";
-  var tg = (window.Telegram && window.Telegram.WebApp) || null;
+  function telegramApp() {
+    return (window.Telegram && window.Telegram.WebApp) || null;
+  }
+  var initializedTelegram = null;
   var BOT_URL = __BOT_URL_JSON__;
   var PAGE_SIZE = __PAGE_SIZE__;
   var state = { query: "", category: "", page: 0, loading: false, inflight: 0,
@@ -455,17 +468,23 @@ main{padding:12px 14px}
   // أيقونة تشغيل U+25B6 مع مُحدِّد الصيغة U+FE0E حتى تُرسَم رمزاً لا إيموجي
   var OPEN_LABEL = "\\u25B6\\uFE0E فتح";
 
-  if (tg) {
+  function initTelegram() {
+    var tg = telegramApp();
+    if (!tg || tg === initializedTelegram) return;
+    initializedTelegram = tg;
     try { tg.ready(); } catch (e) {}
     try { tg.expand(); } catch (e) {}
     try {
       if (tg.colorScheme === "light") document.documentElement.style.colorScheme = "light";
     } catch (e) {}
   }
+  initTelegram();
+  var telegramSdk = document.querySelector("script[src]");
+  if (telegramSdk) telegramSdk.addEventListener("load", initTelegram);
 
   var el = function (id) { return document.getElementById(id); };
   var statusEl = el("status"), gridEl = el("grid"), chipsEl = el("chips"),
-      pagerEl = el("pager"), prevEl = el("prev"), nextEl = el("next"),
+      chipsWrapEl = el("chipsWrap"), pagerEl = el("pager"), prevEl = el("prev"), nextEl = el("next"),
       pageLabelEl = el("pageLabel"), searchEl = el("q"), toastEl = el("toast"),
       retryEl = el("retry");
 
@@ -479,12 +498,15 @@ main{padding:12px 14px}
   }
 
   function initData() {
+    var tg = telegramApp();
     return (tg && typeof tg.initData === "string") ? tg.initData : "";
   }
 
   function botUser() {
-    try { return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null; }
-    catch (e) { return null; }
+    try {
+      var tg = telegramApp();
+      return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null;
+    } catch (e) { return null; }
   }
 
   function favKey(videoId) {
@@ -633,6 +655,7 @@ main{padding:12px 14px}
       button.textContent = "✓ في المحادثة";
       toast("تم إرسال الفيديو إلى محادثتك مع البوت.");
       try {
+        var tg = telegramApp();
         if (tg && typeof tg.close === "function") {
           setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
         }
@@ -710,6 +733,37 @@ main{padding:12px 14px}
       chipsEl.appendChild(chip);
     });
     syncChips();
+    syncChipOverflow();
+  }
+
+  function syncChipOverflow() {
+    var maxScroll = Math.max(0, chipsEl.scrollWidth - chipsEl.clientWidth);
+    var position = chipsEl.scrollLeft;
+    var rtl = getComputedStyle(chipsEl).direction === "rtl";
+    var fadeStart = maxScroll > 1 && (rtl ? position < -1 : position > 1);
+    var fadeEnd = maxScroll > 1 &&
+      (rtl ? position > 1 - maxScroll : position < maxScroll - 1);
+    chipsWrapEl.classList.toggle("fade-start", fadeStart);
+    chipsWrapEl.classList.toggle("fade-end", fadeEnd);
+  }
+
+  function chipsWheelDelta(event) {
+    var vertical = event.shiftKey || Math.abs(event.deltaY) >= Math.abs(event.deltaX);
+    var delta = vertical ? (event.deltaY || event.deltaX) : event.deltaX;
+    if (event.deltaMode === 1) delta *= 16;
+    if (event.deltaMode === 2) delta *= chipsEl.clientWidth;
+    if (vertical && getComputedStyle(chipsEl).direction === "rtl") delta = -delta;
+    return delta;
+  }
+
+  function chipsCanScroll(delta) {
+    var maxScroll = Math.max(0, chipsEl.scrollWidth - chipsEl.clientWidth);
+    var position = chipsEl.scrollLeft;
+    if (maxScroll <= 1) return false;
+    if (getComputedStyle(chipsEl).direction === "rtl") {
+      return delta < 0 ? position > 1 - maxScroll : position < -1;
+    }
+    return delta > 0 ? position < maxScroll - 1 : position > 1;
   }
 
   function syncChips() {
@@ -836,6 +890,20 @@ main{padding:12px 14px}
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
   retryEl.addEventListener("click", retryLibrary);
+  chipsEl.addEventListener("scroll", syncChipOverflow, { passive: true });
+  chipsEl.addEventListener("wheel", function (event) {
+    if (event.ctrlKey) return;
+    var delta = chipsWheelDelta(event);
+    if (!delta || !chipsCanScroll(delta)) return;
+    var previous = chipsEl.scrollLeft;
+    chipsEl.scrollLeft = previous + delta;
+    // عند الطرف لا نمنع الحدث كي تبقى عجلة الصفحة طبيعية
+    if (chipsEl.scrollLeft !== previous) {
+      event.preventDefault();
+      syncChipOverflow();
+    }
+  }, { passive: false });
+  window.addEventListener("resize", syncChipOverflow);
 
   loadFavorites();
   loadCategories();

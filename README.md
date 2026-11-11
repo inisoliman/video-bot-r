@@ -26,6 +26,12 @@ webhook service on Render (`python webhook_bot.py`), with PostgreSQL for storage
 - ✅ **Admin tools**: `/admin/*` maintenance routes (authenticated, see below)
 - ✅ **Offline test suite**: `tests/` runs without network, database or Telegram
 
+The Mini App is self-contained except for the official Telegram Web App SDK at
+`https://telegram.org/js/telegram-web-app.js`. That script is the sole exception to the
+no-external-CDN rule: no other external resource, font, image or analytics is added.
+If the SDK is unavailable, browsing still works and actions requiring signed `initData`
+truthfully ask the user to open the library inside Telegram.
+
 ### Library (pyTelegramBotAPI 4.37.1)
 The client library is pinned to `4.37.1` (Bot API 10.2/10.3 era). The upgrade was
 audited against the previous `4.33.0` before applying: the only API removals are

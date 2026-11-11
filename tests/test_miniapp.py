@@ -21,6 +21,7 @@ import hmac
 import importlib
 import json
 import logging
+import re
 import unittest
 from types import SimpleNamespace
 from urllib.parse import quote
@@ -237,7 +238,7 @@ class MiniAppTestBase(support.OfflineTestCase):
 # ---------------------------------------------------------------------------
 
 class PageTest(MiniAppTestBase):
-    def test_page_is_rtl_arabic_html_without_secrets_or_cdn(self):
+    def test_page_is_rtl_arabic_html_without_secrets_or_extra_cdn(self):
         with mock.patch.dict(os.environ, {"MINIAPP_BOT_USERNAME": ""}):
             response = self.client.get("/app")
         self.assertEqual(response.status_code, 200)
@@ -247,18 +248,22 @@ class PageTest(MiniAppTestBase):
         self.assertIn('lang="ar"', body)
         self.assertIn("مكتبة الفيديو", body)
         self.assertIn("@media (prefers-color-scheme: light)", body)
-        # الصفحة تقرأ SDK تيليجرام الرسمي (يحقنه تيليجرام داخل WebView، لا نتحايل عليه)
+        # SDK تيليجرام الرسمي هو الاستثناء الوحيد من التصميم المكتفي بذاته
+        sdk_url = "https://telegram.org/js/telegram-web-app.js"
+        self.assertEqual(
+            re.findall(r'<script\b[^>]*\bsrc="([^"]+)"', body), [sdk_url])
+        self.assertEqual(body.count(sdk_url), 1)
         self.assertIn("window.Telegram && window.Telegram.WebApp", body)
         self.assertIn("tg.close()", body)
         self.assertIn('fetch("/app/api/library', body)
         self.assertIn("/app/api/favorite", body)
         self.assertIn("/app/api/open-video", body)
-        # لا أسرار ولا موارد خارجية
+        # لا أسرار ولا موارد خارجية عدا سكربت تيليجرام الرسمي
         self.assertNotIn("SECRET-BOT-TOKEN", body)
-        self.assertNotIn("http://", body)
-        self.assertNotIn("https://", body)
-        self.assertNotIn("//cdn", body)
-        self.assertNotIn("<script src", body)
+        body_without_sdk = body.replace(sdk_url, "")
+        self.assertNotIn("http://", body_without_sdk)
+        self.assertNotIn("https://", body_without_sdk)
+        self.assertNotIn("//cdn", body_without_sdk)
 
     def test_page_never_embeds_file_id_or_chat_id(self):
         body = self.client.get("/app").get_data(as_text=True)

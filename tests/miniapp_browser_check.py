@@ -9,12 +9,18 @@ installed Playwright Chromium:
   library request exposes a working retry button;
 * the OPEN button posts to ``/app/api/open-video`` with the signed ``initData`` that the
   stubbed official Telegram SDK exposes, sends exactly once on rapid clicks, and closes
-  the WebApp only after a confirmed success.
+  the WebApp only after a confirmed success;
+* the production SDK ``script src`` is fulfilled locally, while aborted and delayed SDK
+  setup leave the library usable and never fabricate an OPEN request;
+* a narrow RTL chips bar consumes wheel input only while it can move, preserves page
+  scrolling at both ends, exposes overflow fades, and keeps category filtering intact.
 
 The stub calls the production ``validate_init_data`` HMAC validator; route delivery and
 DB behavior are covered by the offline unittest modules. No BOT_TOKEN/DATABASE_URL from
-the environment is used (the process is started with them cleared), and every external
-request is aborted by the browser context.
+the environment is used (the process is started with them cleared). The official SDK URL
+is intercepted and fulfilled locally (or aborted for fallback checks); no request leaves
+the machine. Real Telegram in-app initialization and native phone touch gestures cannot
+be verified by this offline Chromium harness.
 
     python tests/miniapp_browser_check.py
 """
@@ -43,6 +49,7 @@ from flask import Flask  # noqa: E402
 from handlers import helpers  # noqa: E402
 
 TEST_BOT_TOKEN = "123456:BROWSER-CHECK-TOKEN"
+TELEGRAM_SDK_URL = "https://telegram.org/js/telegram-web-app.js"
 MEMBER_ID = support.MEMBER_ID
 PAGE_SIZE = db_manager.VIDEOS_PER_PAGE          # must come from the DB layer
 TOTAL_VIDEOS = 25                                 # three pages: 10 / 10 / 5
@@ -58,6 +65,7 @@ STATE = {
     "close_calls": 0,
     "library_mode": "ok",       # ok | slow_extras | reject
     "videos": list(range(TOTAL_VIDEOS, 0, -1)),   # ORDER BY id DESC
+    "categories": [{"id": 1, "name": "أفلام", "count": TOTAL_VIDEOS}],
 }
 
 
@@ -108,7 +116,9 @@ class StubHandler(BaseHTTPRequestHandler):
                 "total": total, "page": page, "page_size": PAGE_SIZE,
                 "has_more": bool(rows) and start + len(rows) < total})
         if parsed.path.endswith("/categories"):
-            return self._reply({"items": [{"id": 1, "name": "أفلام", "count": TOTAL_VIDEOS}]})
+            with STATE_LOCK:
+                categories = list(STATE["categories"])
+            return self._reply({"items": categories})
         if parsed.path == "/tm":
             with STATE_LOCK:
                 tm = STATE["tm_data"]
@@ -198,6 +208,13 @@ window.Telegram = window.Telegram || {};
 window.Telegram.WebApp = window.__sdk;
 """
 
+LATE_SDK_STUB = """
+window.__publishSdk = function () {
+  window.Telegram = window.Telegram || {};
+  window.Telegram.WebApp = window.__sdk;
+};
+"""
+
 
 # ---------------------------------------------------------------------------
 # Fakes for the real Flask app (the page itself is still the production one)
@@ -240,12 +257,24 @@ def install_fakes():
 
 def build_page(stub_base):
     template = miniapp.render_page()
+    if template.count(TELEGRAM_SDK_URL) != 1:
+        raise RuntimeError("Mini App page must load the official Telegram SDK exactly once")
     shim = (SHIM.replace("__STUB_BASE__", json.dumps(stub_base))
                 .replace("__USER_ID__", str(MEMBER_ID)))
-    sdk = f"<script>{SDK_STUB}</script>"
-    if "<script>" not in template:
-        raise RuntimeError("Mini App page has no script block")
-    return template.replace("<script>", shim + sdk + "<script>", 1)
+    return template.replace("<head>", "<head>" + shim, 1)
+
+
+def route_offline(route, stub_base, app_base, sdk_script):
+    """Serve only localhost and the intercepted official SDK; never use the network."""
+    if route.request.url == TELEGRAM_SDK_URL:
+        if sdk_script is None:
+            route.abort()
+        else:
+            route.fulfill(status=200, content_type="application/javascript", body=sdk_script)
+    elif route.request.url.startswith((stub_base, app_base)):
+        route.continue_()
+    else:
+        route.abort()
 
 
 # ---------------------------------------------------------------------------
@@ -312,14 +341,16 @@ def run_checks(browser, page_url, stub_base, app_base):
         if not condition:
             failures.append(label)
 
+    rendered = miniapp.render_page()
+    check("official Telegram SDK script is present exactly once",
+          rendered.count(TELEGRAM_SDK_URL) == 1 and f'src="{TELEGRAM_SDK_URL}"' in rendered)
+
     context = browser.new_context(locale="ar", viewport={"width": 420, "height": 900})
     page = context.new_page()
     console_errors = []
     page.on("pageerror", lambda exc: console_errors.append(str(exc)))
-    # No external request may leave the machine (images, fonts, anything).
-    page.route("**/*", lambda route: route.continue_()
-               if (route.request.url.startswith(stub_base)
-                   or route.request.url.startswith(app_base)) else route.abort())
+    # Execute the production script src from a local fake response, never the network.
+    page.route("**/*", lambda route: route_offline(route, stub_base, app_base, SDK_STUB))
     bc = BrowserCheck(page)
 
     with STATE_LOCK:
@@ -496,6 +527,228 @@ def run_checks(browser, page_url, stub_base, app_base):
     return failures
 
 
+def run_sdk_resilience_checks(browser, page_url, stub_base, app_base):
+    failures = []
+
+    def check(label, condition, detail=""):
+        print(f"  {'PASS' if condition else 'FAIL'}  {label}" + (f"  [{detail}]" if detail and not condition else ""))
+        if not condition:
+            failures.append(label)
+
+    first_page = [str(i) for i in range(TOTAL_VIDEOS, TOTAL_VIDEOS - PAGE_SIZE, -1)]
+
+    # The production script tag is requested, but its network response fails.
+    context = browser.new_context(locale="ar", viewport={"width": 420, "height": 700})
+    page = context.new_page()
+    bc = BrowserCheck(page)
+    page_errors = []
+    sdk_requests = []
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+
+    def abort_sdk(route):
+        if route.request.url == TELEGRAM_SDK_URL:
+            sdk_requests.append(route.request.url)
+        route_offline(route, stub_base, app_base, None)
+
+    page.route("**/*", abort_sdk)
+    with STATE_LOCK:
+        STATE["tm_data"] = ""
+        STATE["open_requests"].clear()
+        STATE["sends"].clear()
+    page.goto(page_url)
+    bc.wait_ids(first_page)
+    check("aborted SDK response leaves the library usable",
+          bc.card_ids() == first_page and sdk_requests == [TELEGRAM_SDK_URL], sdk_requests)
+
+    with STATE_LOCK:
+        STATE["library_requests"].clear()
+    page.evaluate("""() => {
+      const query = document.getElementById('q');
+      query.value = 'فيلم';
+      query.dispatchEvent(new Event('search'));
+    }""")
+    search_ok = wait_until(
+        lambda: any(r.get("query") == "فيلم" for r in bc.state()["library_requests"])
+        and page.eval_on_selector("#next", "e => !e.disabled"), timeout=4)
+    bc.wait_ids(first_page)
+    check("aborted SDK keeps search usable", search_ok and bc.card_ids() == first_page)
+    second_page = [str(i) for i in range(TOTAL_VIDEOS - PAGE_SIZE,
+                                         TOTAL_VIDEOS - 2 * PAGE_SIZE, -1)]
+    bc.click_next(force=True)
+    bc.wait_ids(second_page)
+    bc.click_prev(force=True)
+    bc.wait_ids(first_page)
+    check("aborted SDK keeps paging usable", bc.card_ids() == first_page)
+
+    favorite = page.locator(".card .btn.fav").first
+    favorite.click()
+    page.wait_for_timeout(400)
+    stored_favorite = page.evaluate("""videoId => {
+      const favorites = JSON.parse(localStorage.getItem('miniapp_fav') || '{}');
+      return favorites['guest:' + videoId] === true;
+    }""", int(first_page[0]))
+    check("aborted SDK keeps local favorite toggling usable",
+          favorite.get_attribute("aria-pressed") == "true" and stored_favorite)
+
+    bc.button(first_page[0]).click()
+    page.wait_for_timeout(400)
+    snapshot = bc.state()
+    check("aborted SDK OPEN is truthful and posts nothing",
+          snapshot["open_requests"] == [] and snapshot["sends"] == []
+          and "تيليجرام" in bc.toast_text() and bc.toast_shown(), snapshot["open_requests"])
+    check("aborted SDK causes no uncaught page errors", not page_errors, page_errors)
+    context.close()
+
+    # The real script src executes, but WebApp is published only after the first OPEN.
+    context = browser.new_context(locale="ar", viewport={"width": 420, "height": 700})
+    page = context.new_page()
+    bc = BrowserCheck(page)
+    page_errors = []
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.route("**/*", lambda route: route_offline(route, stub_base, app_base, LATE_SDK_STUB))
+    with STATE_LOCK:
+        STATE["tm_data"] = make_init_data(TEST_BOT_TOKEN, MEMBER_ID)
+        STATE["open_requests"].clear()
+        STATE["sends"].clear()
+        STATE["deliver_mode"] = "ok"
+    page.goto(page_url)
+    bc.wait_ids(first_page)
+    sdk_absent = page.evaluate("() => !window.Telegram || !window.Telegram.WebApp")
+    check("delayed WebApp absence does not block the library", sdk_absent and bc.card_ids() == first_page)
+    bc.button(first_page[0]).click()
+    page.wait_for_timeout(400)
+    snapshot = bc.state()
+    check("OPEN before delayed WebApp is truthful and posts nothing",
+          snapshot["open_requests"] == [] and snapshot["sends"] == []
+          and "تيليجرام" in bc.toast_text(), snapshot["open_requests"])
+    published = page.evaluate("""() => {
+      if (typeof window.__publishSdk !== 'function') return false;
+      window.__publishSdk();
+      return true;
+    }""")
+    ready = wait_until(lambda: page.evaluate(
+        "() => window.Telegram && window.Telegram.WebApp && window.__sdk.initData.length > 0"))
+    if published and ready:
+        bc.button(first_page[0]).click()
+    delivered = wait_until(lambda: len(bc.state()["sends"]) == 1, timeout=6)
+    check("OPEN re-reads a late WebApp and delivers", published and ready and delivered, bc.state())
+    check("delayed WebApp path causes no uncaught page errors", not page_errors, page_errors)
+    context.close()
+    return failures
+
+
+def run_chips_checks(browser, page_url, stub_base, app_base):
+    failures = []
+
+    def check(label, condition, detail=""):
+        print(f"  {'PASS' if condition else 'FAIL'}  {label}" + (f"  [{detail}]" if detail and not condition else ""))
+        if not condition:
+            failures.append(label)
+
+    context = browser.new_context(locale="ar", viewport={"width": 420, "height": 600})
+    page = context.new_page()
+    bc = BrowserCheck(page)
+    page_errors = []
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.route("**/*", lambda route: route_offline(route, stub_base, app_base, None))
+    with STATE_LOCK:
+        STATE["categories"] = [
+            {"id": i, "name": f"تصنيف {i}", "count": 1} for i in range(1, 13)]
+        STATE["tm_data"] = ""
+        STATE["library_mode"] = "ok"
+    try:
+        page.goto(page_url)
+        page.wait_for_selector(".card", timeout=10000)
+        wait_until(lambda: page.locator(".chip").count() == 13)
+        page.wait_for_timeout(200)
+        initial = page.evaluate("""() => {
+          const chips = document.getElementById('chips');
+          const wrap = document.getElementById('chipsWrap');
+          return {
+            rtl: getComputedStyle(chips).direction === 'rtl',
+            overflow: chips.scrollWidth > chips.clientWidth,
+            position: chips.scrollLeft,
+            startFade: wrap.classList.contains('fade-start'),
+            endFade: wrap.classList.contains('fade-end'),
+            endOpacity: getComputedStyle(wrap, '::after').opacity
+          };
+        }""")
+        check("narrow RTL chips overflow with a visible end fade",
+              initial["rtl"] and initial["overflow"] and initial["position"] == 0
+              and not initial["startFade"] and initial["endFade"]
+              and initial["endOpacity"] == "1", initial)
+
+        chips_box = page.locator("#chips").bounding_box()
+        page.mouse.move(chips_box["x"] + chips_box["width"] / 2,
+                        chips_box["y"] + chips_box["height"] / 2)
+        page.mouse.wheel(0, 240)
+        page.wait_for_timeout(250)
+        moved = page.evaluate("""() => ({
+          position: document.getElementById('chips').scrollLeft,
+          pageY: window.scrollY
+        })""")
+        check("vertical wheel scrolls RTL chips without moving the page",
+              moved["position"] < 0 and moved["pageY"] == 0, moved)
+
+        end_position = page.eval_on_selector("#chips", """e => {
+          e.scrollLeft = -(e.scrollWidth - e.clientWidth);
+          return e.scrollLeft;
+        }""")
+        page.wait_for_timeout(200)
+        end_fades = page.evaluate("""() => {
+          const wrap = document.getElementById('chipsWrap');
+          return {
+            start: wrap.classList.contains('fade-start'),
+            end: wrap.classList.contains('fade-end'),
+            startOpacity: getComputedStyle(wrap, '::before').opacity
+          };
+        }""")
+        check("RTL overflow fades follow the scroll end",
+              end_fades["start"] and not end_fades["end"]
+              and end_fades["startOpacity"] == "1", end_fades)
+        page.mouse.wheel(0, 300)
+        page.wait_for_timeout(350)
+        at_left_end = page.evaluate("""() => ({
+          position: document.getElementById('chips').scrollLeft,
+          pageY: window.scrollY
+        })""")
+        check("page scroll is not hijacked at the RTL left end",
+              at_left_end["position"] == end_position and at_left_end["pageY"] > 0, at_left_end)
+
+        before_right_wheel = page.eval_on_selector("#chips", """e => {
+          e.scrollLeft = 0;
+          return { position: e.scrollLeft, pageY: window.scrollY };
+        }""")
+        page.mouse.wheel(0, -260)
+        page.wait_for_timeout(350)
+        at_right_end = page.evaluate("""() => ({
+          position: document.getElementById('chips').scrollLeft,
+          pageY: window.scrollY
+        })""")
+        check("page scroll is not hijacked at the RTL right end",
+              at_right_end["position"] == before_right_wheel["position"]
+              and at_right_end["pageY"] < before_right_wheel["pageY"], at_right_end)
+
+        with STATE_LOCK:
+            STATE["library_requests"].clear()
+        chip = page.locator(".chip[data-cat='8']")
+        chip.click()
+        wait_until(lambda: any(r.get("category_id") == "8"
+                               for r in bc.state()["library_requests"]), timeout=4)
+        requests = bc.state()["library_requests"]
+        pressed = page.locator(".chip[aria-pressed='true']")
+        check("chip click still filters and preserves aria-pressed",
+              any(r.get("category_id") == "8" for r in requests)
+              and chip.get_attribute("aria-pressed") == "true" and pressed.count() == 1,
+              requests)
+        check("chips interactions cause no uncaught page errors", not page_errors, page_errors)
+    finally:
+        context.close()
+        with STATE_LOCK:
+            STATE["categories"] = [{"id": 1, "name": "أفلام", "count": TOTAL_VIDEOS}]
+    return failures
+
+
 def main():
     os.environ.pop("BOT_TOKEN", None)      # never use real credentials in this check
     os.environ.pop("DATABASE_URL", None)
@@ -532,6 +785,8 @@ def main():
             browser = playwright.chromium.launch()
             try:
                 failures = run_checks(browser, page_url, stub_base, app_base)
+                failures += run_sdk_resilience_checks(browser, page_url, stub_base, app_base)
+                failures += run_chips_checks(browser, page_url, stub_base, app_base)
             finally:
                 browser.close()
     finally:
