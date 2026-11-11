@@ -247,9 +247,12 @@ class PageTest(MiniAppTestBase):
         self.assertIn('lang="ar"', body)
         self.assertIn("مكتبة الفيديو", body)
         self.assertIn("@media (prefers-color-scheme: light)", body)
-        self.assertIn("openTelegramLink", body)
+        # الصفحة تقرأ SDK تيليجرام الرسمي (يحقنه تيليجرام داخل WebView، لا نتحايل عليه)
+        self.assertIn("window.Telegram && window.Telegram.WebApp", body)
+        self.assertIn("tg.close()", body)
         self.assertIn('fetch("/app/api/library', body)
         self.assertIn("/app/api/favorite", body)
+        self.assertIn("/app/api/open-video", body)
         # لا أسرار ولا موارد خارجية
         self.assertNotIn("SECRET-BOT-TOKEN", body)
         self.assertNotIn("http://", body)
@@ -289,15 +292,16 @@ class LibraryApiTest(MiniAppTestBase):
     def setUp(self):
         super().setUp()
         self.fake.search_total = 40
-        self.fake.page_size = 12  # مطابق لـ LIBRARY_PAGE_SIZE
+        # حجم الصفحة من طبقة قاعدة البيانات نفسها (انظر test_miniapp_pagination)
+        self.fake.page_size = db_manager.VIDEOS_PER_PAGE
         self.fake.videos = [video_row(i, caption=f"فيلم {i}", category_name="أفلام")
-                            for i in range(1, 13)]
+                            for i in range(1, self.fake.page_size + 1)]
 
     def test_library_shape_hides_file_id_and_chat_id(self):
         response = self.client.get("/app/api/library")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("private", response.headers["Cache-Control"])
-        self.assertIn("max-age=30", response.headers["Cache-Control"])
+        # نتائج مقطّعة: لا تُخدَم من كاش وسيط مشترك
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
         payload = response.get_json()
         self.assertEqual(sorted(payload), ["has_more", "items", "page", "page_size", "total"])
         self.assertEqual(payload["page"], 0)
@@ -355,23 +359,26 @@ class LibraryApiTest(MiniAppTestBase):
         self.assertEqual(self.fake.calls, [])
 
     def test_has_more_false_when_total_equals_page(self):
-        self.fake.search_total = 12
+        # صفحة واحدة كاملة = لا زر «التالي»
+        self.fake.search_total = db_manager.VIDEOS_PER_PAGE
         payload = self.client.get("/app/api/library?page=0").get_json()
+        self.assertEqual(len(payload["items"]), db_manager.VIDEOS_PER_PAGE)
         self.assertFalse(payload["has_more"])
 
     def test_has_more_true_when_more_pages_exist(self):
         payload = self.client.get("/app/api/library?page=0").get_json()
         self.assertTrue(payload["has_more"])
         payload = self.client.get("/app/api/library?page=1").get_json()
-        self.assertTrue(payload["has_more"])  # 12 + 12 < 40
+        self.assertTrue(payload["has_more"])  # 10 + 10 < 40
 
     def test_has_more_false_on_last_page(self):
         payload = self.client.get("/app/api/library?page=3").get_json()
         self.assertEqual(payload["page"], 3)
-        self.assertFalse(payload["has_more"])  # 3*12 + 12 = 48 >= 40
+        self.assertFalse(payload["has_more"])  # 3*10 + 10 = 40 >= 40
 
     def test_short_last_page_never_reports_more(self):
-        self.fake.search_total = 14
+        # صفحة أخيرة قصيرة داخل النطاق (Total أكبر من ما وُجلب فعلاً)
+        self.fake.search_total = 12
         self.fake.videos = self.fake.videos[:2]
         payload = self.client.get("/app/api/library?page=1").get_json()
         self.assertFalse(payload["has_more"])

@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 # --- ثوابت التطبيق ---
 URL_PREFIX = "/app"
-LIBRARY_PAGE_SIZE = 12          # عدد البطاقات في كل صفحة
+# حجم الصفحة مأخوذ من db_manager: هذا هو الحجم الوحيد الذي تفهمه LIMIT/OFFSET هناك،
+# فلا يُمكِن للعميل أن يطلب حجماً آخر (كان 12 = إعادة فيديوهات وزر «التالي» دائماً مفعّلاً).
+LIBRARY_PAGE_SIZE = db_manager.VIDEOS_PER_PAGE
 MAX_PAGE_INDEX = 9999           # حماية من صفحات ضخمة أو مشوّهة
 MAX_QUERY_LENGTH = 80           # حد البحث النصي
 INIT_DATA_MAX_AGE = 24 * 3600   # صلاحية initData = 24 ساعة (مواصفة WebApp)
@@ -38,6 +40,14 @@ MINIAPP_KEYBOARD_TEXT = "📱 مكتبة الميني أب 🟣"
 
 # حدود المتغيرات البيئية (تُقرأ عند الطلب لتبقى قابلة للاختبار دون إعادة استيراد)
 _BOT_TOKEN_VARS = ("MINIAPP_BOT_TOKEN", "BOT_TOKEN")
+
+# --- إرسال الفيديو من التطبيق المصغّر إلى محادثة المستخدم الخاصة ---
+OPEN_VIDEO_SECONDS = 20           # مهلة انتظار تأكيد تيليجرام (ثوانٍ)
+OPEN_VIDEO_COOLDOWN = 3           # أقل فاصل بين إرسالين لنفس (المستخدم، الفيديو)
+OPEN_VIDEO_METRIC_WINDOW = 300    # لا تُحدَّث المشاهدة/السجل مرتين داخل هذه النافذة
+OPEN_VIDEO_MAX_ENTRIES = 512      # سقف صريح (لا ذاكرة تخصيص غير محدودة)
+MAX_REQUEST_ID_LENGTH = 64
+DEFAULT_CAPTION_TITLE = "فيديو"
 
 
 # ==============================================================================
@@ -124,7 +134,7 @@ def _title_for(row):
         first = text.split("\n")[0].strip()
         if first:
             return first[:120]
-    return "فيديو"
+    return DEFAULT_CAPTION_TITLE
 
 
 def _duration_text(row, metadata):
@@ -140,6 +150,29 @@ def _duration_text(row, metadata):
     minutes, secs = divmod(rest, 60)
     return (f"{hours:d}:{minutes:02d}:{secs:02d}" if hours
             else f"{minutes:d}:{secs:02d}")
+
+
+def _html_caption(title):
+    """تسمية HTML آمنة: تيليجرام يفسّر < > & في الشرح، والعنوان قد يحويها."""
+    return f"<b>{html_escape(str(title or DEFAULT_CAPTION_TITLE))}</b>"
+
+
+def _manual_delivery(bot):
+    """(send_video, send_document, api_errors): الإرسال المباشر من file_id.
+
+    getattr يربط دوال الصنف كما يقرأ الدوال المخزّنة على المثيل؛ كلاهما صالح للبوت
+    الحقيقي ولبدائل الاختبار. النجاح مشروط بإرجاع رسالة لا بقيمة None.
+    """
+    try:
+        from telebot.apihelper import ApiTelegramException
+        api_errors = ApiTelegramException
+    except Exception:  # noqa: BLE001
+        api_errors = Exception
+    send_video = getattr(bot, "send_video", None)
+    send_document = getattr(bot, "send_document", None)
+    return (send_video if callable(send_video) else None,
+            send_document if callable(send_document) else None,
+            api_errors)
 
 
 def _card_item(row):
@@ -177,6 +210,10 @@ def _with_category_names(items):
     for item in items:
         if not item.get('category'):
             item['category'] = str(names.get(item.get('category_id')) or "")
+    if not any(item.get('category') for item in items):
+        # لا تصنيفات مطابقة: نُسقط الحقل بدل قراءة شجرة التصنيفات بلا فائدة
+        for item in items:
+            item['category'] = ""
     return items
 
 
@@ -372,6 +409,7 @@ main{padding:12px 14px}
 .pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:16px 0}
 .pager .btn{flex:0 0 auto;min-width:96px}
 .pager .label{font-size:13px;color:var(--muted)}
+.btn.retry{display:block;width:100%;margin:4px 0 0}
 .toast{position:fixed;inset-inline:0;bottom:18px;margin:auto;max-width:88%;width:max-content;
   background:#222a3a;color:#fff;border-radius:12px;padding:10px 14px;font-size:14px;
   opacity:0;transform:translateY(8px);transition:opacity .18s,transform .18s;pointer-events:none}
@@ -380,6 +418,7 @@ main{padding:12px 14px}
   var(--surface) 25%,var(--surface-2) 50%,var(--surface) 75%);background-size:200% 100%;
   animation:slide 1.2s infinite}
 @keyframes slide{0%{background-position:200% 0}100%{background-position:-200% 0}}
+[hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){.skeleton{animation:none}.toast{transition:none}}
 </style>
 </head>
@@ -402,6 +441,7 @@ main{padding:12px 14px}
     <span class="label" id="pageLabel"></span>
     <button class="btn" id="next" type="button">التالي ▶</button>
   </div>
+  <button class="btn retry" id="retry" type="button" hidden>إعادة المحاولة</button>
 </main>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 <script>
@@ -411,7 +451,9 @@ main{padding:12px 14px}
   var BOT_URL = __BOT_URL_JSON__;
   var PAGE_SIZE = __PAGE_SIZE__;
   var state = { query: "", category: "", page: 0, loading: false, inflight: 0,
-                favorites: {}, hasMore: false };
+                favorites: {}, hasMore: false, opening: false };
+  // أيقونة تشغيل U+25B6 مع مُحدِّد الصيغة U+FE0E حتى تُرسَم رمزاً لا إيموجي
+  var OPEN_LABEL = "\\u25B6\\uFE0E فتح";
 
   if (tg) {
     try { tg.ready(); } catch (e) {}
@@ -424,7 +466,8 @@ main{padding:12px 14px}
   var el = function (id) { return document.getElementById(id); };
   var statusEl = el("status"), gridEl = el("grid"), chipsEl = el("chips"),
       pagerEl = el("pager"), prevEl = el("prev"), nextEl = el("next"),
-      pageLabelEl = el("pageLabel"), searchEl = el("q"), toastEl = el("toast");
+      pageLabelEl = el("pageLabel"), searchEl = el("q"), toastEl = el("toast"),
+      retryEl = el("retry");
 
   function text(value) { return value == null ? "" : String(value); }
 
@@ -534,8 +577,10 @@ main{padding:12px 14px}
     var openBtn = document.createElement("button");
     openBtn.type = "button";
     openBtn.className = "btn open";
-    openBtn.textContent = "▶ فتح";
-    openBtn.addEventListener("click", function () { openVideo(item); });
+    openBtn.textContent = OPEN_LABEL;
+    openBtn.setAttribute("aria-label", "فتح الفيديو وإرساله إلى محادثتك");
+    openBtn.setAttribute("data-video-id", String(item.id));
+    openBtn.addEventListener("click", function () { openVideo(item, openBtn); });
     actions.appendChild(openBtn);
 
     var favBtn = document.createElement("button");
@@ -553,15 +598,60 @@ main{padding:12px 14px}
     return card;
   }
 
-  function openVideo(item) {
-    if (tg && typeof tg.openTelegramLink === "function" && BOT_URL) {
-      try {
-        tg.openTelegramLink(BOT_URL);
-        toast("افتح البوت وأرسل رقم الفيديو " + item.id);
-        return;
-      } catch (e) {}
+  function newRequestId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+    } catch (e) {}
+    return "r-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  // الإرسال يعتمد على initData الحقيقي الذي يحقنه التطبيق الرسمي فقط
+  function openVideo(item, button) {
+    if (state.opening) return;            // نقرة سريعة أثناء طلب جارٍ
+    if (!initData()) {
+      toast("افتح المكتبة من داخل تيليجرام حتى يصل الفيديو إلى محادثتك.");
+      return;
     }
-    toast(BOT_URL ? "افتح Bot من تيليجرام: " + BOT_URL : "افتح البوت وأرسل رقم الفيديو " + item.id);
+    state.opening = true;
+    button.setAttribute("data-busy", "1");
+    button.disabled = true;
+    button.textContent = "جارٍ الإرسال…";
+    toast("جارٍ إرسال الفيديو إلى محادثتك…");
+    fetch("__PREFIX__/api/open-video", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ video_id: item.id, initData: initData(), request_id: newRequestId() })
+    }).then(function (response) {
+      if (response.status === 401) { throw new Error("auth"); }
+      if (response.status === 403) { throw new Error("subscription"); }
+      if (!response.ok) { throw new Error("http"); }
+      return response.json();
+    }).then(function () {
+      // يبقى الزر معطّلاً حتى تُغلق النافذة (لا إرسال ثانٍ)
+      button.textContent = "✓ في المحادثة";
+      toast("تم إرسال الفيديو إلى محادثتك مع البوت.");
+      try {
+        if (tg && typeof tg.close === "function") {
+          setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
+        }
+      } catch (e) {}
+    }).catch(function (error) {
+      // لا إغلاق عند الفشل: يبقى المستخدم في المكتبة ويستطيع إعادة المحاولة
+      state.opening = false;
+      button.removeAttribute("data-busy");
+      button.disabled = false;
+      button.textContent = OPEN_LABEL;
+      var reason = error && error.message;
+      if (reason === "auth") {
+        toast("لم يتم التحقق من حسابك. افتح المكتبة من داخل تيليجرام ثم أعد المحاولة.");
+      } else if (reason === "subscription") {
+        toast("اشترك في القنوات المطلوبة أولاً، ثم أعد المحاولة.");
+      } else {
+        toast("تعذر إرسال الفيديو الآن. لم يُرسل شيء، أعد المحاولة.");
+      }
+    });
   }
 
   function toggleFavorite(videoId, button) {
@@ -648,22 +738,28 @@ main{padding:12px 14px}
   }
 
   function loadLibrary() {
+    // كل تحميل يحمل رقمه (ticket)؛ الردود المتأخرة أو خارج الترتيب تتحقق من
+    // أنها للمهمة الجارية قبل أن تلمس الشبكة أو حالة التحميل.
     var ticket = ++state.inflight;
     state.loading = true;
+    syncPager();
     setStatus("");
     pagerEl.hidden = true;
+    retryEl.hidden = true;
     showSkeletons();
-    var params = ["page=" + encodeURIComponent(state.page), "page_size=" + PAGE_SIZE];
+    // حجم الصفحة من الخادم دائماً (db_manager)؛ لا نرسل page_size من العميل
+    var params = ["page=" + encodeURIComponent(state.page)];
     if (state.query) params.push("query=" + encodeURIComponent(state.query));
     if (state.category) params.push("category_id=" + encodeURIComponent(state.category));
     fetch("__PREFIX__/api/library?" + params.join("&"),
-          { headers: { "Accept": "application/json" } })
+          { headers: { "Accept": "application/json" }, cache: "no-store" })
       .then(function (response) {
+        if (ticket !== state.inflight) return null;
         if (!response.ok) throw new Error("http");
         return response.json();
       })
       .then(function (payload) {
-        if (ticket !== state.inflight) return;
+        if (ticket !== state.inflight || !payload) return;
         var items = (payload && payload.items) || [];
         state.hasMore = !!(payload && payload.has_more);
         gridEl.textContent = "";
@@ -680,14 +776,34 @@ main{padding:12px 14px}
         prevEl.disabled = state.page <= 0;
         nextEl.disabled = !state.hasMore;
         pageLabelEl.textContent = "صفحة " + (state.page + 1);
+        finishLoad(ticket);
       })
       .catch(function () {
         if (ticket !== state.inflight) return;
         gridEl.hidden = true;
         pagerEl.hidden = true;
         setStatus("تعذر تحميل المكتبة. تحقق من الاتصال ثم أعد المحاولة.");
-      })
-      .then(function () { state.loading = false; });
+        retryEl.hidden = false;
+        finishLoad(ticket);
+      });
+  }
+
+  function finishLoad(ticket) {
+    // الطلب الأحدث وحده يُنزِل التحميل؛ بقاء حالة تحميل قديمة يجعل الأزرار ميتة
+    if (ticket !== state.inflight) return;
+    state.loading = false;
+    syncPager();
+  }
+
+  function syncPager() {
+    prevEl.disabled = state.loading || state.page <= 0;
+    nextEl.disabled = state.loading || !state.hasMore;
+    nextEl.setAttribute("aria-disabled", nextEl.disabled ? "true" : "false");
+  }
+
+  function retryLibrary() {
+    retryEl.hidden = true;
+    loadLibrary();
   }
 
   var debounceTimer = null;
@@ -719,6 +835,7 @@ main{padding:12px 14px}
     loadLibrary();
     window.scrollTo({ top: 0, behavior: "smooth" });
   });
+  retryEl.addEventListener("click", retryLibrary);
 
   loadFavorites();
   loadCategories();
@@ -765,6 +882,268 @@ def _json(payload, status=200, cache=True):
 
 def _error(message, status):
     return _json({"error": message}, status=status, cache=False)
+
+
+# ==============================================================================
+# حارس الإرسال: منع النقرات المتكررة داخل العملية الواحدة
+#
+# نطاق صريح: القفل داخل العملية فقط (threading.Lock + dict محدود السعة). مع أكثر من
+# عامل (gunicorn workers > 1) قد ينفّذ عاملان الطلب نفسه؛ الحارس يمنع التكرار داخل
+# العامل الواحد ولا يضمن "مرة واحدة بالضبط" عبر العمال.
+# ==============================================================================
+
+# المفتاح (user_id, video_id) -> {"state", "request_id", "reserved_at", "sent_at",
+#                                  "until", "counted_at"}
+_OPEN_VIDEO_GUARD = {}
+_OPEN_VIDEO_GUARD_LOCK = threading.Lock()
+
+_GUARD_PENDING = "pending"
+_GUARD_SENT = "sent"
+
+
+def reset_open_video_guards():
+    """مسح الحارس (للاختبار فقط)."""
+    with _OPEN_VIDEO_GUARD_LOCK:
+        _OPEN_VIDEO_GUARD.clear()
+
+
+def _open_video_guard_size():
+    with _OPEN_VIDEO_GUARD_LOCK:
+        return len(_OPEN_VIDEO_GUARD)
+
+
+def _new_guard_entry(request_id, now):
+    return {"state": _GUARD_PENDING, "request_id": request_id,
+            "reserved_at": now, "sent_at": 0.0,
+            # حجز معلّق يعتبر ميتاً بعد مهلة الإرسال (طلب انهار بلا إفراج)
+            "until": now + OPEN_VIDEO_SECONDS + OPEN_VIDEO_COOLDOWN,
+            "counted_at": 0.0}
+
+
+def _guard_retention_key(item):
+    """ترتيب الإخلاء مع إبقاء نافذة الاحتساب بعد انتهاء التهدئة."""
+    entry = item[1]
+    retained_until = max(entry["until"],
+                         entry["counted_at"] + OPEN_VIDEO_METRIC_WINDOW)
+    return retained_until, entry["reserved_at"]
+
+
+def _prune_open_video_guard(now):
+    """إسقاط المنتهي ثم الأقدم المكتمل عند تجاوز السقف.
+
+    لا يُخلَى حجز معلّق لأن ذلك يسمح بإرسالين متزامنين. ولا يمحو انتهاء التهدئة
+    counted_at: نافذة المشاهدة/السجل أطول منها ويجب أن تنجو من الحجز التالي.
+    """
+    expired = [key for key, entry in _OPEN_VIDEO_GUARD.items()
+               if entry["state"] != _GUARD_PENDING
+               and _guard_retention_key((key, entry))[0] <= now]
+    for key in expired:
+        _OPEN_VIDEO_GUARD.pop(key, None)
+    overflow = len(_OPEN_VIDEO_GUARD) - OPEN_VIDEO_MAX_ENTRIES
+    if overflow > 0:
+        completed = [item for item in _OPEN_VIDEO_GUARD.items()
+                     if item[1]["state"] != _GUARD_PENDING]
+        for key, _entry in sorted(completed, key=_guard_retention_key)[:overflow]:
+            _OPEN_VIDEO_GUARD.pop(key, None)
+
+
+def _make_guard_room():
+    """إخلاء مكتملين لإدخال جديد؛ القفل محجوز ولا تُخلَى عملية معلّقة."""
+    while len(_OPEN_VIDEO_GUARD) >= OPEN_VIDEO_MAX_ENTRIES:
+        completed = [item for item in _OPEN_VIDEO_GUARD.items()
+                     if item[1]["state"] != _GUARD_PENDING]
+        if not completed:
+            return False
+        oldest_key, _entry = min(completed, key=_guard_retention_key)
+        _OPEN_VIDEO_GUARD.pop(oldest_key, None)
+    return True
+
+
+def _reserve_send(user_id, video_id, request_id, now):
+    """حجز الإرسال أو رفضه مع بقاء نافذة الاحتساب عبر الحجوز."""
+    key = (user_id, video_id)
+    with _OPEN_VIDEO_GUARD_LOCK:
+        _prune_open_video_guard(now)
+        entry = _OPEN_VIDEO_GUARD.get(key)
+        if entry is not None:
+            if entry["state"] == _GUARD_PENDING:
+                return "in_flight", True
+            if request_id and entry["request_id"] == request_id:
+                return "duplicate", True
+            if now < entry["until"]:
+                return "cooldown", True
+
+        # لا يؤدي ضغط السعة إلى إسقاط إرسال جارٍ ومن ثم تكراره.
+        if entry is None and not _make_guard_room():
+            return "cooldown", True
+
+        reservation = _new_guard_entry(request_id, now)
+        if entry is not None:
+            reservation["counted_at"] = entry["counted_at"]
+        _OPEN_VIDEO_GUARD[key] = reservation
+        return "send", True
+
+
+def _release_send(user_id, video_id, sent, now):
+    """تسجيل نتيجة الإرسال: النجاح يفتح نافذة تهدئة، والفشل يسمح بإعادة المحاولة.
+
+    جوهر التهدئة هو لحظة الإرسال الفعلي، لا لحظة الحجز، حتى لا تُحسب مدة انتظار
+    تيليجرام البطيئة على العضو كتهدئة جديدة.
+    """
+    key = (user_id, video_id)
+    with _OPEN_VIDEO_GUARD_LOCK:
+        entry = _OPEN_VIDEO_GUARD.get(key)
+        if sent:
+            finished = max(now, (entry or {}).get("reserved_at", now))
+            _OPEN_VIDEO_GUARD[key] = {"state": _GUARD_SENT,
+                                      "request_id": entry["request_id"] if entry else None,
+                                      "reserved_at": entry["reserved_at"] if entry else finished,
+                                      "sent_at": finished,
+                                      "until": finished + OPEN_VIDEO_COOLDOWN,
+                                      "counted_at": entry["counted_at"] if entry else 0.0}
+        else:
+            # لا مشاهدة/سجل عند الفشل، ولا حظر على إعادة المحاولة
+            _OPEN_VIDEO_GUARD[key] = {"state": _GUARD_SENT, "request_id": None,
+                                      "reserved_at": entry["reserved_at"] if entry else now,
+                                      "sent_at": now, "until": now,
+                                      "counted_at": entry["counted_at"] if entry else 0.0}
+        _prune_open_video_guard(now)
+
+
+def _claim_metrics(user_id, video_id, now):
+    """هل تُحدَّث المشاهدة/السجل الآن؟ مرة واحدة لكل (مستخدم، فيديو) داخل النافذة.
+
+    الإرسال وحده لا يكفي: نافذة التهدئة (ثوانٍ) أقصر من نافذة الاحتساب (دقائق)،
+    فإرسال جديد بعد التهدئة يُرسَل فعلاً دون تكرار عدّ المشاهدة.
+    """
+    key = (user_id, video_id)
+    with _OPEN_VIDEO_GUARD_LOCK:
+        entry = _OPEN_VIDEO_GUARD.get(key)
+        if (entry is not None and entry["counted_at"] > 0
+                and now - entry["counted_at"] < OPEN_VIDEO_METRIC_WINDOW):
+            return False
+        if entry is None:
+            if not _make_guard_room():
+                return False
+            entry = _new_guard_entry("", now)
+            entry["state"] = _GUARD_SENT
+            entry["until"] = now
+            _OPEN_VIDEO_GUARD[key] = entry
+        entry["counted_at"] = now
+        _prune_open_video_guard(now)
+        return True
+
+
+def _video_for_delivery(video_id):
+    """صف الفيديو الكامل (فقط داخل الخادم: يحوي file_id/chat_id/message_id/content_type)."""
+    return _as_mapping(db_manager.get_video_by_id(video_id))
+
+
+def _as_mapping(row):
+    """صف قاعدة البيانات كقاموس (حتّى لو كان row factory مخصّصاً)."""
+    if row is None:
+        return None
+    try:
+        return dict(row)
+    except (TypeError, ValueError):
+        mapping = {}
+        for key in ("id", "message_id", "chat_id", "file_id", "content_type",
+                    "caption", "display_title", "file_name", "metadata", "view_count"):
+            try:
+                mapping[key] = row[key]
+            except (KeyError, IndexError, TypeError):
+                continue
+        return mapping
+
+
+def _subscription_ok(bot, user_id):
+    """(True, None) أو (False, ردّ). نفس سياسة البوت؛ أي خطأ = رفض (fail closed)."""
+    # استيراد كسول: handlers.helpers يستورد miniapp نفسه في المستوى الأعلى (دورة)
+    try:
+        from handlers import helpers
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Mini App subscription helper unavailable: %s", type(exc).__name__)
+        return False, _error("subscription_check_failed", 403)
+    try:
+        subscribed, _channels = helpers.check_subscription(bot, user_id)
+    except Exception as exc:
+        logger.warning("Mini App subscription check failed: %s", type(exc).__name__)
+        return False, _error("subscription_check_failed", 403)
+    if not subscribed:
+        return False, _error("subscription_required", 403)
+    return True, None
+
+
+def _field(video, key):
+    """قيمة حقل بإرجاع None الحقيقي (لا نُلغي القيمة إن كانت None)."""
+    try:
+        return video.get(key)
+    except (AttributeError, TypeError):
+        return None
+
+
+def _no_delivery_source(video):
+    """لا file_id ولا رسالة أصلية في القناة = لا شيء نُرسله (فشل صريح لا نجاح وهمي)."""
+    has_file = bool(str(_field(video, "file_id") or "").strip())
+    has_message = bool(_field(video, "message_id")) and bool(_field(video, "chat_id"))
+    return not (has_file or has_message)
+
+
+def _deliver(bot, user_id, video, caption):
+    """إرسال الفيديو إلى المحادثة الخاصة؛ True فقط بعد تأكيد تيليجرام.
+
+    نفس عرف البوت: copy_message للرسالة الأصلية أولاً (يحفظ التنسيق كما في القناة)،
+    ثم send_video/send_document من file_id حسب content_type المخزّن فقط عند غياب
+    رسالة أصلية أو رفض تيليجرام للنسخ. لا نجرّب النوع الآخر بعد رفض send_*.
+    """
+    copy = getattr(bot, "copy_message", None)
+    source_message = _field(video, "message_id")
+    source_chat = _field(video, "chat_id")
+    if callable(copy) and source_message and source_chat:
+        try:
+            result = copy(user_id, int(source_chat), int(source_message))
+            if result is not None:
+                return True
+        except Exception as exc:  # noqa: BLE001
+            # نسجّل النوع فقط: وصف الخطأ قد يحوي معرّفات أو تفاصيل مصادقة
+            logger.warning("Mini App copy_message failed: %s", type(exc).__name__)
+
+    api_errors = Exception
+    send_video = send_document = None
+    try:
+        send_video, send_document, api_errors = _manual_delivery(bot)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Mini App delivery methods unavailable: %s", type(exc).__name__)
+
+    file_id = str(_field(video, "file_id") or "").strip()
+    content_type = str(_field(video, "content_type") or "").strip().upper() or "VIDEO"
+    sender = send_document if content_type == "DOCUMENT" else send_video
+
+    # احتياطي من file_id: يحمل العنوان المحدَّث مع تفسير HTML الآمن.
+    if file_id and callable(sender):
+        try:
+            result = sender(user_id, file_id, caption=caption, parse_mode="HTML")
+            if result is not None:
+                return True
+        except api_errors as exc:
+            logger.warning("Mini App file_id delivery failed: %s", type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Mini App file_id delivery failed: %s", type(exc).__name__)
+
+    return False  # لا مصدر إرسال متاح: فشل واضح لا نجاح وهمي
+
+
+def _record_delivery(user_id, video_id):
+    """المشاهدة + السجل بعد نجاح الإرسال؛ فشلهما لا يُلغي نجاح الإرسال."""
+    for name, args in (("increment_video_view_count", (video_id,)),
+                       ("add_to_history", (user_id, video_id))):
+        action = getattr(db_manager, name, None)
+        if not callable(action):
+            continue
+        try:
+            action(*args)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Mini App %s failed after delivery: %s", name, type(exc).__name__)
 
 
 def _text_error(status):
@@ -917,32 +1296,45 @@ def register_miniapp(app, bot=None, hourly_limit_provider=None):
                 return _error("invalid_category", 400)
             category_id = int(raw_category)
         page = _int_value(request.args.get("page"), default=0, minimum=0)
-        page_size = _int_value(request.args.get("page_size"), default=LIBRARY_PAGE_SIZE,
-                               minimum=1, maximum=48)
+        # حجم الصفحة ثابت من الخادم (db_manager): أي page_size من العميل يُتجاهل
+        # والتقطيع يبقى متوافقاً مع LIMIT/OFFSET في قاعدة البيانات.
+        page_size = LIBRARY_PAGE_SIZE
 
-        if query:
-            videos, total = db_manager.search_videos(query, page=page)
-        elif category_id is not None:
-            videos, total = db_manager.get_videos(category_id, page=page)
-        else:
-            videos, total = db_manager.search_videos("", page=page)
+        try:
+            if query:
+                # البحث مع التصنيف معاً (كان التصنيف يُهمَل عند وجود بحث)
+                videos, total = db_manager.search_videos(query, page=page,
+                                                         category_id=category_id)
+            elif category_id is not None:
+                videos, total = db_manager.get_videos(category_id, page)
+            else:
+                videos, total = db_manager.search_videos("", page=page)
+        except Exception as exc:
+            # خطأ قاعدة البيانات في المسار الكسول يظهر هنا لا في الغلاف
+            logger.error("Mini App library query failed: %s", type(exc).__name__)
+            return _error("server_error", 500)
 
         items = [_card_item(row) for row in (videos or [])]
-        _with_category_names(items)
-        items = [_public_item(item) for item in items]
+        if not any(item.get('category') for item in items):
+            # rows من get_videos لا تحمل اسم تصنيف: لا داعي لقراءة شجرة التصنيفات
+            items = [_public_item(item) for item in items]
+        else:
+            _with_category_names(items)
+            items = [_public_item(item) for item in items]
         try:
             total = int(total or 0)
         except (TypeError, ValueError):
             total = 0
         fetched_so_far = page * page_size + len(items)
-        has_more = len(items) >= page_size and fetched_so_far < total
+        has_more = bool(items) and fetched_so_far < total
+        # نتائج مقطّعة: لا تُخدَم من كاش وسيط مشترك (تجنّباً لخلط الصفحات)
         return _json({
             "items": items,
             "total": total,
             "page": page,
             "page_size": page_size,
             "has_more": has_more,
-        })
+        }, cache=False)
 
     @app.route(f"{URL_PREFIX}/api/categories", methods=["GET"])
     @_read_only
@@ -1024,6 +1416,87 @@ def register_miniapp(app, bot=None, hourly_limit_provider=None):
             return _error("server_error", 500)
         return _json({"ok": True, "action": action, "video_id": video_id}, cache=False)
 
+    @app.route(f"{URL_PREFIX}/api/open-video", methods=["POST"])
+    def miniapp_open_video():
+        """إرسال الفيديو المختار إلى المحادثة الخاصة للمستخدم الموقّع فوراً.
+
+        الوجهة تُشتق من user.id داخل initData الموقّع فقط؛ أي chat_id/user_id من
+        العميل يُهمَل. النجاح لا يُعلَن إلا بعد تأكيد تيليجرام للإرسال.
+        """
+        try:
+            payload = request.get_json(silent=True)
+        except HTTPException:
+            payload = None
+        if not isinstance(payload, dict):
+            return _error("invalid_body", 400)
+
+        raw_video_id = payload.get("video_id")
+        if isinstance(raw_video_id, str) and raw_video_id.strip().isdigit():
+            raw_video_id = int(raw_video_id.strip())
+        if (not isinstance(raw_video_id, int) or isinstance(raw_video_id, bool)
+                or raw_video_id <= 0):
+            return _error("invalid_video_id", 400)
+        video_id = raw_video_id
+
+        request_id = payload.get("request_id")
+        if request_id is None:
+            request_id = ""
+        if not isinstance(request_id, str):
+            return _error("invalid_request_id", 400)
+        request_id = request_id.strip()
+        if len(request_id) > MAX_REQUEST_ID_LENGTH or \
+                not re.fullmatch(r"[A-Za-z0-9\-_.]*", request_id):
+            return _error("invalid_request_id", 400)
+
+        # الهوية من التوقيع فقط — يرفض المفقود/المزوّر/المنتهي (401)
+        user_id, failure = _require_init_data(payload)
+        if failure is not None:
+            return failure
+
+        try:
+            video = _video_for_delivery(video_id)
+        except Exception as exc:
+            logger.error("Mini App video lookup failed: %s", type(exc).__name__)
+            return _error("server_error", 500)
+        if not video:
+            return _error("not_found", 404)
+        if _no_delivery_source(video):
+            return _error("video_unavailable", 409)
+
+        # البوت يُمرَّر من تسجيل webhook؛ غيابه فشل صريح لا نجاح وهمي
+        if bot is None:
+            logger.error("Mini App open-video unavailable: no bot registered")
+            return _error("delivery_unavailable", 503)
+
+        subscribed, failure = _subscription_ok(bot, user_id)
+        if not subscribed:
+            return failure
+
+        now = _now()
+        verdict, _refresh = _reserve_send(user_id, video_id, request_id, now)
+        if verdict == "duplicate":
+            return _json({"ok": True, "duplicate": True, "video_id": video_id}, cache=False)
+        if verdict in ("in_flight", "cooldown"):
+            return _error("too_many_requests", 429)
+
+        sent = False
+        try:
+            caption = _html_caption(_title_for(video))
+            sent = bool(_deliver(bot, user_id, video, caption))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Mini App delivery failed: %s", type(exc).__name__)
+            sent = False
+        finally:
+            finished = _now()
+            _release_send(user_id, video_id, sent, finished)
+
+        if not sent:
+            return _error("delivery_unavailable", 502)
+        if _claim_metrics(user_id, video_id, finished):
+            _record_delivery(user_id, video_id)
+        logger.info("Mini App delivered video %s to its authenticated user", video_id)
+        return _json({"ok": True, "video_id": video_id}, cache=False)
+
     @app.route(f"{URL_PREFIX}/thumb/<int:video_id>", methods=["GET"])
     @_read_only
     def miniapp_thumb(video_id):
@@ -1037,6 +1510,7 @@ def register_miniapp(app, bot=None, hourly_limit_provider=None):
         response.headers["Cache-Control"] = API_CACHE_CONTROL
         return response
 
-    logger.info("✅ Mini App registered under %s (page, library, categories, video, favorite, thumb)",
-                URL_PREFIX)
+    logger.info("✅ Mini App registered under %s (page, library, categories, video, favorite, "
+                "open-video, thumb; delivery %s)", URL_PREFIX,
+                "enabled" if bot is not None else "DISABLED (no bot)")
     return True

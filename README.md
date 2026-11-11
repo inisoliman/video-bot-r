@@ -125,12 +125,20 @@ token is added server-side and never appears in a client-visible URL or in the l
 | `GET` | `/app` | – | Mini App library page (inside Telegram) |
 | `GET` | `/app/api/library`, `/app/api/categories`, `/app/api/video/<id>` | – | Mini App read APIs (no `file_id`/`chat_id` in responses) |
 | `POST` | `/app/api/favorite` | Telegram `initData` (validated) | Add/remove a favorite for the signed-in user |
+| `POST` | `/app/api/open-video` | Telegram `initData` + required subscriptions | Deliver a video to the signed user's private chat |
 | `GET` | `/app/thumb/<video_id>` | – | Redirect to `/thumbnail/...` without exposing `file_id` |
 | `POST` | `/admin/publish_commands` | management token | Re-publish the bot command menu |
 | `GET/POST` | `/admin/*` | management token | Maintenance tools |
 
 No global rate limit is applied: the webhook has a per-IP guard, management routes have
 their own limit (unauthorised attempts are not counted), and health probes are exempt.
+`open-video` accepts `video_id`, `initData`, and an optional `request_id` of at most 64
+ASCII letters, digits, `-`, `_` or `.`. Its bounded in-process guard holds 512
+user/video entries, rejects concurrent or repeated sends within a 3-second cooldown,
+and coalesces view/history metrics for 300 seconds. A confirmed repeated `request_id`
+returns `duplicate: true`; in-flight/cooldown requests return 429 and failed Telegram
+delivery returns 502. This guard is per Python process, not an exactly-once guarantee
+across multiple Gunicorn workers.
 
 ## 🗄️ Database
 PostgreSQL, accessed through a connection pool. Tables: `video_archive`,
