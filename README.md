@@ -147,6 +147,15 @@ delivery returns 502. This guard is per Python process, not an exactly-once guar
 across multiple Gunicorn workers.
 
 ## 🗄️ Database
+
+> **Where the production database lives:** it is hosted on **[Neon](https://neon.tech)**
+> (`neon.tech`), a serverless PostgreSQL provider — not on Render and not on a local
+> machine. The Render web service only receives the connection string through the
+> `DATABASE_URL` environment variable. To inspect it, open the Neon console
+> (`https://console.neon.tech`), pick the project behind this bot, and copy the
+> connection string from *Connection Details*. Keep that string secret: it is the only
+> way into production data, and `docs/backup.sql` (local, git-ignored) holds user rows.
+
 PostgreSQL, accessed through a connection pool. Tables: `video_archive`,
 `video_comment_messages`, `video_comments`, `categories`, `bot_users`, `user_favorites`,
 `user_history`, `video_ratings`, `user_states`, `bot_settings`, `required_channels`.
