@@ -60,6 +60,10 @@ def run_update_and_report_progress(bot, chat_id, message_id):
                 bot.edit_message_text("✅ لا توجد فيديوهات في قاعدة البيانات لتحديثها.", chat_id, message_id)
                 return
 
+            # تقدم العملية: مسودة إن أمكن وإلا تعديل الرسالة (لا يغيّر الحفظ/التراجع)
+            from handlers.maintenance_progress import create as create_progress
+            progress = create_progress(bot, chat_id, message_id)
+
             for i, video in enumerate(videos):
                 # استدعاء المحلل الذكي الجديد
                 # نمرر الكابشن واسم الملف للحصول على أفضل نتيجة
@@ -75,18 +79,17 @@ def run_update_and_report_progress(bot, chat_id, message_id):
                 # تحديث الرسالة كل 1.5 ثانية لإظهار التقدم
                 current_time = time.time()
                 if current_time - last_edit_time > 1.5 or (i + 1) == total_videos:
-                    try:
-                        progress = ((i + 1) / total_videos) * 100
-                        bot.edit_message_text(f"⏳ جارِ إعادة بناء البيانات... ({i + 1}/{total_videos}) - {progress:.0f}%", chat_id, message_id)
-                        last_edit_time = current_time
-                    except telebot.apihelper.ApiTelegramException as e:
-                        if 'message is not modified' in e.description:
-                            continue # تجاهل الخطأ إذا لم تتغير الرسالة
-                        else:
-                            logger.error(f"Error editing progress message: {e}")
+                    percent = ((i + 1) / total_videos) * 100
+                    progress.update(
+                        f"⏳ جارِ إعادة بناء البيانات... ({i + 1}/{total_videos}) - {percent:.0f}%")
+                    last_edit_time = current_time
 
             conn.commit()
             bot.edit_message_text(f"✅ اكتملت إعادة بناء البيانات بنجاح!\n\n- تم فحص وتحديث: {updated_count} فيديو.", chat_id, message_id)
+
+            # قائمة متابعة اختيارية بعد التقرير الناجح فقط: لا تُغيّر النتيجة ولا النص
+            from handlers.maintenance_checklists import send_followup_checklist
+            send_followup_checklist(bot, chat_id, 'update_metadata')
 
     except Exception as e:
         logger.error(f"An error occurred during the update process: {e}", exc_info=True)

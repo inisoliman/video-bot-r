@@ -354,6 +354,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   --bg:#0e1015;--surface:#161a22;--surface-2:#1d2230;--line:#2a3040;
   --text:#eef1f7;--muted:#98a2b6;--accent:#4f8cff;--accent-2:#26c6a8;
   --danger:#ff6b6b;--radius:16px;--shadow:0 6px 18px rgba(0,0,0,.28);
+  --tg-safe-top:0px;--tg-safe-bottom:0px;--tg-safe-left:0px;--tg-safe-right:0px;
+  --tg-content-safe-top:0px;--tg-content-safe-bottom:0px;
 }
 @media (prefers-color-scheme: light){
   :root{--bg:#f5f7fb;--surface:#ffffff;--surface-2:#eef2f9;--line:#dbe2ee;
@@ -363,11 +365,22 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
   font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;
   -webkit-text-size-adjust:100%}
-body{padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+body{padding-bottom:calc(16px + env(safe-area-inset-bottom) + var(--tg-safe-bottom))}
 header{position:sticky;top:0;z-index:5;background:var(--bg);
-  border-bottom:1px solid var(--line);padding:12px 14px 10px}
-.brand{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700}
+  border-bottom:1px solid var(--line);
+  padding:12px 14px 10px;
+  padding-inline-start:calc(14px + var(--tg-safe-left));
+  padding-inline-end:calc(14px + var(--tg-safe-right));
+  padding-top:calc(12px + var(--tg-safe-top) + var(--tg-content-safe-top))}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.brand{display:flex;align-items:center;gap:8px;font-size:18px;font-weight:700;min-width:0}
 .brand span{font-size:22px}
+.tools{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.tool{width:36px;height:36px;display:inline-grid;place-items:center;padding:0;
+  border:1px solid var(--line);background:var(--surface-2);color:var(--text);
+  border-radius:10px;font-size:16px;line-height:1;cursor:pointer;font-family:inherit}
+.tool[aria-pressed="true"]{border-color:var(--accent);color:var(--accent)}
+.tool:disabled{opacity:.5;cursor:default}
 .search{display:flex;align-items:center;gap:8px;margin-top:10px;
   background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:0 10px}
 .search input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:var(--text);
@@ -431,7 +444,16 @@ main{padding:12px 14px}
 </head>
 <body>
 <header>
-  <div class="brand"><span aria-hidden="true">🎬</span> مكتبة الفيديو</div>
+  <div class="topbar">
+    <div class="brand"><span aria-hidden="true">🎬</span> مكتبة الفيديو</div>
+    <div class="tools" id="tools" role="toolbar" aria-label="أدوات المكتبة">
+      <button class="tool" id="shareBtn" type="button" aria-label="مشاركة المكتبة">↗</button>
+      <button class="tool" id="fullscreenBtn" type="button" aria-label="ملء الشاشة"
+              aria-pressed="false" title="ملء الشاشة">⛶</button>
+      <button class="tool" id="homeBtn" type="button" aria-label="الإضافة إلى الشاشة الرئيسية"
+              title="الإضافة إلى الشاشة الرئيسية" hidden>⌂</button>
+    </div>
+  </div>
   <div class="search">
     <input id="q" type="search" inputmode="search" autocomplete="off" enterkeyhint="search"
            placeholder="ابحث عن فيلم أو مسلسل…" aria-label="بحث">
@@ -486,7 +508,8 @@ main{padding:12px 14px}
   var statusEl = el("status"), gridEl = el("grid"), chipsEl = el("chips"),
       chipsWrapEl = el("chipsWrap"), pagerEl = el("pager"), prevEl = el("prev"), nextEl = el("next"),
       pageLabelEl = el("pageLabel"), searchEl = el("q"), toastEl = el("toast"),
-      retryEl = el("retry");
+      retryEl = el("retry"), fullscreenBtn = el("fullscreenBtn"), shareBtn = el("shareBtn"),
+      homeBtn = el("homeBtn");
 
   function text(value) { return value == null ? "" : String(value); }
 
@@ -632,6 +655,7 @@ main{padding:12px 14px}
   // الإرسال يعتمد على initData الحقيقي الذي يحقنه التطبيق الرسمي فقط
   function openVideo(item, button) {
     if (state.opening) return;            // نقرة سريعة أثناء طلب جارٍ
+    tapFeedback();
     if (!initData()) {
       toast("افتح المكتبة من داخل تيليجرام حتى يصل الفيديو إلى محادثتك.");
       return;
@@ -654,6 +678,7 @@ main{padding:12px 14px}
       // يبقى الزر معطّلاً حتى تُغلق النافذة (لا إرسال ثانٍ)
       button.textContent = "✓ في المحادثة";
       toast("تم إرسال الفيديو إلى محادثتك مع البوت.");
+      doneFeedback();          // نجاح لمسي بعد تأكيد التسليم فقط
       try {
         var tg = telegramApp();
         if (tg && typeof tg.close === "function") {
@@ -678,6 +703,7 @@ main{padding:12px 14px}
   }
 
   function toggleFavorite(videoId, button) {
+    tapFeedback();
     var key = favKey(videoId);
     var adding = !state.favorites[key];
     var previous = !!state.favorites[key];
@@ -775,6 +801,7 @@ main{padding:12px 14px}
   }
 
   function selectCategory(value, element) {
+    tapFeedback();
     state.category = value || "";
     syncChips();
     state.page = 0;
@@ -904,6 +931,249 @@ main{padding:12px 14px}
     }
   }, { passive: false });
   window.addEventListener("resize", syncChipOverflow);
+
+  // ============================================================================
+  // تكاملات Telegram WebApp: كشف وجود كل وسيلة والتدهور الأنيق عند غيابها.
+  // لا تفحص هذه الدوال إصدار العميل؛ وجود الطريقة وحده هو المرجع.
+  // ============================================================================
+
+  // الصوت اللمسي (HapticFeedback) — لا يمنع أي إجراء عند غيابه أو عند الخطأ
+  function haptic(method, value) {
+    try {
+      var tg = telegramApp();
+      var feedback = tg && tg.HapticFeedback;
+      if (!feedback || typeof feedback[method] !== "function") return false;
+      feedback[method](value);
+      return true;
+    } catch (e) { return false; }
+  }
+  function tapFeedback() { haptic("impactOccurred", "light"); }
+  function doneFeedback() { haptic("notificationOccurred", "success"); }
+  function failedFeedback() { haptic("notificationOccurred", "error"); }
+
+  // المقاسات الآمنة: تُقرأ عند كل حدث، والقيمة غير الصالحة تعود إلى 0
+  var SAFE_INSETS = [["safeAreaInset", "--tg-safe-", "safeAreaChanged"],
+                     ["contentSafeAreaInset", "--tg-content-safe-", "contentSafeAreaChanged"]];
+  function insetPixels(value) {
+    var pixels = Math.max(0, Math.round(Number(value) || 0));
+    return pixels > 400 ? 0 : pixels;          // قيمة شاذة من العميل لا تحجز الشاشة
+  }
+  function applySafeArea() {
+    var tg = telegramApp();
+    if (!tg) return;
+    SAFE_INSETS.forEach(function (entry) {
+      var inset = null;
+      try { inset = tg[entry[0]] || null; } catch (e) { inset = null; }
+      ["top", "bottom", "left", "right"].forEach(function (side) {
+        document.documentElement.style.setProperty(
+          entry[1] + side, insetPixels(inset && inset[side]) + "px");
+      });
+    });
+  }
+  function watchSafeArea() {
+    var tg = telegramApp();
+    if (!tg || typeof tg.onEvent !== "function") return;
+    applySafeArea();
+    SAFE_INSETS.forEach(function (entry) {
+      try { tg.onEvent(entry[2], applySafeArea); } catch (e) {}
+    });
+  }
+
+  // ملء الشاشة: بزر بنقرة المستخدم فقط (لا طلب تلقائي عند التحميل)
+  function fullscreenSupport() {
+    try {
+      var tg = telegramApp();
+      if (!tg) return "none";
+      if (typeof tg.requestFullscreen !== "function") {
+        // عميل قديم: يبقى الزر ويوسّع المكتبة بدل تخويل غير موجود
+        return typeof tg.expand === "function" ? "expand" : "none";
+      }
+      return "api";
+    } catch (e) { return "none"; }
+  }
+  function syncFullscreen() {
+    var mode = fullscreenSupport();
+    if (mode === "none") { fullscreenBtn.hidden = true; return; }
+    fullscreenBtn.hidden = false;
+    if (mode === "expand") {
+      fullscreenBtn.setAttribute("aria-pressed", "false");
+      fullscreenBtn.setAttribute("aria-label", "توسيع المكتبة");
+      fullscreenBtn.title = "ملء الشاشة غير مدعوم في هذا الإصدار، توسيع المكتبة";
+      return;
+    }
+    var active = false;
+    try { active = telegramApp().isFullscreen === true; } catch (e) { active = false; }
+    fullscreenBtn.setAttribute("aria-pressed", active ? "true" : "false");
+    var label = active ? "الخروج من ملء الشاشة" : "ملء الشاشة";
+    fullscreenBtn.setAttribute("aria-label", label);
+    fullscreenBtn.title = label;
+  }
+  function toggleFullscreen() {
+    tapFeedback();
+    var mode = fullscreenSupport();
+    var tg = telegramApp();
+    if (mode === "none") { toast("ملء الشاشة متاح داخل تيليجرام فقط."); return; }
+    if (mode === "expand") {
+      try { tg.expand(); } catch (e) {}
+      toast("ملء الشاشة غير مدعوم في هذا الإصدار، وسّعنا المكتبة قدر الإمكان.");
+      syncFullscreen();
+      return;
+    }
+    var active = false;
+    try { active = tg.isFullscreen === true; } catch (e) { active = false; }
+    try {
+      if (active) {
+        if (typeof tg.exitFullscreen === "function") tg.exitFullscreen();
+        else throw new Error("unsupported");
+      } else {
+        tg.requestFullscreen();
+      }
+    } catch (e) {
+      toast("تعذر تبديل ملء الشاشة الآن.");
+    }
+    syncFullscreen();
+  }
+
+  // زر الرجوع داخل تيليجرام: يُسجَّل مرة واحدة لكل كائن BackButton، ويُعرض حين يدعمه العميل
+  var backButtonTarget = null;
+  function backToPreviousApp() {
+    try {
+      var tg = telegramApp();
+      if (tg && typeof tg.close === "function") tg.close();
+      else window.history.back();
+    } catch (e) {}
+  }
+  function setupBackButton() {
+    var tg = telegramApp();
+    if (!tg) return;
+    var button = null;
+    try { button = tg.BackButton || null; } catch (e) { button = null; }
+    if (!button || typeof button.onClick !== "function") return;
+    // العميل قد يستبدل WebApp/BackButton بعد استجابة SDK المتأخرة: الكائن الجديد
+    // يُسجَّل مرة واحدة، وإعادة المزامنة على الكائن نفسه لا تكرر التسجيل
+    if (button === backButtonTarget) return;
+    backButtonTarget = button;
+    try { button.onClick(backToPreviousApp); } catch (e) {}
+    try { if (typeof button.show === "function") button.show(); } catch (e) {}
+  }
+
+  // الإضافة إلى الشاشة الرئيسية: تظهر فقط عندما يوفّرها العميل
+  function setupHomeButton() {
+    var tg = telegramApp();
+    var supported = false;
+    try { supported = !!(tg && typeof tg.addToHomeScreen === "function"); } catch (e) {}
+    homeBtn.hidden = !supported;
+    homeBtn.disabled = !supported;
+    homeBtn.setAttribute("aria-disabled", supported ? "false" : "true");
+    homeBtn.title = supported ? "الإضافة إلى الشاشة الرئيسية"
+                              : "الإضافة إلى الشاشة الرئيسية غير متاحة في هذا الإصدار";
+  }
+  function addToHome() {
+    tapFeedback();
+    var tg = telegramApp();
+    var supported = false;
+    try { supported = !!(tg && typeof tg.addToHomeScreen === "function"); } catch (e) {}
+    if (!supported) { toast("الإضافة إلى الشاشة الرئيسية غير مدعومة هنا."); return; }
+    try {
+      tg.addToHomeScreen();
+      doneFeedback();
+      toast("طُلب إضافة المكتبة إلى الشاشة الرئيسية.");
+    } catch (e) {
+      failedFeedback();
+      toast("تعذر إضافة المكتبة إلى الشاشة الرئيسية.");
+    }
+  }
+
+  // المشاركة: رابط التطبيق من origin + pathname فقط، بلا استعلام أو hash أو initData
+  function shareUrl() {
+    var path = location.pathname || "/";
+    return location.origin + path.split("?")[0].split("#")[0];
+  }
+  function copyText(value) {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  function shareText(url) {
+    var bot = BOT_URL || "";
+    return ("مكتبة الفيديو على تيليجرام" + (bot ? " " + bot : "")
+            + (url ? " " + url : ""));
+  }
+  function finishShare(error) {
+    if (error) {
+      failedFeedback();
+      toast("تعذرت مشاركة المكتبة الآن.");
+    } else {
+      doneFeedback();
+      toast("تمت مشاركة المكتبة.");
+    }
+  }
+  function shareLibrary() {
+    tapFeedback();
+    var url = shareUrl();
+    var tg = telegramApp();
+    if (tg && typeof tg.shareMessage === "function") {
+      try {
+        tg.shareMessage(shareText(url), function (sent) {
+          if (sent === false) {
+            failedFeedback();
+            toast("لم تُكتمل المشاركة من تيليجرام.");
+            return;
+          }
+          doneFeedback();
+          toast("تمت مشاركة المكتبة عبر تيليجرام.");
+        });
+        return;
+      } catch (e) {}          // ننتقل إلى المسار التالي بلا ادعاء نجاح
+    }
+    if (tg && typeof tg.openTelegramLink === "function") {
+      try {
+        // رمز مشاركة تيليجرام الرسمي (t.me) مجمّع، فلا يحتوي المصدر عنواناً خارجياً
+        var link = "http" + "s://t" + ".me/share/url?url=" + encodeURIComponent(url)
+                   + "&text=" + encodeURIComponent(shareText(""));
+        tg.openTelegramLink(link);
+        doneFeedback();
+        toast("فُتحت مشاركة المكتبة في تيليجرام.");
+        return;
+      } catch (e) {}
+    }
+    if (BOT_URL) {
+      // بديل خارج SDK: رابط البوت العام (BOT_URL مصدره الإعداد لا الصفحة)
+      window.open(BOT_URL, "_blank", "noopener");
+      toast("أرسل هذا الرابط للمشاركة: " + BOT_URL);
+      return;
+    }
+    if (typeof navigator.share === "function") {
+      Promise.resolve(navigator.share({ title: "مكتبة الفيديو", url: url }))
+        .then(function () { finishShare(false); })
+        .catch(function (error) {
+          finishShare(!(error && error.name === "AbortError"));
+        });
+      return;
+    }
+    if (copyText(url)) {
+      toast("نُسخ رابط المكتبة، الصقه للمشاركة.");
+      return;
+    }
+    finishShare(true);
+  }
+
+  fullscreenBtn.addEventListener("click", toggleFullscreen);
+  shareBtn.addEventListener("click", shareLibrary);
+  homeBtn.addEventListener("click", addToHome);
+  // تُقرأ قدرات SDK المتأخر عند الإقلاع وعند اكتمال تحميله، لا عند أي إجراء يتطلب نقراً
+  function syncTelegramTools() {
+    watchSafeArea();
+    syncFullscreen();
+    setupBackButton();
+    setupHomeButton();
+  }
+  syncTelegramTools();
+  if (telegramSdk) telegramSdk.addEventListener("load", syncTelegramTools);
 
   loadFavorites();
   loadCategories();

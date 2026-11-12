@@ -51,6 +51,7 @@ from handlers import helpers  # noqa: E402
 TEST_BOT_TOKEN = "123456:BROWSER-CHECK-TOKEN"
 TELEGRAM_SDK_URL = "https://telegram.org/js/telegram-web-app.js"
 MEMBER_ID = support.MEMBER_ID
+MODERN_PAGE_PATH = "/__modern"                    # phase 7 test-only page route
 PAGE_SIZE = db_manager.VIDEOS_PER_PAGE          # must come from the DB layer
 TOTAL_VIDEOS = 25                                 # three pages: 10 / 10 / 5
 OPEN_VIDEO_ID = 25
@@ -215,6 +216,159 @@ window.__publishSdk = function () {
 };
 """
 
+# Phase 7: the modern SDK contract. The page runtime resolves a shared name through
+# $sbitmap(name); this getter returns the real value for page data names and, for
+# every SDK control method/attribute name, a recorder that behaves like the SDK
+# exports it (controls resolve to an object whose prototype is not a browser DOM
+# node, so writing through a wrong target throws exactly like the real SDK). The
+# stubbed methods below only send their own event data down the channel, exactly
+# as the official script does, and nothing ever leaves the machine.
+MODERN_RECORDER = """
+(function () {
+  var rec = window.__sdkRec;
+  var MAX = 400;
+  function note(label) {
+    if (rec.calls.length < MAX) rec.calls.push(label);
+  }
+  function bounded(name, label) {
+    return function () {
+      if (label === "method") rec.counts[name] = (rec.counts[name] || 0) + 1;
+      note(label + ":" + name);
+      return Object.create(Object.prototype, {
+        nodeType: { value: 1 }, tagName: { value: "DIV" },
+        hidden: { get: function () { return false; }, set: function () {} },
+        title: { get: function () { return ""; }, set: function () {} }
+      });
+    };
+  }
+  window.__sbmap = function (name) {
+    var getter = Object.getOwnPropertyDescriptor(window, "__sbitmap").get;
+    if (name in rec.ops) return bounded(name, rec.ops[name]);
+    return getter.call(window, name);
+  };
+})();
+"""
+
+# Offline fetch bridge (same contract as SHIM): every relative request of the page is
+# answered by the local request stub, never by the Flask app or the network.
+MODERN_BRIDGE = """
+var __stubBase = __STUB_BASE__;
+window.__realFetch = window.fetch.bind(window);
+window.fetch = function (url, options) {
+  var target = __stubBase + (url.charAt(0) === "/" ? url : "/" + url);
+  return window.__realFetch(target, options);
+};
+"""
+
+MODERN_SETUP = """
+window.__sdkRec = { calls: [], counts: {}, haptics: [], handlers: {},
+  shareCalls: [], linkCalls: [], safe: __SAFE__, contentSafe: __CONTENT_SAFE__,
+  ready: 0, close: 0, expand: 0, backRegistrations: 0, backShown: 0, backHidden: 0,
+  fullscreenRequests: 0, exitRequests: 0, isFullscreen: false, homeCalls: 0,
+  hapticThrows: false, homeThrows: false, back: null,
+  ops: { requestFullscreen: "method", exitFullscreen: "method",
+         addToHomeScreen: "method", shareMessage: "method",
+         openTelegramLink: "method", onClick: "method" } };
+"""
+
+MODERN_SDK_STUB = """
+(function () {
+  var rec = window.__sdkRec;
+  var builders = {
+    ready: function () { rec.ready += 1; },
+    expand: function () { rec.expand += 1; },
+    close: function () { rec.close += 1; },
+    requestFullscreen: function () {
+      rec.fullscreenRequests += 1;
+      rec.isFullscreen = true;
+      fire("fullscreenChanged", { isFullscreen: true });
+    },
+    exitFullscreen: function () {
+      rec.exitRequests += 1;
+      rec.isFullscreen = false;
+      fire("fullscreenChanged", { isFullscreen: false });
+    },
+    onEvent: function (name, callback) {
+      (rec.handlers[name] = rec.handlers[name] || []).push(callback);
+    },
+    offEvent: function () {},
+    addToHomeScreen: function () {
+      rec.homeCalls += 1;
+      if (rec.homeThrows) throw new Error("unavailable here");
+    },
+    shareMessage: function (message, callback) {
+      rec.shareCalls.push(String(message));
+      if (typeof callback === "function") { try { callback(true); } catch (e) {} }
+    },
+    openTelegramLink: function (url) { rec.linkCalls.push(String(url)); }
+  };
+  function fire(name, payload) {
+    var list = rec.handlers[name] || [];
+    for (var i = 0; i < list.length; i += 1) { try { list[i](payload); } catch (e) {} }
+  }
+  var sdk = {};
+  Object.keys(builders).forEach(function (name) {
+    sdk[name] = function () {
+      rec.counts[name] = (rec.counts[name] || 0) + 1;
+      return builders[name].apply(sdk, arguments);
+    };
+  });
+  sdk.initData = "";
+  sdk.initDataUnsafe = {};
+  sdk.colorScheme = "dark";
+  sdk.HapticFeedback = {
+    impactOccurred: function (style) {
+      rec.haptics.push("impact:" + style);
+      if (rec.hapticThrows) throw new Error("haptics unavailable");
+    },
+    notificationOccurred: function (type) {
+      rec.haptics.push("notification:" + type);
+      if (rec.hapticThrows) throw new Error("haptics unavailable");
+    },
+    selectionChanged: function () { rec.haptics.push("selection:"); }
+  };
+  sdk.BackButton = {
+    isVisible: true,
+    show: function () { rec.backShown += 1; },
+    hide: function () { rec.backHidden += 1; },
+    onClick: function (callback) {
+      rec.backRegistrations += 1;
+      rec.back = callback;
+    },
+    offClick: function () {}
+  };
+  Object.defineProperty(sdk, "isFullscreen", {
+    get: function () { return rec.isFullscreen === true; },
+    set: function (value) { rec.isFullscreen = !!value; }
+  });
+  Object.defineProperty(sdk, "safeAreaInset", {
+    get: function () { return rec.safe; }
+  });
+  Object.defineProperty(sdk, "contentSafeAreaInset", {
+    get: function () { return rec.contentSafe; }
+  });
+  window.Telegram = { WebApp: sdk };
+  window.__fireSafe = function (which) {
+    fire(which === "safe" ? "safeAreaChanged" : "contentSafeAreaChanged", {});
+  };
+  window.__fireBack = function () { if (rec.back) rec.back(); };
+})();
+"""
+
+# This Chromium build denies the Clipboard API by default; the clipboard fallback is a
+# browser-policy rejection, not a page error, so the modern page opts in explicitly.
+MODERN_PAGE_HEADERS = {"Permissions-Policy": "clipboard-write=(self)"}
+
+# An older client: the normal runtime contract and the legacy WebApp surface only,
+# with none of the phase 7 methods, attributes or controls.
+LEGACY_ONLY_STUB = """
+window.Telegram = { WebApp: {
+  initData: "", initDataUnsafe: {}, colorScheme: "dark",
+  ready: function () {}, expand: function () { window.__sdkRec.expand += 1; },
+  close: function () { window.__sdkRec.close += 1; }
+} };
+"""
+
 
 # ---------------------------------------------------------------------------
 # Fakes for the real Flask app (the page itself is still the production one)
@@ -262,6 +416,29 @@ def build_page(stub_base):
     shim = (SHIM.replace("__STUB_BASE__", json.dumps(stub_base))
                 .replace("__USER_ID__", str(MEMBER_ID)))
     return template.replace("<head>", "<head>" + shim, 1)
+
+
+def build_modern_page(stub_base, safe, content_safe):
+    """The same production page with the phase 7 recorder instead of the old WebApp.
+
+    The legacy recording WebApp (``SHIM``) is replaced by the recorder setup, which runs
+    before the production script: ``MODERN_RECORDER`` waits for the runtime's registry
+    to appear (it is created by the official SDK script, loaded asynchronously), then
+    provides the SDK contract while the page's own controls remain the real ones. The
+    offline fetch bridge of ``SHIM`` stays: every relative request of the page (library,
+    categories, OPEN, favourites) goes to the local stub instead of the Flask app.
+    """
+    template = miniapp.render_page()
+    if template.count(TELEGRAM_SDK_URL) != 1:
+        raise RuntimeError("Mini App page must load the official Telegram SDK exactly once")
+    setup = (MODERN_SETUP.replace("__SAFE__", json.dumps(safe, ensure_ascii=False))
+                         .replace("__CONTENT_SAFE__", json.dumps(content_safe, ensure_ascii=False)))
+    bridge = MODERN_BRIDGE.replace("__STUB_BASE__", json.dumps(stub_base))
+    for text in (bridge, MODERN_RECORDER, MODERN_SDK_STUB, setup):
+        if "&" in text:
+            raise RuntimeError("render_page unescapes entities; injected code must not use '&'")
+    inject = "<script>" + bridge + setup + MODERN_RECORDER + "</script>"
+    return template.replace("<head>", "<head>" + inject, 1)
 
 
 def route_offline(route, stub_base, app_base, sdk_script):
@@ -749,6 +926,203 @@ def run_chips_checks(browser, page_url, stub_base, app_base):
     return failures
 
 
+def run_modern_sdk_checks(browser, stub_base, app_base):
+    """Phase 7 integrations against the real page in Chromium with a recording SDK."""
+    failures = []
+
+    def check(label, condition, detail=""):
+        print(f"  {'PASS' if condition else 'FAIL'}  {label}" + (f"  [{detail}]" if detail and not condition else ""))
+        if not condition:
+            failures.append(label)
+
+    hostile = "?evil=1&initData=SECRET_INIT_DATA&tgWebAppData=SECRET_TWA&start_param=BIZ_ID"
+    markers = ("SECRET_INIT_DATA", "SECRET_TWA", "BIZ_ID", "evil=1", "#")
+    # The production /app route belongs to register_miniapp; the phase 7 scenario uses
+    # its own test-only route so location.origin + location.pathname stays realistic.
+    app_url = app_base + MODERN_PAGE_PATH
+
+    context = browser.new_context(locale="ar", viewport={"width": 420, "height": 900})
+    # The Chromium default denies Clipboard API writes; grant it so the page's guarded
+    # clipboard fallback is a page decision rather than a browser-policy rejection.
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=app_base)
+    context.add_init_script("window.__historyBack = 0; try { var ob = window.history.back.bind(window.history);"
+                            " window.history.back = function () { window.__historyBack += 1; return ob(); }; }"
+                            " catch (e) {}")
+    page = context.new_page()
+    bc = BrowserCheck(page)
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.route("**/*", lambda route: route_offline(route, stub_base, app_base,
+                                                  MODERN_SDK_STUB))
+    def rec():
+        return page.evaluate("() => window.__sdkRec")
+
+    def load_modern_page():
+        """Load the phase 7 page and wait for the recording SDK to initialise it."""
+        page.goto(app_url + hostile)
+        page.wait_for_selector(".card", timeout=10000)
+        wait_until(lambda: page.evaluate(
+            "() => !!window.Telegram && !!window.__sdkRec && window.__sdkRec.ready >= 1"
+            " && typeof window.Telegram.WebApp.requestFullscreen === 'function'"))
+        # The production script synchronises its controls from the SDK load handler,
+        # which runs after the official script publishes WebApp.
+        page.wait_for_function(
+            "() => !document.getElementById('fullscreenBtn').hidden", timeout=5000)
+
+    load_modern_page()
+
+    def css(name):
+        return page.evaluate("n => getComputedStyle(document.documentElement)"
+                             ".getPropertyValue(n).trim()", name)
+
+    snapshot = rec()
+    check("phase 7: SDK does not request fullscreen on load",
+          snapshot["counts"].get("requestFullscreen", 0) == 0, snapshot["counts"])
+    check("phase 7: BackButton registers once, is shown, and gets the real handler",
+          snapshot["backRegistrations"] == 1 and snapshot["backShown"] == 1
+          and page.evaluate("() => typeof window.__sdkRec.back") == "function", snapshot["counts"])
+    check("phase 7: safe-area insets map to CSS variables (0 defaults)",
+          css("--tg-safe-top") == "12px" and css("--tg-safe-bottom") == "0px"
+          and css("--tg-content-safe-top") == "8px" and css("--tg-content-safe-bottom") == "0px",
+          [css("--tg-safe-top"), css("--tg-content-safe-top")])
+    check("phase 7: both safe-area events are subscribed",
+          "safeAreaChanged" in snapshot["handlers"]
+          and "contentSafeAreaChanged" in snapshot["handlers"], list(snapshot["handlers"]))
+
+    page.evaluate("""() => { window.__sdkRec.safe = { top: 30, bottom: 0, left: 0, right: 0 };
+                           window.__fireSafe('safe'); }""")
+    page.wait_for_timeout(100)
+    check("phase 7: safeAreaChanged updates the CSS variable", css("--tg-safe-top") == "30px",
+          css("--tg-safe-top"))
+    page.evaluate("""() => { window.__sdkRec.safe = undefined;
+                           window.__sdkRec.contentSafe = { top: 4, bottom: 0, left: 0, right: 0 };
+                           window.__fireSafe('safe'); window.__fireSafe('content'); }""")
+    page.wait_for_timeout(100)
+    check("phase 7: missing inset values fall back to 0px",
+          css("--tg-safe-top") == "0px" and css("--tg-content-safe-top") == "4px",
+          [css("--tg-safe-top"), css("--tg-content-safe-top")])
+
+    page.click("#fullscreenBtn")
+    page.wait_for_timeout(120)
+    snapshot = rec()
+    check("phase 7: fullscreen click requests fullscreen once",
+          snapshot["fullscreenRequests"] == 1 and snapshot["exitRequests"] == 0, snapshot["counts"])
+    check("phase 7: fullscreen button state follows isFullscreen",
+          page.eval_on_selector("#fullscreenBtn", "e => e.getAttribute('aria-pressed')") == "true")
+    page.click("#fullscreenBtn")
+    page.wait_for_timeout(120)
+    snapshot = rec()
+    check("phase 7: second fullscreen click exits",
+          snapshot["fullscreenRequests"] == 1 and snapshot["exitRequests"] == 1, snapshot["counts"])
+
+    page.click("#homeBtn")
+    page.wait_for_timeout(120)
+    snapshot = rec()
+    check("phase 7: addToHomeScreen calls the SDK once",
+          snapshot["homeCalls"] == 1, snapshot["counts"])
+    page.evaluate("() => { window.__sdkRec.homeThrows = true; }")
+    page.click("#homeBtn")
+    page.wait_for_timeout(120)
+    snapshot = rec()
+    check("phase 7: a throwing addToHomeScreen is nonfatal and reports the failure",
+          snapshot["homeCalls"] == 2 and "notification:error" in snapshot["haptics"]
+          and "تعذر" in bc.toast_text(), snapshot["haptics"])
+
+    page.click("#shareBtn")
+    page.wait_for_timeout(150)
+    snapshot = rec()
+    shared = snapshot["shareCalls"]
+    check("phase 7: share uses shareMessage", len(shared) == 1 and snapshot["linkCalls"] == [],
+          shared)
+    app_url_full = app_base + MODERN_PAGE_PATH
+    leaked = [m for m in markers if shared and m in shared[0]]
+    check("phase 7: shared app URL is origin + pathname only",
+          shared and app_url_full in shared[0] and not leaked, shared)
+
+    with STATE_LOCK:
+        STATE["tm_data"] = make_init_data(TEST_BOT_TOKEN, MEMBER_ID)
+        STATE["open_requests"].clear()
+        STATE["sends"].clear()
+        STATE["deliver_mode"] = "ok"
+    with STATE_LOCK:
+        signed = STATE["tm_data"]
+    # The modern WebApp has no signed initData of its own; hand it the one the stub
+    # validator accepts and wait for OPEN to read it, so delivery is exercised.
+    page.evaluate("s => { window.Telegram.WebApp.initData = s; "
+                  "window.Telegram.WebApp.initDataUnsafe = { user: { id: 500 } }; }", signed)
+    wait_until(lambda: page.evaluate("() => window.Telegram.WebApp.initData.length > 0"))
+    with STATE_LOCK:
+        STATE["open_requests"].clear()
+        STATE["sends"].clear()
+    before = rec()
+    page.eval_on_selector(".btn.open[data-video-id='%s']" % OPEN_VIDEO_ID, "b => b.click()")
+    delivered = wait_until(lambda: rec()["close"] == 1 or page.evaluate(
+        "() => document.getElementById('toast').textContent.indexOf('تعذر') >= 0"), timeout=6)
+    snapshot = rec()
+    after = snapshot["haptics"][len(before["haptics"]):]
+    check("phase 7: success haptic only after confirmed delivery",
+          delivered and after.count("notification:success") == 1
+          and "impact:light" in after, after)
+    check("phase 7: OPEN's confirmed close still happens exactly once",
+          snapshot["close"] == 1 and snapshot["backRegistrations"] == 1
+          and not page.evaluate("() => window.__historyBack"), snapshot["close"])
+    check("phase 7: modern SDK path has no uncaught page errors", not errors, errors)
+
+    with STATE_LOCK:
+        STATE["tm_data"] = ""
+        STATE["sends"].clear()
+        STATE["deliver_mode"] = "ok"
+    load_modern_page()
+    page.evaluate("() => { window.__sdkRec.hapticThrows = true; }")
+    page.click("#shareBtn")
+    page.wait_for_timeout(150)
+    page.click("#homeBtn")
+    page.wait_for_timeout(150)
+    check("phase 7: throwing haptics never block the toolbar actions",
+          len(rec()["shareCalls"]) == 1 and rec()["homeCalls"] == 1, rec()["counts"])
+    context.close()
+
+    # Unsupported client: an older client without any phase 7 method, so every
+    # integration must degrade without errors or fabricated success.
+    context = browser.new_context(locale="ar", viewport={"width": 420, "height": 900})
+    context.grant_permissions(["clipboard-read", "clipboard-write"], origin=app_base)
+    page = context.new_page()
+    bc = BrowserCheck(page)
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.route("**/*", lambda route: route_offline(route, stub_base, app_base,
+                                                  LEGACY_ONLY_STUB))
+    with STATE_LOCK:
+        STATE["tm_data"] = ""
+    load_modern_page()
+    state = page.evaluate("""() => {
+      const home = document.getElementById('homeBtn');
+      return { homeHidden: home.hidden || getComputedStyle(home).display === 'none',
+               homeDisabled: home.disabled,
+               homeLabel: home.getAttribute('aria-label') || '',
+               homeTitle: home.title || '',
+               fullscreenVisible: !document.getElementById('fullscreenBtn').hidden,
+               safeTop: getComputedStyle(document.documentElement).getPropertyValue('--tg-safe-top').trim() };
+    }""")
+    check("phase 7: unsupported addToHomeScreen is hidden/disabled and labelled",
+          (state["homeHidden"] or state["homeDisabled"])
+          and "غير متاح" in (state["homeLabel"] + state["homeTitle"]), state)
+    check("phase 7: unsupported fullscreen falls back to expand (kept usable)",
+          state["fullscreenVisible"] and state["safeTop"] == "0px", state)
+    page.click("#shareBtn")
+    page.wait_for_timeout(200)
+    message = bc.toast_text()
+    # Without a Telegram path the page may copy the app URL as a non-Telegram
+    # fallback, but the toast must never claim a Telegram share happened.
+    check("phase 7: unsupported share is truthful and leaks nothing",
+          message and not [m for m in markers if m in message]
+          and "تيليجرام" not in message and "تمت مشاركة" not in message, message)
+    check("phase 7: unsupported BackButton registers nothing and does not error",
+          page.evaluate("() => !window.__historyBack") and not errors, errors)
+    context.close()
+    return failures
+
+
 def main():
     os.environ.pop("BOT_TOKEN", None)      # never use real credentials in this check
     os.environ.pop("DATABASE_URL", None)
@@ -772,6 +1146,17 @@ def main():
     miniapp.register_miniapp(app, bot=FakeBot())
     page_source = build_page(stub_base)
     app.add_url_rule("/__page", "page", lambda: page_source, methods=["GET"])
+    # The phase 7 page lives on its own test-only route (register_miniapp owns /app).
+    modern_source = build_modern_page(stub_base, {"top": 12, "bottom": 0, "left": 0, "right": 0},
+                                      {"top": 8, "bottom": 0, "left": 0, "right": 0})
+
+    def serve_modern_page():
+        response = app.response_class(modern_source, mimetype="text/html")
+        for name, value in MODERN_PAGE_HEADERS.items():
+            response.headers[name] = value
+        return response
+
+    app.add_url_rule(MODERN_PAGE_PATH, "modern_page", serve_modern_page, methods=["GET"])
 
     from werkzeug.serving import make_server
     server = make_server("127.0.0.1", 0, app, threaded=True)
@@ -787,6 +1172,7 @@ def main():
                 failures = run_checks(browser, page_url, stub_base, app_base)
                 failures += run_sdk_resilience_checks(browser, page_url, stub_base, app_base)
                 failures += run_chips_checks(browser, page_url, stub_base, app_base)
+                failures += run_modern_sdk_checks(browser, stub_base, app_base)
             finally:
                 browser.close()
     finally:

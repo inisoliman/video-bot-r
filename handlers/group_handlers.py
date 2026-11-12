@@ -4,6 +4,9 @@ import telebot
 from telebot import types
 import logging
 import threading
+from html import escape as html_escape
+
+from .user_handlers import build_group_library_markup
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +27,39 @@ def register(bot, admin_ids):
             bot_added = any(member.id == bot_info.id for member in new_members)
             
             if bot_added:
+                # اسم البوت قد يحوي & أو < أو > أو ": يُهرَّب قبل وضعه في HTML
+                bot_username = html_escape(str(getattr(bot_info, "username", "") or ""))
                 # رسالة الترحيب
                 welcome_text = (
-                    "👋 *مرحباً! تم إضافتي للجروب*\n\n"
-                    "🔍 *للبحث السريع عن الفيديوهات:*\n"
-                    f"اكتب: `@{bot_info.username} كلمة البحث`\n\n"
-                    "📝 *مثال:*\n"
-                    f"`@{bot_info.username} أكشن`\n"
-                    f"`@{bot_info.username} كوميدي`\n\n"
-                    "💡 *نصيحة:* يمكنك البحث في أي محادثة بدون إضافتي كعضو!\n\n"
+                    "👋 <b>مرحباً! تم إضافتي للجروب</b>\n\n"
+                    "🔍 <b>للبحث السريع عن الفيديوهات:</b>\n"
+                    f"اكتب: <code>@{bot_username} كلمة البحث</code>\n\n"
+                    "📝 <b>مثال:</b>\n"
+                    f"<code>@{bot_username} أكشن</code>\n"
+                    f"<code>@{bot_username} كوميدي</code>\n\n"
+                    "💡 <b>نصيحة:</b> يمكنك البحث في أي محادثة بدون إضافتي كعضو!\n\n"
                     "⚡ هذه الرسالة ستُحذف تلقائياً بعد 30 دقيقة"
                 )
-                
-                sent_message = bot.send_message(
-                    message.chat.id,
-                    welcome_text,
-                    parse_mode="Markdown"
-                )
+                # زر web_app لا يعمل في الجروبات: رابط التطبيق المصغّر الرئيسي بزر URL
+                # عادي، ويُترك الزر كلياً إذا لم يمكن بناء رابط صالح
+                group_markup = build_group_library_markup()
+                if group_markup is not None:
+                    welcome_text += (
+                        "\n\n📱 <b>مكتبة الفيديوهات:</b>\n"
+                        "اضغط الزر أدناه لفتح المكتبة داخل هذا الجروب."
+                    )
+                    sent_message = bot.send_message(
+                        message.chat.id,
+                        welcome_text,
+                        parse_mode="HTML",
+                        reply_markup=group_markup
+                    )
+                else:
+                    sent_message = bot.send_message(
+                        message.chat.id,
+                        welcome_text,
+                        parse_mode="HTML"
+                    )
                 
                 # حذف الرسالة بعد 30 دقيقة
                 def delete_message_later():
@@ -69,32 +88,33 @@ def register(bot, admin_ids):
         try:
             bot_info = bot.get_me()
             is_group = message.chat.type in ['group', 'supergroup']
+            bot_username = html_escape(str(getattr(bot_info, "username", "") or ""))
             
             help_text = (
-                "🔍 *كيفية البحث عن الفيديوهات*\n\n"
-                "📱 *في أي محادثة (جروب أو خاص):*\n"
-                f"1️⃣ اكتب: `@{bot_info.username}`\n"
+                "🔍 <b>كيفية البحث عن الفيديوهات</b>\n\n"
+                "📱 <b>في أي محادثة (جروب أو خاص):</b>\n"
+                f"1️⃣ اكتب: <code>@{bot_username}</code>\n"
                 "2️⃣ اكتب كلمة البحث بعدها\n"
                 "3️⃣ اختر الفيديو من النتائج\n"
                 "4️⃣ الفيديو يُرسل مباشرة!\n\n"
-                "💡 *أمثلة عملية:*\n"
-                f"• `@{bot_info.username} أكشن`\n"
-                f"• `@{bot_info.username} كوميدي`\n"
-                f"• `@{bot_info.username} رعب`\n"
-                f"• `@{bot_info.username}` (بدون كلمة = الأكثر مشاهدة)\n\n"
-                "✨ *ميزات البحث:*\n"
+                "💡 <b>أمثلة عملية:</b>\n"
+                f"• <code>@{bot_username} أكشن</code>\n"
+                f"• <code>@{bot_username} كوميدي</code>\n"
+                f"• <code>@{bot_username} رعب</code>\n"
+                f"• <code>@{bot_username}</code> (بدون كلمة = الأكثر مشاهدة)\n\n"
+                "✨ <b>ميزات البحث:</b>\n"
                 "⭐ يبحث في العنوان والوصف\n"
                 "📂 يبحث في التصنيفات\n"
                 "🎯 مرتب حسب الشعبية والتقييم\n"
                 "⚡ نتائج فورية أثناء الكتابة\n\n"
-                "❓ *هل أحتاج إضافة البوت للجروب؟*\n"
+                "❓ <b>هل أحتاج إضافة البوت للجروب؟</b>\n"
                 "لا! يمكنك البحث في أي محادثة بدون إضافتي كعضو"
             )
             
             sent_message = bot.send_message(
                 message.chat.id,
                 help_text,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
             # حذف الرسالة بعد 30 دقيقة في الجروبات فقط

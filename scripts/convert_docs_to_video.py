@@ -10,6 +10,8 @@ import io
 from db_manager import execute_query
 from telebot.apihelper import ApiTelegramException
 
+from handlers.telegram_rate_limit import sleep_after_429
+
 logger = logging.getLogger(__name__)
 
 # الحد الأقصى لحجم الملف الذي يمكن للبوت تنزيله (20MB)
@@ -99,7 +101,10 @@ def convert_single_video(bot, video_record, admin_id, channel_id):
         error_str = str(e).lower()
         if "file is too big" in error_str or "file_size" in error_str:
             return 'too_large'
-        if "flood" in error_str:
+        # 429 رسمي: ننتظر retry_after المعلن (لا إعادة محاولة، والنتيجة 'error' كما هي).
+        # البديل الثابت 35 ثانية يبقى لحالة النص القديم 'flood' فقط عند غياب القيمة الرسمية.
+        slept = sleep_after_429(e, time.sleep)
+        if not slept and "flood" in error_str:
             time.sleep(35)
         logger.error(f"API error converting video {video_id}: {e}")
         return 'error'
@@ -138,7 +143,11 @@ def run_convert_all_docs(bot, chat_id, message_id):
     )
     
     too_large_ids = []
-    
+
+    # تقدم العملية: مسودة إن أمكن وإلا تعديل الرسالة (لا يغيّر نتيجة التحويل)
+    from handlers.maintenance_progress import create as create_progress
+    progress = create_progress(bot, chat_id, message_id)
+
     for i, doc in enumerate(docs):
         result = convert_single_video(bot, doc, admin_id, CHANNEL_ID)
         
@@ -153,19 +162,16 @@ def run_convert_all_docs(bot, chat_id, message_id):
         # تحديث التقدم كل 5 ملفات
         if (i + 1) % 5 == 0 or (i + 1) == total:
             elapsed = time.time() - start_time
-            progress = ((i + 1) / total) * 100
+            progress_pct = ((i + 1) / total) * 100
             status = (
                 f"🔄 جارِ التحويل... ({i + 1}/{total})\n"
                 f"✅ نجاح: {success_count}\n"
                 f"📦 كبير جداً: {too_large_count}\n"
                 f"❌ فشل: {error_count}\n"
-                f"📊 التقدم: {progress:.0f}%\n"
+                f"📊 التقدم: {progress_pct:.0f}%\n"
                 f"🕒 {int(elapsed)} ثانية"
             )
-            try:
-                bot.edit_message_text(status, chat_id, message_id)
-            except:
-                pass
+            progress.update(status)
         
         # تأخير لتجنب Flood
         time.sleep(2.0)
@@ -186,3 +192,7 @@ def run_convert_all_docs(bot, chat_id, message_id):
             final += f"\n... و{len(too_large_ids) - 20} ملف آخر"
     
     bot.send_message(chat_id, final)
+
+    # قائمة متابعة اختيارية بعد التقرير الناجح: لا تُغيّر النتيجة ولا النص أبداً
+    from handlers.maintenance_checklists import send_followup_checklist
+    send_followup_checklist(bot, chat_id, 'convert_all_docs')

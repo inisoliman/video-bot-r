@@ -41,7 +41,11 @@ inline-result thumbnail aliases, a `Bot(...)` constructor flag and the old
 adds no user-facing feature; it mainly keeps the client current and adds `aiohttp`
 as a hard dependency (installed by `pip install -r requirements.txt`). HTML Widgets
 (Bot API 10.4) are **not** exposed by the library yet, so the bot does not use them.
-Details: `docs/pytba-upgrade-audit.md`.
+Details: `docs/pytba-upgrade-audit.md`. What the bot actually uses from that surface
+(disabled buttons, `copy_text`, expandable blockquotes, rich reports, ephemeral group
+notices, draft progress, optional checklists, Mini App SDK integrations, `429`/`retry_after`
+handling and the group library link), plus its offline evidence and limits:
+`docs/telegram-modernization.md`.
 
 ## 🚀 Deployment (Render.com)
 
@@ -63,7 +67,8 @@ accepted as an alternative name in older deployments.
 | `WEBHOOK_MANAGEMENT_TOKEN` | unset | Bearer token for `/set_webhook`, `/webhook_info` and `/admin/*`. Unset ⇒ those routes answer **503** and the bot still runs. |
 | `WEBHOOK_SECRET` | `default_secret` | Telegram `secret_token` for the webhook. Also used as the management token **only** when set to a real (non-default) value. |
 | `WEBHOOK_DROP_PENDING` | `0` | `1` makes boot-time `setWebhook` drop pending updates. Leave unset to keep queued updates. |
-| `MINIAPP_BOT_USERNAME` | bot `@username` from `getMe` | Username used for the "open in Telegram" deep link inside the Mini App. |
+| `MINIAPP_BOT_USERNAME` | bot `@username` from `getMe` | Username used for the "open in Telegram" deep link inside the Mini App, and the base of the group library link `https://t.me/<bot>?startapp=library`. |
+| `TELEGRAM_BUSINESS_CONNECTION_ID` | unset | Optional: enables the follow-up `send_checklist` message after maintenance jobs. Unset ⇒ the checklist is skipped with no Telegram call; it needs a business account connected to the bot. |
 | `PORT` | `10000` | HTTP port (Render sets this automatically). |
 
 The literal default `default_secret` is never accepted as a credential, so an
@@ -250,6 +255,10 @@ covered by the offline suite:
     and confirm the retry prompt. «🖼️ صورة افتراضية» should reject non-photo input.
 17. Press a panel heading (e.g. «🗂️ إدارة التصنيفات»): the tap is acknowledged instead
     of failing.
+18. Add the bot to a test group: the welcome message carries a plain URL button (not a
+    `web_app` button) to `https://t.me/<bot>?startapp=library`; `/library` in the group
+    replies with the same button and opens the Mini App inside that group. `web_app`
+    buttons stay private-only, and a directly opened Mini App cannot read chat messages.
 
 ### Admin panel notes and limitations
 - Admin input flows (broadcast, category, channel, move/delete, Mini App setting/IP,

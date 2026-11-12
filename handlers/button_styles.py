@@ -12,7 +12,7 @@ fallback for environments running an older pyTelegramBotAPI version that does
 not yet accept the ``style`` keyword.
 """
 
-from telebot.types import InlineKeyboardButton, KeyboardButton
+from telebot.types import DisabledButton, InlineKeyboardButton, KeyboardButton
 
 
 STYLE_PRIMARY = "primary"
@@ -79,3 +79,31 @@ def inline_button(text, style=None, **kwargs):
 def keyboard_button(text, style=None, **kwargs):
     """Create a Reply KeyboardButton with optional Telegram color style."""
     return StyledKeyboardButton(text, style=style, **kwargs)
+
+
+class DisabledInlineKeyboardButton(StyledInlineKeyboardButton):
+    """Inline button that does nothing and always serializes ``disabled: {}``.
+
+    Display-only rows (section headings, page counters, read-only statistics)
+    must not look clickable and must not need ``callback_data``. Telegram models
+    that with the official ``DisabledButton`` object, which serializes as an
+    empty JSON object.
+    """
+
+    def __init__(self, text, style=None, **kwargs):
+        kwargs.pop("callback_data", None)
+        try:
+            super().__init__(text, style=style, disabled=DisabledButton(), **kwargs)
+        except TypeError:
+            super().__init__(text, style=style, **kwargs)
+
+    def to_dict(self):
+        data = super().to_dict()
+        data.pop("callback_data", None)
+        data["disabled"] = {}
+        return data
+
+
+def disabled_button(text, style=None, **kwargs):
+    """Create a genuinely disabled inline button (no callback, no URL)."""
+    return DisabledInlineKeyboardButton(text, style=style, **kwargs)

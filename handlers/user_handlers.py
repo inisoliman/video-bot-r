@@ -1,8 +1,17 @@
 # handlers/user_handlers.py
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telebot.types import (
+    CopyTextButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo,
+)
 import logging
+import os
+import re
+import sys
+from html import escape as html_escape
 from urllib.parse import quote
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
 
@@ -18,8 +27,9 @@ from .helpers import (
     check_subscription, list_videos
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
+from . import ephemeral_messages
 from utils import extract_video_metadata
-from miniapp import MINIAPP_KEYBOARD_TEXT, miniapp_url
+from miniapp import MINIAPP_KEYBOARD_TEXT, app_base_url, miniapp_url
 from state_manager import (
     set_user_waiting_for_input, States, get_user_waiting_context, 
     clear_user_waiting_state, state_handler 
@@ -32,6 +42,17 @@ LIBRARY_COMMAND = "library"
 LIBRARY_BUTTON_TEXT = "📱 فتح مكتبة الفيديوهات"
 # المعامل الذي يحقنه تيليجرام عند فتح رابط web_app (داخله الـ initData الحقيقي)
 _INITDATA_QUERY_PARAM = "tgWebAppData"
+# تلميح الجروب في /library (صيغة ثابتة تُختبَر)
+GROUP_LIBRARY_HINT = (
+    "📱 مكتبة الفيديوهات متاحة في الخاص فقط، وهذه نسخة تصفح داخل الجروب:\n"
+    "👇 زر الرابط أدناه يفتحها هنا في هذه المحادثة (تصفح ومفضلة فقط).\n"
+    "⬆️ لإرسال فيديو إلى محادثتك استخدم زر المكتبة المثبَّت أسفل المحادثة."
+)
+# نفس التلميح حين يتعذّر بناء الرابط (اسم بوت غير صالح أو APP_URL بلا https)
+GROUP_LIBRARY_HINT_NO_LINK = (
+    "📱 مكتبة الفيديوهات متاحة في الخاص فقط:\n"
+    f"👇 أرسل /{LIBRARY_COMMAND} في المحادثة الخاصة مع البوت."
+)
 # الأوامر التي يسجّلها هذا الملف فعلياً (الأمر الوحيد: handlers/commands.py)؛
 # تُستخدم لمطابقة القائمة المنشورة بالمُسجَّل فعلاً
 REGISTERED_COMMANDS = frozenset({
@@ -71,6 +92,76 @@ def build_library_markup():
 def miniapp_webapp_url():
     """مرادف لـ library_webapp_url (يبقى الاسم متاحاً للمستدعين القدامى)."""
     return library_webapp_url()
+
+
+# رابط التطبيق المصغّر الرئيسي (Main Mini App) — الطريقة الصحيحة للجروب:
+# زر web_app لا يعمل خارج المحادثة الخاصة، وهذا الرابط يُفتح «في المحادثة الحالية»
+# (جروب أو خاص) ويحقن initData بسياق chat_type/chat_instance. بلا وصول للرسائل.
+_GROUP_BOT_USERNAME_RE = re.compile(r"[A-Za-z0-9_]{5,32}")
+_GROUP_BOT_USERNAME_VAR = "MINIAPP_BOT_USERNAME"
+# ذاكرة get_me لكل بوت (فارغة عند الإقلاع): تُسقَط أول قراءة إن غيّر الاختبار
+# اسم ``bot.username``، وتُثبَّت بعد أول قراءة ناجحة.
+_MINUSERS_CACHE = {}
+
+
+def _valid_bot_server():
+    """بوت تيليجرام الحالي من ``webhook_bot`` للقراءة فقط (أو None إن لم يُستورد)."""
+    module = sys.modules.get("webhook_bot")
+    return getattr(module, "bot", None) if module is not None else None
+
+
+def _cached_bot_username(server, declared):
+    """اسم من get_me مخزَّن، ويُعاد جلبُه إن تغيّر ``bot.username`` المعلن."""
+    entry = _MINUSERS_CACHE.get(id(server))
+    if entry is None or entry[0] != declared:
+        try:
+            me = server.get_me()
+        except Exception as error:  # noqa: BLE001 - غياب الاسم يعني بلا زر لا فشل
+            logger.debug(f"MINIAPP bot username lookup failed: {error}")
+            _MINUSERS_CACHE[id(server)] = (declared, None)
+            return None
+        name = str(getattr(me, "username", "") or "")
+        _MINUSERS_CACHE[id(server)] = (declared, name)
+        return name
+    return entry[1]
+
+
+def _valid_bot_username(server):
+    """اسم مستخدم صالح في ``[A-Za-z0-9_]{5,32}`` من البيئة ثم get_me، وإلا None."""
+    for name in (os.environ.get(_GROUP_BOT_USERNAME_VAR), getattr(server, "username", None)):
+        candidate = (name or "").strip().lstrip("@").strip()
+        if _GROUP_BOT_USERNAME_RE.fullmatch(candidate):
+            return candidate
+    if server is None:
+        return None
+    candidate = (_cached_bot_username(server, getattr(server, "username", None)) or "")
+    candidate = candidate.strip().lstrip("@").strip()
+    return candidate if _GROUP_BOT_USERNAME_RE.fullmatch(candidate) else None
+
+
+def library_group_link():
+    """رابط ``https://t.me/<bot>?startapp=library`` لفتح المكتبة في الجروب، أو None.
+
+    يُبنى من اسم بوت مُتحقَّق فقط (متغيّر البيئة ثم ``get_me``)؛ لا يقرأ أي بيانات من
+    الطلب ولا يضمّن initData أو رموزاً أو أسراراً. يتطلب APP_URL بـ https لأن الصفحة
+    نفسها لا تُنشر بدونه.
+    """
+    if not app_base_url():
+        return None
+    username = _valid_bot_username(_valid_bot_server())
+    if not username:
+        return None
+    return f"https://t.me/{username}?startapp={LIBRARY_COMMAND}"
+
+
+def build_group_library_markup():
+    """زر URL عادي (لا web_app) يفتح المكتبة في المحادثة الحالية، أو None."""
+    url = library_group_link()
+    if not url:
+        return None
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(InlineKeyboardButton(LIBRARY_BUTTON_TEXT, url=url))
+    return keyboard
 
 
 def _registered_command_names(bot):
@@ -125,6 +216,23 @@ def _reconcile_published_menu(bot):
 
 
 def register(bot, channel_id, admin_ids):
+
+    # --- حارس المجموعة لأوامر أدمن التعليقات/العنوان ---
+    def refuse_outside_private(message, refuse_text):
+        """رفض أوامر الإدارة خارج المحادثة الخاصة.
+
+        غير الأدمن: الرفض المعتاد نفسه (reply_to). الأدمن: إشعار ephemeral مستهدف
+        به وحده، وقيمته تُعاد كما هي بلا أي إرسال عام بديل — فشل الإرسال أو فشل
+        قراءة الحالة لا يُتبَع بـ reply_to/public. فحص ملكية الحالة مسؤولية
+        handlers/ephemeral_messages وحده؛ لا تُقرأ الحالة هنا.
+        """
+        user = getattr(message, 'from_user', None)
+        user_id = getattr(user, 'id', None)
+        if user_id is None or user_id not in admin_ids:
+            bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
+            return True
+        return ephemeral_messages.send_admin_notice(bot, message, refuse_text, admin_ids)
+
 
     # --- معالج حالة البحث (State Handler) ---
     @state_handler(States.WAITING_SEARCH_QUERY)
@@ -184,6 +292,7 @@ def register(bot, channel_id, admin_ids):
         
         # إذا كان المستخدم مشتركاً في جميع القنوات
         bot_info = bot.get_me()
+        bot_username = html_escape(str(getattr(bot_info, "username", "") or ""))
         welcome_text = (
             "🎬 أهلاً بك في بوت البحث عن الفيديوهات!\n\n"
             "يمكنك الآن:\n"
@@ -191,21 +300,37 @@ def register(bot, channel_id, admin_ids):
             "• 🔥 مشاهدة الفيديوهات الشائعة\n"
             "• 🍿 الحصول على اقتراح عشوائي\n"
             "• 🔍 البحث عن فيديوهات معينة\n\n"
-            f"🔍 *بحث سريع في أي محادثة:*\n"
-            f"اكتب: `@{bot_info.username} كلمة البحث`\n\n"
+            f"🔍 <b>بحث سريع في أي محادثة:</b>\n"
+            f"اكتب: <code>@{bot_username} كلمة البحث</code>\n\n"
             + ("📱 المكتبة المصغّرة متاحة عبر /library\n\n" if library_webapp_url() else "")
             + "استمتع بوقتك! 😊"
         )
         
-        bot.reply_to(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="Markdown")
+        bot.reply_to(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="HTML")
 
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):
-        bot.reply_to(message, f"معرف حسابك هو: `{message.from_user.id}`", parse_mode="Markdown")
+        user_id = str(message.from_user.id)
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(InlineKeyboardButton("📋 نسخ المعرّف", copy_text=CopyTextButton(text=user_id)))
+        bot.reply_to(message, f"معرف حسابك هو: <code>{html_escape(user_id)}</code>",
+                     reply_markup=markup, parse_mode="HTML")
 
     @bot.message_handler(commands=[LIBRARY_COMMAND])
     def handle_library_command(message):
-        """فتح مكتبة الفيديوهات كتطبيق مصغّر داخل تيليجرام (خاص فقط)."""
+        """فتح المكتبة: web_app في الخاص، ورابط تيليجرام المباشر في الجروب فقط.
+
+        زر web_app لا يعمل خارج المحادثة الخاصة، والجروب لا يملك زر قائمة؛ لذلك
+        يُرسل رابط التطبيق المصغّر الرئيسي الذي يفتحه تيليجرام في المحادثة الحالية.
+        """
+        if message.chat.type in ("group", "supergroup"):
+            markup = build_group_library_markup()
+            if markup is not None:
+                bot.reply_to(message, GROUP_LIBRARY_HINT, reply_markup=markup,
+                             parse_mode="HTML")
+            else:
+                bot.reply_to(message, GROUP_LIBRARY_HINT_NO_LINK, parse_mode="HTML")
+            return
         if message.chat.type != "private":
             bot.reply_to(message, "📱 مكتبة الفيديوهات متاحة في المحادثة الخاصة فقط. أرسل /library هناك.")
             return
@@ -327,11 +452,11 @@ def register(bot, channel_id, admin_ids):
     @bot.message_handler(commands=["title", "edit_title"])
     def handle_title_command(message):
         """تعديل عنوان العرض لفيديو (أدمن فقط): /title <ID> <العنوان الجديد>"""
+        if message.chat.type != 'private':
+            # لا يبدأ تعديل العنوان من مجموعة: إشعار خاص ephemeral للأدمن فقط
+            return refuse_outside_private(message, "⛔ هذا الأمر متاح في المحادثة الخاصة فقط")
         if message.from_user.id not in admin_ids:
             bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
-            return
-        if message.chat.type != 'private':
-            bot.reply_to(message, "⛔ هذا الأمر متاح في المحادثة الخاصة فقط")
             return
         parts = (message.text or "").split(maxsplit=2)
         if len(parts) < 2 or not parts[1].strip().isdigit():
@@ -346,7 +471,9 @@ def register(bot, channel_id, admin_ids):
     
     @bot.message_handler(commands=["comments"])
     def handle_admin_comments_command(message):
-        """عرض جميع التعليقات للأدمن"""
+        """عرض جميع التعليقات للأدمن (في الخاص فقط: لا عرض بيانات إدارة في مجموعة)"""
+        if message.chat.type != 'private':
+            return refuse_outside_private(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
         if message.from_user.id not in admin_ids:
             bot.reply_to(message, "⛔ هذا الأمر للإدارة فقط")
             return
@@ -354,22 +481,30 @@ def register(bot, channel_id, admin_ids):
     
     @bot.message_handler(commands=["delete_all_comments"])
     def handle_delete_all_comments_command(message):
-        """حذف جميع التعليقات (أدمن فقط)"""
+        """حذف جميع التعليقات (أدمن فقط، في الخاص فقط)"""
+        if message.chat.type != 'private':
+            return refuse_outside_private(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
         comment_handlers.handle_delete_all_comments(bot, message.from_user.id, admin_ids)
     
     @bot.message_handler(commands=["delete_user_comments"])
     def handle_delete_user_comments_command(message):
-        """حذف تعليقات مستخدم معين (أدمن فقط)"""
+        """حذف تعليقات مستخدم معين (أدمن فقط، في الخاص فقط)"""
+        if message.chat.type != 'private':
+            return refuse_outside_private(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
         comment_handlers.handle_delete_user_comments(bot, message.from_user.id, admin_ids, message.text)
     
     @bot.message_handler(commands=["delete_old_comments"])
     def handle_delete_old_comments_command(message):
-        """حذف التعليقات القديمة (أدمن فقط)"""
+        """حذف التعليقات القديمة (أدمن فقط، في الخاص فقط)"""
+        if message.chat.type != 'private':
+            return refuse_outside_private(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
         comment_handlers.handle_delete_old_comments(bot, message.from_user.id, admin_ids, message.text)
     
     @bot.message_handler(commands=["comments_stats"])
     def handle_comments_stats_command(message):
-        """عرض إحصائيات التعليقات (أدمن فقط)"""
+        """عرض إحصائيات التعليقات (أدمن فقط، في الخاص فقط)"""
+        if message.chat.type != 'private':
+            return refuse_outside_private(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
         comment_handlers.handle_comments_stats(bot, message.from_user.id, admin_ids)
     
     @bot.message_handler(commands=["cancel"])

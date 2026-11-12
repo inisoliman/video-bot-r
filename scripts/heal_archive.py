@@ -6,6 +6,8 @@ import threading
 from db_manager import execute_query, update_video_thumbnail
 from telebot.apihelper import ApiTelegramException
 
+from handlers.telegram_rate_limit import sleep_after_429
+
 logger = logging.getLogger(__name__)
 
 def run_heal_archive(bot, chat_id, message_id):
@@ -45,6 +47,10 @@ def run_heal_archive(bot, chat_id, message_id):
     if not admin_id:
         bot.edit_message_text("❌ لم يتم العثور على معرف أدمن لإجراء عملية الإصلاح.", chat_id, message_id)
         return
+
+    # تقدم العملية: مسودة إن أمكن وإلا تعديل الرسالة (لا يغيّر نتيجة الإصلاح)
+    from handlers.maintenance_progress import create as create_progress
+    progress = create_progress(bot, chat_id, message_id)
 
     for i, video in enumerate(videos_to_fix):
         video_db_id = video['id']
@@ -91,7 +97,9 @@ def run_heal_archive(bot, chat_id, message_id):
         except ApiTelegramException as e:
             logger.error(f"Error healing video {video_db_id}: {e}")
             failed_count += 1
-            if "flood" in str(e).lower():
+            # 429 رسمي: ننتظر retry_after المعلن (لا إعادة محاولة للفيديو الفاشل).
+            # القيمة الغائبة تترك البديل القديم لنص 'flood' كما كان تماماً.
+            if not sleep_after_429(e, time.sleep) and "flood" in str(e).lower():
                 time.sleep(35) 
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
@@ -100,18 +108,15 @@ def run_heal_archive(bot, chat_id, message_id):
         # 4. تحديث رسالة التقدم كل 10 فيديوهات
         if (i + 1) % 10 == 0 or (i + 1) == total:
             elapsed = time.time() - start_time
-            progress = ((i + 1) / total) * 100
+            progress_pct = ((i + 1) / total) * 100
             status_text = (
                 f"⏳ جارِ إصلاح الأرشيف... ({i + 1}/{total})\n"
                 f"✅ تم إصلاح: {fixed_count}\n"
                 f"❌ فشل: {failed_count}\n"
-                f"📊 التقدم: {progress:.1f}%\n"
+                f"📊 التقدم: {progress_pct:.1f}%\n"
                 f"🕒 الوقت المنقضي: {int(elapsed)} ثانية"
             )
-            try:
-                bot.edit_message_text(status_text, chat_id, message_id)
-            except:
-                pass
+            progress.update(status_text)
         
         # تأخير بسيط لتجنب الـ Flood
         time.sleep(1.0) # زيادة التأخير قليلاً للأمان
@@ -124,3 +129,7 @@ def run_heal_archive(bot, chat_id, message_id):
         f"🎉 الآن ستظهر جميع الفيديوهات بصورها المصغرة في البحث."
     )
     bot.send_message(chat_id, final_text)
+
+    # قائمة متابعة اختيارية بعد التقرير الناجح: لا تُغيّر النتيجة ولا النص أبداً
+    from handlers.maintenance_checklists import send_followup_checklist
+    send_followup_checklist(bot, chat_id, 'heal_archive')

@@ -18,6 +18,8 @@ import db_manager
 from telebot.apihelper import ApiTelegramException
 from telebot.types import InlineKeyboardMarkup
 
+from . import rich_reports
+from .telegram_rate_limit import sleep_after_429
 from db_manager import delete_bot_user
 from state_manager import clear_user_waiting_state, read_state_row, set_user_state
 
@@ -272,6 +274,9 @@ def run_broadcast(bot, admin_id, source_chat_id, source_message_id, user_ids, sl
             else:
                 sent += 1
         except ApiTelegramException as exc:
+            # 429 رسمي: ننتظر retry_after قبل المستلم التالي (لا إعادة إرسال، ولا
+            # تغيير للأرقام أو التنظيف). القيمة الغائبة لا تضيف نوماً.
+            sleep_after_429(exc, sleep)
             cleanup_ok = (_is_blocked(exc) or _is_deactivated(exc)) and _delete_user(user_id)
             if cleanup_ok:
                 removed += 1
@@ -283,11 +288,15 @@ def run_broadcast(bot, admin_id, source_chat_id, source_message_id, user_ids, sl
             logger.warning("Broadcast unexpected error for %s: %s", user_id, type(exc).__name__)
         if (index + 1) % BATCH_SIZE == 0 and (index + 1) < total:
             sleep(SEND_INTERVAL)
-    _send(bot, admin_id,
-          "📢 اكتمل البث!\n"
-          f"- ✅ نجح: {sent}\n"
-          f"- ❌ فشل: {failed}\n"
-          f"- 🗑️ حُذفوا (حظر/حساب معطّل): {removed}")
+    # تقرير الإكمال: Rich مهيكل RTL مرة واحدة، وإن فشل/لم يُؤكد فالنص النصي نفسه
+    # (send_message بعرض HTML) مرة واحدة فقط. فشل التقرير لا يغيّر الأرقام.
+    rich_reports.send_rich_or_plain(
+        bot, admin_id,
+        rich_reports.build_broadcast_report(sent, failed, removed),
+        "📢 اكتمل البث!\n"
+        f"- ✅ نجح: {sent}\n"
+        f"- ❌ فشل: {failed}\n"
+        f"- 🗑️ حُذفوا (حظر/حساب معطّل): {removed}")
     return {'sent': sent, 'failed': failed, 'removed': removed}
 
 

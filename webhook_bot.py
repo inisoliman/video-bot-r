@@ -9,17 +9,21 @@ import hmac  # للمقارنة الآمنة ضد timing attacks
 import json
 import logging
 import threading  # إضافة threading
+import time
 from datetime import timedelta
 from functools import wraps
+from html import escape as html_escape
 from flask import Flask, request, jsonify, abort
 from werkzeug.exceptions import HTTPException
 import telebot
+from telebot.apihelper import ApiTelegramException
 from telebot.types import Update
 
 # استيراد الوحدات المخصصة
 from db_manager import verify_and_repair_schema
 from handlers import register_all_handlers
 from handlers.commands import publish_command_menu
+from handlers import telegram_rate_limit as rate_limit
 from state_manager import state_manager
 from history_cleaner import start_history_cleanup
 
@@ -54,7 +58,8 @@ WEBHOOK_DROP_PENDING = os.getenv("WEBHOOK_DROP_PENDING", "0").strip().lower() in
 
 # الأنواع المسموحة للتحديثات (channel_post مطلوب لفهم منشورات القناة)
 WEBHOOK_ALLOWED_UPDATES = ["message", "edited_message", "channel_post", "edited_channel_post",
-                           "callback_query", "inline_query"]
+                           "callback_query", "inline_query", "my_chat_member",
+                           "chosen_inline_result"]
 
 # Render يستخدم PORT بدلاً من WEBHOOK_PORT
 PORT = int(os.getenv("PORT", "10000"))
@@ -502,24 +507,24 @@ def admin_update_thumbnails():
                                 except:
                                     pass
                             
-                            import time
                             time.sleep(1)  # تأخير بسيط
                             
                         except Exception as e:
+                            # 429 رسمي: انتظار retry_after قبل الفيديو التالي (لا إعادة محاولة)
+                            rate_limit.sleep_after_429(e, time.sleep)
                             logger.error(f"Error updating video {video['id']}: {e}")
                             # متابعة مع الفيديو التالي
                             continue
                     
-                    import time
                     time.sleep(5)  # تأخير بين الدفعات
                 
                 # إرسال رسالة للأدمن بالنتيجة
                 bot.send_message(
                     admin_id,
-                    f"✅ *تم تحديث Thumbnails*\n\n"
-                    f"📊 عدد الفيديوهات: {total_updated}\n"
+                    f"✅ <b>تم تحديث Thumbnails</b>\n\n"
+                    f"📊 عدد الفيديوهات: {html_escape(str(total_updated))}\n"
                     f"🎉 العملية مكتملة!",
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 
                 logger.info(f"🎉 Thumbnail extraction completed! Total: {total_updated}")
@@ -658,10 +663,12 @@ def admin_extract_channel_thumbnails():
                             logger.warning(f"Video {video['id']} has no file_id")
                             failed_count += 1
                         
-                        import time
                         time.sleep(0.5)
                         
                     except Exception as e:
+                        # 429 رسمي: انتظار retry_after قبل الإدخال التالي (لا إعادة محاولة،
+                        # ولا نوم إيقاع عادي في مسار الخطأ كما كان: continue)
+                        rate_limit.sleep_after_429(e, time.sleep)
                         logger.error(f"Error extracting thumbnail for video {video['id']}: {e}")
                         failed_count += 1
                         continue
@@ -669,12 +676,12 @@ def admin_extract_channel_thumbnails():
                 # إرسال النتيجة
                 bot.send_message(
                     admin_id,
-                    f"✅ *اكتمل استخراج Thumbnails!*\n\n"
+                    f"✅ <b>اكتمل استخراج Thumbnails!</b>\n\n"
                     f"📊 الإحصائيات:\n"
-                    f"• نجح: {total_updated}\n"
-                    f"• فشل: {failed_count}\n"
-                    f"• المجموع: {len(videos)}",
-                    parse_mode="Markdown"
+                    f"• نجح: {html_escape(str(total_updated))}\n"
+                    f"• فشل: {html_escape(str(failed_count))}\n"
+                    f"• المجموع: {html_escape(str(len(videos)))}",
+                    parse_mode="HTML"
                 )
                 
                 logger.info(f"🎉 Channel thumbnail extraction completed! Success: {total_updated}, Failed: {failed_count}")
@@ -786,10 +793,11 @@ def admin_fix_videos_professional():
                             except Exception:
                                 pass
                         except Exception as e:
+                            # 429 رسمي: انتظار retry_after قبل الفيديو التالي (لا إعادة محاولة)
+                            rate_limit.sleep_after_429(e, time.sleep)
                             logger.error(f"Error forwarding video {video['id']}: {e}")
                             failed_count += 1
                         
-                        import time
                         time.sleep(0.3)
                         
                     except Exception as e:
@@ -799,13 +807,13 @@ def admin_fix_videos_professional():
                 
                 bot.send_message(
                     admin_id,
-                    f"✅ *اكتمل الإصلاح الاحترافي!*\n\n"
+                    f"✅ <b>اكتمل الإصلاح الاحترافي!</b>\n\n"
                     f"📊 الإحصائيات:\n"
-                    f"• نجح: {total_updated}\n"
-                    f"• فشل: {failed_count}\n"
-                    f"• المجموع: {len(videos)}\n\n"
+                    f"• نجح: {html_escape(str(total_updated))}\n"
+                    f"• فشل: {html_escape(str(failed_count))}\n"
+                    f"• المجموع: {html_escape(str(len(videos)))}\n\n"
                     f"💡 شغّل المسار مرة أخرى لإصلاح المزيد",
-                    parse_mode='Markdown'
+                    parse_mode="HTML"
                 )
                 
             except Exception as e:
@@ -869,20 +877,20 @@ def admin_optimize_db():
                 
                 bot.send_message(
                     admin_id,
-                    "🔧 *بدء عملية تحسين قاعدة البيانات*...\n"
+                    "🔧 <b>بدء عملية تحسين قاعدة البيانات</b>...\n"
                     "سيتم إنشاء الفهارس لزيادة سرعة البحث.\n"
                     "قد تستغرق العملية دقيقة أو دقيقتين.",
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 
                 result = db_optimizer.main()
                 
                 if result:
-                    msg = "✅ *تم تحسين قاعدة البيانات بنجاح!*\nأصبح البحث الآن أسرع."
+                    msg = "✅ <b>تم تحسين قاعدة البيانات بنجاح!</b>\nأصبح البحث الآن أسرع."
                 else:
-                    msg = "⚠️ *انتهت العملية مع بعض الملاحظات*\nراجع السجلات للتفاصيل."
+                    msg = "⚠️ <b>انتهت العملية مع بعض الملاحظات</b>\nراجع السجلات للتفاصيل."
                     
-                bot.send_message(admin_id, msg, parse_mode="Markdown")
+                bot.send_message(admin_id, msg, parse_mode="HTML")
                 logger.info(f"🎉 API Optimization completed! Result: {result}")
                 
             except Exception as e:
@@ -992,13 +1000,13 @@ def admin_migrate_database():
                 
                 bot.send_message(
                     admin_id,
-                    "🔄 *بدء عملية ترحيل قاعدة البيانات*...\n"
+                    "🔄 <b>بدء عملية ترحيل قاعدة البيانات</b>...\n"
                     "سيتم تحليل الجداول وترحيل البيانات.",
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 
                 # تحليل الجداول
-                analysis_text = "📊 *تحليل الجداول:*\n\n"
+                analysis_text = "📊 <b>تحليل الجداول:</b>\n\n"
                 tables_to_drop = []
                 
                 for old_table, new_table in TABLE_MAPPINGS.items():
@@ -1008,21 +1016,25 @@ def admin_migrate_database():
                     old_count = get_table_count(cursor, old_table) if old_exists else 0
                     new_count = get_table_count(cursor, new_table) if new_exists else 0
                     
+                    # 📊 أسماء الجداول ثابتة معروفة: نعرضها ككود محاط بوسوم ثابتة
                     if old_exists:
                         tables_to_drop.append(old_table)
                         status = "⚠️" if old_count > 0 else "🔵"
-                        analysis_text += f"{status} `{old_table}` ({old_count}) → `{new_table}` ({new_count})\n"
+                        analysis_text += (f"{status} <code>{old_table}</code> "
+                                          f"({html_escape(str(old_count))}) → "
+                                          f"<code>{new_table}</code> "
+                                          f"({html_escape(str(new_count))})\n")
                     else:
-                        analysis_text += f"✅ `{old_table}` (غير موجود)\n"
+                        analysis_text += f"✅ <code>{old_table}</code> (غير موجود)\n"
                 
-                bot.send_message(admin_id, analysis_text, parse_mode="Markdown")
+                bot.send_message(admin_id, analysis_text, parse_mode="HTML")
                 
                 if not tables_to_drop:
                     bot.send_message(
                         admin_id,
-                        "✅ *قاعدة البيانات نظيفة!*\n"
+                        "✅ <b>قاعدة البيانات نظيفة!</b>\n"
                         "لا توجد جداول قديمة للحذف.",
-                        parse_mode="Markdown"
+                        parse_mode="HTML"
                     )
                     cursor.close()
                     conn.close()
@@ -1060,10 +1072,10 @@ def admin_migrate_database():
                 # النتيجة النهائية
                 bot.send_message(
                     admin_id,
-                    f"✅ *اكتمل الترحيل بنجاح!*\n\n"
-                    f"🗑️ تم حذف {deleted_count} جدول قديم\n"
+                    f"✅ <b>اكتمل الترحيل بنجاح!</b>\n\n"
+                    f"🗑️ تم حذف {html_escape(str(deleted_count))} جدول قديم\n"
                     f"🧹 تم تنظيف الـ sequences",
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 
                 cursor.close()
@@ -1075,8 +1087,8 @@ def admin_migrate_database():
                 try:
                     bot.send_message(
                         admin_id,
-                        f"❌ حدث خطأ أثناء الترحيل:\n`{str(e)}`",
-                        parse_mode="Markdown"
+                        f"❌ حدث خطأ أثناء الترحيل:\n<code>{html_escape(str(e))}</code>",
+                        parse_mode="HTML"
                     )
                 except:
                     pass
@@ -1212,7 +1224,9 @@ def admin_diagnose_file_ids():
             bot.send_message(admin_id, "❌ لا توجد فيديوهات للتشخيص!")
             return jsonify({"status": "error", "message": "No videos found"}), 404
         
-        report = "🔍 *تقرير التشخيص*\n\n"
+        # تفاصيل التشخيص تُجمع منفصلة لتوضع داخل <blockquote expandable> (HTML حقيقي)
+        # كل قيمة ديناميكية (caption/النوع/المعرّفات/نص الاستثناء) تُهرَّب قبل الإدراج.
+        report_body = ""
         
         for v in videos:
             try:
@@ -1237,14 +1251,13 @@ def admin_diagnose_file_ids():
                 stored_file_id = v['file_id']
                 match = "✅" if stored_file_id == actual_file_id else "❌"
                 
-                # تنظيف caption من الأحرف الخاصة
-                caption_raw = (v['caption'] or "بدون عنوان")[:30]
-                caption_short = caption_raw.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "")
+                # caption ديناميكي: يُهرَّب كاملاً (لا تنقية يدوية لرموز Markdown)
+                caption_short = html_escape((v['caption'] or "بدون عنوان")[:30])
                 
-                report += f"📹 ID {v['id']}: {caption_short}\n"
-                report += f"   النوع الفعلي: {actual_type}\n"
-                report += f"   النوع المحفوظ: {v['content_type'] or 'NULL'}\n"
-                report += f"   file_id متطابق: {match}\n\n"
+                report_body += f"📹 ID {html_escape(str(v['id']))}: {caption_short}\n"
+                report_body += f"   النوع الفعلي: {html_escape(str(actual_type))}\n"
+                report_body += f"   النوع المحفوظ: {html_escape(str(v['content_type'] or 'NULL'))}\n"
+                report_body += f"   file_id متطابق: {match}\n\n"
                 
                 # حذف الرسالة المُعاد توجيهها
                 try:
@@ -1252,19 +1265,30 @@ def admin_diagnose_file_ids():
                 except Exception:
                     pass
                 
-                import time
+                # تأخير الإيقاع العادي في مسار النجاح فقط (كما كان؛ لا نوم على الخطأ)
                 time.sleep(0.3)
                 
             except Exception as e:
-                report += f"📹 ID {v['id']}: ❌ خطأ: {str(e)[:50]}\n\n"
-        
-        bot.send_message(admin_id, report)  # بدون parse_mode
+                # 429 رسمي: انتظار retry_after قبل الفيديو التالي (لا إعادة محاولة،
+                # ولا نوم إيقاع عادي في مسار الخطأ)
+                rate_limit.sleep_after_429(e, time.sleep)
+                report_body += (f"📹 ID {html_escape(str(v['id']))}: ❌ خطأ: "
+                                f"{html_escape(str(e)[:50])}\n\n")
+        report = ("🔍 <b>تقرير التشخيص</b>\n\n"
+                  "<blockquote expandable>" + report_body.rstrip() + "</blockquote>")
+
+        bot.send_message(admin_id, report, parse_mode="HTML")
         
         return jsonify({"status": "success", "message": "Diagnosis sent to admin"})
         
     except HTTPException:
         # 400/403/404/429 تحتفظ بحالتها الأصلية بدل تحويلها إلى 500
         raise
+    except ApiTelegramException as e:
+        # 429 رسمي: انتظار retry_after المعلن قبل تقرير الخطأ (لا إعادة محاولة)
+        rate_limit.sleep_after_429(e, time.sleep)
+        logger.error(f"Diagnosis error: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
     except Exception as e:
         logger.error(f"Diagnosis error: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -1371,8 +1395,6 @@ def admin_fix_content_types():
     try:
         import threading
         import psycopg2
-        import time
-        from telebot.apihelper import ApiTelegramException
         
         admin_id = request.args.get('admin_id')
         limit = int(request.args.get('limit', 10000))
@@ -1474,7 +1496,9 @@ def admin_fix_content_types():
                             # خطأ آخر (مثل FloodWait)
                             logger.error(f"Error checking video {vid}: {e}")
                             errors += 1
-                            if "Retry in" in str(e):
+                            # 429 رسمي: ننتظر retry_after المعلن؛ البديل الثابت 10 ثوانٍ
+                            # يبقى فقط عند غياب القيمة الرسمية (لا إعادة محاولة للإرسال)
+                            if not rate_limit.sleep_after_429(e, time.sleep) and "Retry in" in str(e):
                                 time.sleep(10) # انتظار طويل إذا كان FloodWait
                     
                     except Exception as e:
@@ -1492,14 +1516,14 @@ def admin_fix_content_types():
                 conn.close()
                 
                 report = (
-                    f"✅ **تم انتهاء الفحص والإصلاح**\n\n"
-                    f"📊 الإجمالي: {total}\n"
-                    f"📹 فيديوهات مؤكدة: {confirmed_videos}\n"
-                    f"📄 تم تحويلها لوثائق: {fixed_docs}\n"
-                    f"❌ أخطاء: {errors}\n\n"
+                    f"✅ <b>تم انتهاء الفحص والإصلاح</b>\n\n"
+                    f"📊 الإجمالي: {html_escape(str(total))}\n"
+                    f"📹 فيديوهات مؤكدة: {html_escape(str(confirmed_videos))}\n"
+                    f"📄 تم تحويلها لوثائق: {html_escape(str(fixed_docs))}\n"
+                    f"❌ أخطاء: {html_escape(str(errors))}\n\n"
                     f"الآن يمكنك إعادة تفعيل ميزة الصور المصغرة! 🖼️"
                 )
-                bot.send_message(admin_id, report, parse_mode="Markdown")
+                bot.send_message(admin_id, report, parse_mode="HTML")
                 
             except Exception as e:
                 logger.error(f"Fix task error: {e}", exc_info=True)
@@ -1631,7 +1655,6 @@ def admin_debug_search():
     try:
         import psycopg2
         from psycopg2.extras import DictCursor
-        import time
         
         admin_id = request.args.get('admin_id')
         query = request.args.get('q', '')
@@ -1805,9 +1828,9 @@ def admin_force_refresh_all_file_ids():
                 
                 bot.send_message(
                     admin_id,
-                    "🔄 *بدء إعادة جلب file_id لجميع الفيديوهات*...\n"
+                    "🔄 <b>بدء إعادة جلب file_id لجميع الفيديوهات</b>...\n"
                     "⚠️ هذا سيستغرق وقتاً طويلاً!",
-                    parse_mode="Markdown"
+                    parse_mode="HTML"
                 )
                 
                 # جلب جميع الفيديوهات (بغض النظر عن file_id) مع offset
@@ -1885,10 +1908,13 @@ def admin_force_refresh_all_file_ids():
                         except:
                             pass
                         
-                        import time
+                        # تأخير الإيقاع العادي في مسار النجاح فقط (كما كان؛ لا نوم على الخطأ)
                         time.sleep(0.3)
                         
                     except Exception as e:
+                        # 429 رسمي: انتظار retry_after المعلن قبل الفيديو التالي (لا إعادة
+                        # محاولة، ولا نوم إيقاع عادي في مسار الخطأ)
+                        rate_limit.sleep_after_429(e, time.sleep)
                         logger.error(f"Error refreshing video {video['id']}: {e}")
                         failed_count += 1
                 
@@ -1897,21 +1923,21 @@ def admin_force_refresh_all_file_ids():
                 next_url = f"{APP_URL}/admin/force_refresh_all_file_ids?admin_id={admin_id}&offset={next_offset}"
                 
                 message = (
-                    f"✅ *اكتمل التحديث!*\n\n"
+                    f"✅ <b>اكتمل التحديث!</b>\n\n"
                     f"📊 الإحصائيات:\n"
-                    f"• 🎬 فيديوهات حقيقية: {video_count}\n"
-                    f"• 📄 مستندات (Documents): {doc_count}\n"
-                    f"• ❌ فشل: {failed_count}\n"
-                    f"• المجموع: {len(videos)}\n"
-                    f"• Offset الحالي: {offset}\n\n"
+                    f"• 🎬 فيديوهات حقيقية: {html_escape(str(video_count))}\n"
+                    f"• 📄 مستندات (Documents): {html_escape(str(doc_count))}\n"
+                    f"• ❌ فشل: {html_escape(str(failed_count))}\n"
+                    f"• المجموع: {html_escape(str(len(videos)))}\n"
+                    f"• Offset الحالي: {html_escape(str(offset))}\n\n"
                 )
                 
                 if len(videos) == 100:
-                    message += f"💡 للمتابعة، افتح:\n`{next_url}`"
+                    message += f"💡 للمتابعة، افتح:\n<code>{html_escape(next_url)}</code>"
                 else:
-                    message += "✅ *تم الانتهاء من جميع الفيديوهات!*"
+                    message += "✅ <b>تم الانتهاء من جميع الفيديوهات!</b>"
                 
-                bot.send_message(admin_id, message, parse_mode="Markdown")
+                bot.send_message(admin_id, message, parse_mode="HTML")
                 
                 # مسح الـ cache بعد التحديث
                 try:
@@ -1925,12 +1951,14 @@ def admin_force_refresh_all_file_ids():
                 conn.close()
                 
             except Exception as e:
+                # 429 رسمي في المسار العام: انتظار retry_after قبل تقرير الخطأ
+                rate_limit.sleep_after_429(e, time.sleep)
                 logger.error(f"Refresh error: {e}", exc_info=True)
                 try:
                     bot.send_message(
                         admin_id,
-                        f"❌ حدث خطأ:\n`{str(e)}`",
-                        parse_mode="Markdown"
+                        f"❌ حدث خطأ:\n<code>{html_escape(str(e))}</code>",
+                        parse_mode="HTML"
                     )
                 except:
                     pass

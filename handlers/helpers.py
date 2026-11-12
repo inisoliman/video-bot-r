@@ -10,6 +10,7 @@ from .button_styles import (
     STYLE_DANGER,
     STYLE_PRIMARY,
     STYLE_SUCCESS,
+    disabled_button,
     inline_button,
     keyboard_button,
 )
@@ -231,7 +232,7 @@ def create_hierarchical_category_keyboard(callback_prefix, add_back_button=True)
     all_categories = get_categories_tree()
     
     if not all_categories:
-        keyboard.add(inline_button("🚫 لا توجد تصنيفات", STYLE_DANGER, callback_data="noop"))
+        keyboard.add(disabled_button("🚫 لا توجد تصنيفات", STYLE_DANGER))
         return keyboard
     
     # بناء الشجرة
@@ -319,8 +320,8 @@ def create_paginated_keyboard(videos, total_count, current_page, action_prefix, 
     if current_page > 0:
         nav_buttons.append(inline_button("◀️ السابق", STYLE_PRIMARY, callback_data=f"{base_callback}::{current_page - 1}"))
 
-    # مؤشر الصفحة في المنتصف (زر معطّل بـ noop)
-    nav_buttons.append(inline_button(f"📄 {current_page + 1}/{total_pages}", STYLE_PRIMARY, callback_data="noop"))
+    # مؤشر الصفحة في المنتصف (زر معطّل حقيقي: عرض فقط)
+    nav_buttons.append(disabled_button(f"📄 {current_page + 1}/{total_pages}", STYLE_PRIMARY))
 
     if current_page < total_pages - 1:
         nav_buttons.append(inline_button("التالي ▶️", STYLE_PRIMARY, callback_data=f"{base_callback}::{current_page + 1}"))
@@ -335,15 +336,15 @@ def create_paginated_keyboard(videos, total_count, current_page, action_prefix, 
 def create_combined_keyboard(child_categories, videos, total_video_count, current_page, parent_category_id):
     keyboard = InlineKeyboardMarkup()
     if child_categories:
-        # 🗂️ عنوان قسم الأقسام الفرعية بشكل أنيق (زر noop)
-        keyboard.add(inline_button("╭─ 🗂️ الأقسام الفرعية ─╮", STYLE_PRIMARY, callback_data="noop"), row_width=1)
+        # 🗂️ عنوان قسم الأقسام الفرعية بشكل أنيق (زر معطّل: عرض فقط)
+        keyboard.add(disabled_button("╭─ 🗂️ الأقسام الفرعية ─╮", STYLE_PRIMARY), row_width=1)
         cat_buttons = [inline_button(f"📁 {cat['name']}", STYLE_PRIMARY, callback_data=f"cat::{cat['id']}::0") for cat in child_categories]
         for i in range(0, len(cat_buttons), 2):
             keyboard.add(*cat_buttons[i:i+2])
     if videos:
         if child_categories:
             # 🎬 عنوان قسم الفيديوهات
-            keyboard.add(inline_button("╭─ 🎬 الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"), row_width=1)
+            keyboard.add(disabled_button("╭─ 🎬 الفيديوهات ─╮", STYLE_PRIMARY), row_width=1)
         
         # تحويل كائنات DictRow
         mutable_videos = [dict(v) for v in videos] 
@@ -369,7 +370,7 @@ def create_combined_keyboard(child_categories, videos, total_video_count, curren
 
     if videos and total_video_count > 0:
         # مؤشر الصفحة
-        nav_buttons.append(inline_button(f"📄 {current_page + 1}/{total_pages}", STYLE_PRIMARY, callback_data="noop"))
+        nav_buttons.append(disabled_button(f"📄 {current_page + 1}/{total_pages}", STYLE_PRIMARY))
 
     if current_page < total_pages - 1:
         nav_buttons.append(inline_button("التالي ▶️", STYLE_PRIMARY, callback_data=f"cat::{parent_category_id}::{current_page + 1}"))
@@ -394,7 +395,7 @@ def create_video_action_keyboard(video_id, user_id):
     keyboard.add(inline_button(fav_text, STYLE_DANGER if is_fav else STYLE_SUCCESS, callback_data=fav_data), row_width=1)
 
     # 🌟 عنوان قسم التقييم
-    keyboard.add(inline_button("─── ⭐ قيّم الفيديو ───", STYLE_PRIMARY, callback_data="noop"), row_width=1)
+    keyboard.add(disabled_button("─── ⭐ قيّم الفيديو ───", STYLE_PRIMARY), row_width=1)
 
     # أزرار التقييم: ⭐ للمختار، ☆ للباقي
     buttons = [inline_button("⭐" if user_rating and user_rating >= i else "☆", STYLE_PRIMARY, callback_data=f"rate::{video_id}::{i}") for i in range(1, 6)]
@@ -402,7 +403,7 @@ def create_video_action_keyboard(video_id, user_id):
     
     stats = get_video_rating_stats(video_id)
     if stats and stats.get('avg') is not None and stats.get('count', 0) > 0:
-        keyboard.add(inline_button(f"📊 المتوسط: {stats['avg']:.1f}/5 • 👥 {stats['count']} تقييم", STYLE_PRIMARY, callback_data="noop"), row_width=1)
+        keyboard.add(disabled_button(f"📊 المتوسط: {stats['avg']:.1f}/5 • 👥 {stats['count']} تقييم", STYLE_PRIMARY), row_width=1)
     
     # 💬 زر التعليقات — نص أوضح
     keyboard.add(inline_button("💬 التعليقات والردود", STYLE_PRIMARY, callback_data=f"add_comment::{video_id}"), row_width=1)

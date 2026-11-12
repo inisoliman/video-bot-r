@@ -377,8 +377,19 @@ class OwnershipAndPrivateTest(support.OfflineTestCase):
         self.assertTrue(wrappers)
         group = support.make_message('/admin', chat_type='group', chat_id=-1001)
         wrappers[0](group)
-        self.assertIn('المحادثة الخاصة', bot.last_text())
-        self.assertEqual(bot.calls_of('send_message'), [])
+        self.assertIn('المحادثة الخاصة', bot.sent_texts()[-1])
+        # المرحلة 4: إشعار المجموعة رسالة ephemeral مستهدفة بالأدمن، لا رد عام
+        sends = bot.calls_of('send_message')
+        self.assertEqual(len(sends), 1)
+        _name, args, kwargs = sends[0]
+        chat_id, text = args
+        self.assertEqual(chat_id, -1001)
+        self.assertEqual(text, admin_handlers.ADMIN_PRIVATE_ONLY_NOTICE)
+        self.assertEqual(kwargs.get('parse_mode'), 'HTML')
+        self.assertEqual(kwargs.get('ephemeral_message_parameters').to_dict(),
+                         {'receiver_user_id': support.ADMIN_ID})
+        self.assertNotIn('receiver_user_id', kwargs)
+        self.assertEqual(bot.calls_of('reply_to'), [])
 
     def test_callback_without_chat_is_not_treated_as_private(self):
         original_check = helpers.check_subscription

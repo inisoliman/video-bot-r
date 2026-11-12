@@ -150,3 +150,13 @@ currently shows as modified in `git status` due to a pre-existing line-ending ch
   needs an `aiohttp` wheel for the runtime Python (available for 3.11–3.14).
 - `Handler`/dispatcher internals were only compared at the AST level; the 139-test suite
   (webhook dispatch, state routing, handlers) is the behavioural gate.
+
+## Follow-up (what was adopted afterwards)
+
+The upgrade itself added no user-facing feature. The 4.37.1 surface that the bot now
+actually calls (`DisabledButton`, `CopyTextButton`, `InputRichMessage`/`InputRichBlock*`,
+`EphemeralMessageParameters`, `send_message_draft`, `InputChecklist`/`send_checklist`,
+`429`/`retry_after` handling, Mini App SDK integrations and the group `startapp` link) is
+documented, with its offline evidence and limits, in
+[`docs/telegram-modernization.md`](telegram-modernization.md). HTML Widgets (Bot API 10.4)
+remain unexposed by 4.37.1 and were therefore not implemented or emulated.

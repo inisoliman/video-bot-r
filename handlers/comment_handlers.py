@@ -11,7 +11,13 @@ import re
 import uuid
 from telebot import types
 import db_manager as db
-from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
+from .button_styles import (
+    STYLE_DANGER,
+    STYLE_PRIMARY,
+    STYLE_SUCCESS,
+    disabled_button,
+    inline_button,
+)
 from utils import MAX_DISPLAY_TITLE_LENGTH, video_title
 from .thread_format import (
     STATUS_ANSWERED,
@@ -522,7 +528,7 @@ def show_user_comments(bot, user_id, page=0, caller=None, message=None):
         nav = []
         if page > 0:
             nav.append(inline_button("◀️ السابق", STYLE_PRIMARY, callback_data=f"my_comments::{page - 1}"))
-        nav.append(inline_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY, callback_data="noop"))
+        nav.append(disabled_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY))
         if (page + 1) * PAGE_SIZE < total:
             nav.append(inline_button("التالي ▶️", STYLE_PRIMARY, callback_data=f"my_comments::{page + 1}"))
         markup.row(*nav)
@@ -599,7 +605,7 @@ def _thread_nav_markup(comment_id, page, total_pages, prefix, extra_rows=None):
     nav = []
     if page > 0:
         nav.append(inline_button("◀️ السابق", STYLE_PRIMARY, callback_data=f"{prefix}::{comment_id}::{page - 1}"))
-    nav.append(inline_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY, callback_data="noop"))
+    nav.append(disabled_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY))
     if page < total_pages - 1:
         nav.append(inline_button("التالي ▶️", STYLE_PRIMARY, callback_data=f"{prefix}::{comment_id}::{page + 1}"))
     markup.row(*nav)
@@ -681,7 +687,7 @@ def show_all_comments(bot, user_id, admin_ids, page=0, unread_only=False):
         prefix = "admin_comments_unread" if unread_only else "admin_comments"
         if page > 0:
             nav.append(inline_button("◀️ السابق", STYLE_PRIMARY, callback_data=f"{prefix}::{page - 1}"))
-        nav.append(inline_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY, callback_data="noop"))
+        nav.append(disabled_button(f"📄 {page + 1}/{total_pages}", STYLE_PRIMARY))
         if (page + 1) * PAGE_SIZE < total:
             nav.append(inline_button("التالي ▶️", STYLE_PRIMARY, callback_data=f"{prefix}::{page + 1}"))
         if nav:

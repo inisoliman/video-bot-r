@@ -8,7 +8,13 @@ import os
 import re
 from telebot.apihelper import ApiTelegramException
 from telebot.handler_backends import ContinueHandling
-from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
+from .button_styles import (
+    STYLE_DANGER,
+    STYLE_PRIMARY,
+    STYLE_SUCCESS,
+    disabled_button,
+    inline_button,
+)
 from miniapp import miniapp_url
 
 from db_manager import (
@@ -23,6 +29,7 @@ from db_manager import (
 from state_manager import state_handler, clear_user_waiting_state, set_user_waiting_for_input, States
 
 from . import admin_broadcast
+from . import ephemeral_messages
 # تدفق البث (زر -> حالة مخزّنة -> رسالة -> عامل): يبقى مخفياً في module منفصل
 from .admin_broadcast import (  # noqa: F401  (أسماء متوافقة مع استيرادات قديمة)
     STATE_BROADCAST as STATE_BROADCAST_MESSAGE,
@@ -148,13 +155,13 @@ def build_admin_panel():
     keyboard = InlineKeyboardMarkup(row_width=2)
 
     # ─── قسم: إدارة التصنيفات ───
-    keyboard.add(inline_button("╭─ 🗂️ إدارة التصنيفات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 🗂️ إدارة التصنيفات ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("➕ إضافة تصنيف 🟢", STYLE_SUCCESS, callback_data="admin::add_new_cat"),
                  inline_button("🗑️ حذف تصنيف 🔴", STYLE_DANGER, callback_data="admin::delete_category_select"))
     keyboard.add(inline_button("🔘 تعيين التصنيف النشط 🟡", STYLE_PRIMARY, callback_data="admin::set_active"))
 
     # ─── قسم: إدارة الفيديوهات ───
-    keyboard.add(inline_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 🎬 إدارة الفيديوهات ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("➡️ نقل فيديو بالرقم 🔵", STYLE_PRIMARY, callback_data="admin::move_video_by_id"),
                  inline_button("❌ حذف فيديوهات 🔴", STYLE_DANGER, callback_data="admin::delete_videos_by_ids"))
     keyboard.add(inline_button("✏️ تعديل اسم الفيديو 🟣", STYLE_PRIMARY, callback_data="admin::rename_title"))
@@ -162,31 +169,31 @@ def build_admin_panel():
     keyboard.add(inline_button("🔄 تحديث البيانات القديمة 🟣", STYLE_PRIMARY, callback_data="admin::update_metadata"))
 
     # ─── قسم: إدارة التعليقات ───
-    keyboard.add(inline_button("╭─ 💬 إدارة التعليقات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 💬 إدارة التعليقات ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("💬 عرض التعليقات 🔵", STYLE_PRIMARY, callback_data="admin::view_comments"),
                  inline_button("📊 الإحصائيات 🟣", STYLE_PRIMARY, callback_data="admin::comments_stats"))
     keyboard.add(inline_button("🧹 حذف التعليقات القديمة 🟡", STYLE_DANGER, callback_data="admin::delete_old_comments"),
                  inline_button("🗑️ حذف الكل 🔴", STYLE_DANGER, callback_data="admin::delete_all_comments"))
 
     # ─── قسم: قنوات الاشتراك ───
-    keyboard.add(inline_button("╭─ 📢 قنوات الاشتراك ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 📢 قنوات الاشتراك ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("➕ إضافة قناة 🟢", STYLE_SUCCESS, callback_data="admin::add_channel"),
                  inline_button("➖ إزالة قناة 🔴", STYLE_DANGER, callback_data="admin::remove_channel"))
     keyboard.add(inline_button("📋 عرض القنوات 🔵", STYLE_PRIMARY, callback_data="admin::list_channels"))
 
     # ─── قسم: الصور المصغرة ───
-    keyboard.add(inline_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("🖼️ صورة افتراضية 🟡", STYLE_PRIMARY, callback_data="admin::set_default_thumb"),
                  inline_button("📸 تحديث يدوي 🔵", STYLE_PRIMARY, callback_data="admin::manual_thumb"))
 
     # ─── قسم: أدوات الصيانة ───
-    keyboard.add(inline_button("╭─ 🛠️ أدوات الصيانة ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 🛠️ أدوات الصيانة ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("✨ إصلاح شامل للأرشيف 🟣", STYLE_PRIMARY, callback_data="admin::heal_archive"))
     keyboard.add(inline_button("📄 عرض المستندات 🔵", STYLE_PRIMARY, callback_data="admin::list_documents"),
                  inline_button("🔄 تحويل → فيديو 🟢", STYLE_SUCCESS, callback_data="admin::convert_all_docs"))
 
     # ─── قسم: البث والإحصائيات ───
-    keyboard.add(inline_button("╭─ 📊 البث والإحصائيات ─╮", STYLE_PRIMARY, callback_data="noop"))
+    keyboard.add(disabled_button("╭─ 📊 البث والإحصائيات ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("📢 بث رسالة 🟠", STYLE_SUCCESS, callback_data="admin::broadcast"))
     keyboard.add(inline_button("📊 إحصائيات البوت 🟣", STYLE_PRIMARY, callback_data="admin::stats"),
                  inline_button("👤 عدد المشتركين 🔵", STYLE_PRIMARY, callback_data="admin::sub_count"))
@@ -200,12 +207,13 @@ def build_admin_panel():
                          row_width=1)
         keyboard.add(inline_button("⏱️ حد فتح المكتبة/ساعة لكل IP 🔵", STYLE_PRIMARY,
                                    callback_data="admin::set_miniapp_limit"), row_width=1)
-        keyboard.add(inline_button(f"⏱️ الحد الحالي: {miniapp_hourly_limit_by_ip()} في الساعة 🟣",
-                                   STYLE_PRIMARY, callback_data="noop"), row_width=1)
+        keyboard.add(disabled_button(f"⏱️ الحد الحالي: {miniapp_hourly_limit_by_ip()} في الساعة 🟣",
+                                     STYLE_PRIMARY), row_width=1)
     return keyboard
 
 
 ADMIN_PANEL_TEXT = "🎛️ أهلاً بك في لوحة تحكم الآدمن. اختر أحد الخيارات:"
+ADMIN_PRIVATE_ONLY_NOTICE = "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط"
 
 
 def send_admin_panel(bot, chat_id):
@@ -248,9 +256,15 @@ def register(bot, admin_ids):
     def check_admin(func):
         @functools.wraps(func)
         def wrapper(message):
-            # لوحة الأدمن خاصة فقط: لا أوامر إدارة من مجموعات/قنوات
+            # لوحة الأدمن خاصة فقط: لا أوامر إدارة من مجموعات/قنوات.
+            # الأدمن: إشعار ephemeral مستهدف به وحده (لا reply_to عام)، وفشله لا
+            # يُتبع بأي إرسال عام قد يكشف محتوى الإدارة. غير الأدمن: الرفض المعتاد.
             if getattr(getattr(message, 'chat', None), 'type', None) != 'private':
-                bot.reply_to(message, "⛔ أوامر الإدارة متاحة في المحادثة الخاصة فقط")
+                if message.from_user.id in admin_ids:
+                    ephemeral_messages.send_admin_notice(
+                        bot, message, ADMIN_PRIVATE_ONLY_NOTICE, admin_ids)
+                else:
+                    bot.reply_to(message, ADMIN_PRIVATE_ONLY_NOTICE)
                 return
             if message.from_user.id in admin_ids:
                 return func(message)

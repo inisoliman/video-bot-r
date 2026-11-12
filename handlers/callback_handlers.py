@@ -23,6 +23,7 @@ from db_manager import (
     get_unread_comments_count, get_bot_stats_or_none, get_bot_subscriber_count_or_none
 )
 from . import helpers
+from . import rich_reports
 from . import admin_handlers
 from . import comment_handlers  # إضافة معالجات التعليقات
 try:
@@ -696,6 +697,7 @@ def register(bot, admin_ids):
                                                   show_alert=True)
                         return
                     popular = get_popular_videos()
+                    viewed_line = rated_line = None
                     stats_text = (f"📊 <b>إحصائيات المحتوى</b>\n\n"
                                 f"- إجمالي الفيديوهات: {stats['video_count']}\n"
                                 f"- إجمالي التصنيفات: {stats['category_count']}\n"
@@ -707,14 +709,23 @@ def register(bot, admin_ids):
                         title = ((most_viewed.get('caption') or "").split('\n')[0] or "فيديو")[:80]
                         stats_text += (f"\n\n🔥 الأكثر مشاهدة: {html.escape(title)} "
                                        f"({most_viewed.get('view_count') or 0} مشاهدة)")
+                        viewed_line = (f"🔥 الأكثر مشاهدة: {title} "
+                                       f"({most_viewed.get('view_count') or 0} مشاهدة)")
 
                     if popular["highest_rated"] and popular["highest_rated"][0].get('avg_rating') is not None:
                         highest_rated = popular["highest_rated"][0]
                         title = ((highest_rated.get('caption') or "").split('\n')[0] or "فيديو")[:80]
                         stats_text += (f"\n⭐ الأعلى تقييماً: {html.escape(title)} "
                                        f"({float(highest_rated['avg_rating']):.1f}/5)")
+                        rated_line = (f"⭐ الأعلى تقييماً: {title} "
+                                      f"({float(highest_rated['avg_rating']):.1f}/5)")
 
-                    bot.send_message(call.message.chat.id, stats_text, parse_mode="HTML")
+                    # Rich مهيكل RTL واحد؛ إن فشل/لم يُؤكد فالنص المهرب نفسه كـHTML مرة واحدة.
+                    # العناوين الديناميكية في Rich نص عادي حرفي (لا HTML مُفسَّر).
+                    rich_reports.send_rich_or_plain(
+                        bot, call.message.chat.id,
+                        rich_reports.build_stats_report(stats, viewed_line, rated_line),
+                        stats_text)
                     bot.answer_callback_query(call.id)
                     return
 
