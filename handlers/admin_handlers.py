@@ -281,7 +281,7 @@ def register(bot, admin_ids):
     @bot.message_handler(
         content_types=["text", "photo", "video", "document", "audio", "voice",
                        "animation", "sticker"],
-        func=lambda message: message.chat.type == "private",
+        func=lambda message: message.chat.type == "private" and message.from_user.id in admin_ids,
     )
     @check_admin
     def admin_state_input(message):
