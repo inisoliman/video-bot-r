@@ -14,6 +14,7 @@ from telebot import types
 from telebot.handler_backends import ContinueHandling
 
 import db_manager
+import handlers as handlers_package
 from handlers import admin_flows
 from handlers import admin_handlers
 from handlers import callback_handlers
@@ -91,8 +92,7 @@ class RealDispatchTestCase(support.OfflineTestCase):
         bot.copy_message = lambda *a, **k: types.Message.de_json({
             'message_id': 8002, 'date': 1, 'chat': {'id': 1, 'type': 'private'},
             'from': {'id': 1, 'is_bot': True, 'first_name': 'bot'}, 'text': 'copy'})
-        user_handlers.register(bot, '-1001234567890', ADMINS)
-        admin_handlers.register(bot, ADMINS)
+        handlers_package.register_all_handlers(bot, '-1001234567890', ADMINS)
         return bot
 
 
@@ -108,8 +108,8 @@ class AdminDispatchTest(RealDispatchTestCase):
         bot = self.build_bot()
         admin_entry = handler_index(bot, 'admin_state_input')
         comment_entry = handler_index(bot, 'handle_comment_text_states')
-        # مُسجَّل بعدهم (routes في webhook_bot.process_update) لكن يجب أن يمرّر ContinueHandling
-        self.assertGreater(admin_entry, comment_entry)
+        # الترتيب الفعلي: إدخال الأدمن يُسجَّل قبل النص العام، وTeleBot يمرّ بالترتيب نفسه
+        self.assertLess(admin_entry, comment_entry)
         message = make_message('كلمة بحث عادية')
         self.assertIsInstance(handler_funcs(bot)[admin_entry](message), ContinueHandling)
 
@@ -120,8 +120,8 @@ class AdminDispatchTest(RealDispatchTestCase):
             pass
 
         def dispatch_like_telebot():
-            # ترتيب قبول TeleBot معكوس: أحدث معالج يُجرّب أولاً (routes في webhook_bot)
-            for entry in reversed(bot.message_handlers):
+            # TeleBot يمرّ على message_handlers بترتيب الإضافة نفسه (routes في webhook_bot)
+            for entry in bot.message_handlers:
                 func = entry['function']
                 if not bot._test_message_handler(entry, message):
                     continue

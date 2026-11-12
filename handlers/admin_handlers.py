@@ -287,10 +287,12 @@ def register(bot, admin_ids):
     def admin_state_input(message):
         """رسائل الأدمن التالية لتدفق مخزّن (بث/تصنيف/قناة/نقل/حذف/إعدادات/صور مصغرة).
 
-        تُسجَّل قبل معالج النص العام في user_handlers. Telebot يتوقف عند أول معالج
-        مطابق ما لم يرجع ContinueHandling؛ لذلك عندما لا تخصّ الرسالة أي تدفق جديد
-        نرجع ContinueHandling كي تصل للعناوين/التعليقات/البحث. وعندما تخصّ تدفقاً
-        نعالجها ونتوقف (لا تمرير مزدوج ولا تحويلها إلى مدينة أخرى).
+        التسجيل: handlers/__init__.register_all_handlers يسجّل admin_handlers قبل
+        user_handlers، وTeleBot يمرّ على bot.message_handlers بترتيب الإضافة نفسه
+        (ليس معكوساً) ويتوقف عند أول معالج مطابق لا يرجع ContinueHandling. أي أن هذا
+        المعالج يصل قبل معالج النص العام في user_handlers. لذلك عندما لا تخصّ الرسالة
+        أي تدفق جديد نرجع ContinueHandling كي تصل للعناوين/التعليقات/البحث، وعندما
+        تخصّ تدفقاً نعالجها ونتوقف (لا تمرير مزدوج).
         """
         handled = bool(handle_broadcast_message(bot, admin_ids, message))
         if not handled:

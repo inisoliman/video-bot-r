@@ -180,6 +180,14 @@ class StateManager:
         if state in DELEGATED_STATES:
             return False  # Let user_handlers process these
 
+        # حالات الأدمن ذات الطلب المفتوح (بث/تصنيف/قناة/نقل/حذف/إعدادات/صور مصغرة)
+        # تُمرَّر إلى معالج إدخال الأدمن المسجّل في handlers.admin_handlers
+        # (admin_state_input -> handle_broadcast_message/handle_flow_message/thumbnails).
+        # تُمرَّر دائماً كي يتحقق ذلك المعالج من الملكية والصلاحية ويجيب برسالة صادقة
+        # (أو يتجاهل رسالة غير أدمن)؛ لا تسجّل "No handler found" هنا.
+        if state in ADMIN_PROMPT_STATES:
+            return False  # Let the admin handlers process these
+
         if state in self.handlers:
             try:
                 # Call the appropriate handler
