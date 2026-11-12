@@ -1,0 +1,14 @@
+# Store and check out text as LF so Windows conversion cannot create phantom diffs.
+* text=auto eol=lf
+
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.toml text eol=lf
+*.sh text eol=lf
+build.sh text eol=lf
+
+# Never normalize binary assets or bytecode.
+*.png binary
+*.jpg binary
+*.pyc binary -text
