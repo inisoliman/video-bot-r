@@ -25,6 +25,7 @@ from .thread_format import (
     STATUS_WAITING,
     build_thread_text,
     compute_thread_state,
+    paginate_messages,
     safe_html,
     status_label,
     thread_fingerprint,
@@ -90,7 +91,21 @@ def _refuse_non_private(bot, call):
     _answer(bot, call, "⛔ هذه الخاصية متاحة في المحادثة الخاصة فقط", alert=True)
 
 
-def _safe_send(bot, chat_id, text, reply_markup=None):
+def _safe_send(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
+    """
+    إرسال رسالة بلا استثناء يوقف المعالج.
+
+    عند تمرير ``reply_to_message_id`` تُرسل كردّ حقيقي على تلك الرسالة (يظهر زر
+    «رد» في كل العملاء)، وإن تعذّر الإرسال كردٍّ يُعاد مرة واحدة بلا ربط بدل
+    فقدان الرسالة.
+    """
+    if reply_to_message_id is not None:
+        try:
+            return bot.send_message(chat_id, text, parse_mode="HTML",
+                                    reply_markup=reply_markup,
+                                    reply_to_message_id=reply_to_message_id)
+        except Exception as exc:
+            logger.warning("Reply target rejected for %s, sending unbound: %s", chat_id, exc)
     try:
         return bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=reply_markup)
     except Exception as exc:
@@ -170,6 +185,24 @@ def _prompt_line(prompt_id, video_id=None):
     return f"🔗 ربط الطلب: <code>{safe_html(prompt_id, 40)}</code>"
 
 
+def _reply_target_for_call(call, user_id):
+    """
+    رقم الرسالة التي ضُغط زرها (ليكون التلميح ردّاً حقيقياً عليها).
+
+    يُستخدم فقط إذا كانت رسالة الزر في نفس محادثة المستخدم الخاصة، فلا يُردّ
+    على رسالة في محادثة أخرى أبداً.
+    """
+    message = getattr(call, 'message', None)
+    if message is None:
+        return None
+    chat = getattr(message, 'chat', None)
+    if chat is None or getattr(chat, 'type', None) != 'private':
+        return None
+    if _parse_int(getattr(chat, 'id', None)) != _parse_int(user_id):
+        return None
+    return _parse_int(getattr(message, 'message_id', None))
+
+
 def _reply_markup(comment_id, prompt_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
@@ -234,6 +267,7 @@ def handle_add_comment(bot, call):
             "💡 <i>ردّ على هذه الرسالة لإرسال التعليق، أو أرسل النص مباشرة.</i>\n"
             "💡 <i>للإلغاء، اضغط /cancel</i>\n"
             + _prompt_line(prompt_id),
+            reply_to_message_id=_reply_target_for_call(call, user_id),
         )
         # الربط: رقم رسالة التلميح في السياق يحدد الرسالة التي يخصها الإدخال
         db.set_user_state(user_id, STATE_WAITING_COMMENT, {
@@ -269,9 +303,10 @@ def start_followup(bot, call, admin_ids=None):
             user_id,
             f"➕ <b>متابعة المحادثة #{comment_id}</b>\n\n"
             "اكتب رسالتك التالية وستُضاف إلى سجل المحادثة (رسائلك السابقة محفوظة).\n\n"
-            "💡 <i>ردّ على هذه الرسالة لإضافة رسالة إلى هذه المحادثة.</i>\n"
+            "💡 <i>ردّ على هذه الرسالة لإضافة رسالة إلى هذه المحادثة، أو أرسل النص مباشرة.</i>\n"
             "💡 <i>للإلغاء، اضغط /cancel</i>\n"
             + _prompt_line(prompt_id),
+            reply_to_message_id=_reply_target_for_call(call, user_id),
         )
         db.set_user_state(user_id, STATE_WAITING_COMMENT, {
             "comment_id": comment_id,
