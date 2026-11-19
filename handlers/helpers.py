@@ -13,6 +13,7 @@ from .button_styles import (
     disabled_button,
     inline_button,
     keyboard_button,
+    web_app_keyboard_button,
 )
 from db_manager import (
     get_child_categories, get_category_by_id, get_user_video_rating,
@@ -182,15 +183,17 @@ def main_menu(bot_username=None):
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
     # زر التطبيق المصغّر يظهر فقط عندما يكون APP_URL رابط HTTPS صالحاً.
-    # لا نضع web_app هنا لأن بعض عملاء تيليجرام لا تدعمها في لوحة المفاتيح
-    # الرئيسية؛ الضغط على الزر يصل كرسالة نصية ويعالجها user_handlers.
+    # الحقل الرسمي ``web_app`` على زر لوحة المفاتيح يفتح المكتبة داخل تيليجرام؛
+    # العملاء التي لا تدعمه ترسل نص الزر فيعالجه user_handlers.handle_miniapp_button
+    # (في الخاص بزر web_app وفي الجروب برابط t.me لأن web_app ممنوع في الجروبات).
     try:
-        miniapp_active = bool(miniapp_url())
+        miniapp_link = miniapp_url()
     except Exception as exc:
         logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
-        miniapp_active = False
-    if miniapp_active:
-        markup.row(keyboard_button(MINIAPP_KEYBOARD_TEXT, STYLE_PRIMARY))
+        miniapp_link = None
+    if miniapp_link:
+        markup.row(web_app_keyboard_button(MINIAPP_KEYBOARD_TEXT, miniapp_link,
+                                           STYLE_PRIMARY))
     
     return markup
 

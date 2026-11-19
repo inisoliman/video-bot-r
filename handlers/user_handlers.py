@@ -372,7 +372,25 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text and MINIAPP_KEYBOARD_TEXT in message.text)
     def handle_miniapp_button(message):
-        """زر لوحة المفاتيح الرئيسية يحمل نفس نص الأولوية: الضغط يفتح المكتبة."""
+        """زر لوحة المفاتيح الرئيسية يحمل نفس نص الأولوية: الضغط يفتح المكتبة.
+
+        في الخاص: زر web_app (كما هو). في الجروب/السوبرجروب: تيليجرام يرفض أزرار
+        web_app برسالة BUTTON_TYPE_INVALID فلا يظهر أي رد؛ لذلك نرسل رابط تيليجرام
+        المباشر (build_group_library_markup) أو نص إرشادي بديل — دائماً بردّ واحد.
+        """
+        chat = getattr(message, "chat", None)
+        chat_type = getattr(chat, "type", "private") or "private"
+        if chat_type in ("group", "supergroup"):
+            markup = build_group_library_markup()
+            if markup is not None:
+                bot.reply_to(message, GROUP_LIBRARY_HINT, reply_markup=markup,
+                             parse_mode="HTML")
+            else:
+                bot.reply_to(message, GROUP_LIBRARY_HINT_NO_LINK, parse_mode="HTML")
+            return
+        if chat_type != "private":
+            bot.reply_to(message, "📱 مكتبة الفيديوهات متاحة في المحادثة الخاصة فقط.")
+            return
         markup = build_library_markup()
         if markup is None:
             bot.reply_to(message, "📱 مكتبة الفيديوهات غير متاحة حالياً. استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")

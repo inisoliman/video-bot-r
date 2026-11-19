@@ -66,6 +66,32 @@ class StyledKeyboardButton(KeyboardButton):
         return data
 
 
+class WebAppKeyboardButton(StyledKeyboardButton):
+    """Reply keyboard button that opens a Mini App via Telegram's ``web_app`` field.
+
+    A plain text reply-keyboard button makes the client send the button text as a
+    message; the official ``web_app`` field on ``KeyboardButton`` opens the Mini App
+    directly in clients that support it. Clients (or chats) that do not support it
+    simply deliver the text, which the Mini App text handler still answers.
+    """
+
+    def __init__(self, text, web_app_url, style=None, **kwargs):
+        self._web_app_url = web_app_url
+        super().__init__(text, style=style, **kwargs)
+
+    def to_dict(self):
+        data = super().to_dict()
+        url = getattr(self, "_web_app_url", None)
+        if url:
+            data["web_app"] = {"url": url}
+        return data
+
+
+def web_app_keyboard_button(text, url, style=None, **kwargs):
+    """Create a reply keyboard button that opens the Mini App at ``url``."""
+    return WebAppKeyboardButton(text, url, style=style, **kwargs)
+
+
 def inline_button(text, style=None, **kwargs):
     """Create an InlineKeyboardButton with optional Telegram color style.
 
