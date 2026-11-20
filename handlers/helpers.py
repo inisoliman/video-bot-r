@@ -5,6 +5,7 @@ from telebot.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 import math
 import re
 import logging
+import os
 from html import escape as html_escape
 from .button_styles import (
     STYLE_DANGER,
@@ -32,6 +33,22 @@ user_last_search = {}
 
 # أقصى رقم صفحة مقبول من callback_data (حماية من قيم مشوّهة)
 MAX_PAGE_INDEX = 9999
+
+# نفس متغير ترتيب الترحيب عند إضافة البوت للجروب في handlers/group_handlers.py
+# (webhook_bot يسجّله أولاً، ثم user_handlers، لذلك نقرأ ذاكرة إرساله)
+WELCOME_SENT_CACHE = "group_welcome_sent"
+
+
+def get_admin_ids():
+    """معرّفات الأدمن من ``ADMIN_IDS`` (نفس القائمة التي يقرأها webhook_bot)."""
+    raw = os.getenv("ADMIN_IDS") or ""
+    ids = set()
+    for part in raw.replace(";", ",").split(","):
+        try:
+            ids.add(int(part.strip()))
+        except ValueError:
+            continue
+    return ids
 
 
 def safe_page(value, default=0):
@@ -105,6 +122,66 @@ def build_category_tree(categories):
     return tree
 
 
+def removable_reply_keyboard():
+    """لوحة رد تُزيل لوحة أزرار عضو آخر في «الخاص» (زر فارغ عرض 4 بايتات).
+
+    لوحة الرد في الخاص تُخزَّن لكل محادثة لا لكل عضو؛ إرسالها فاشل أو مُبعَث لطرف آخر
+    يعني أن الإرسال بدون لوحة سيوصل أزرار الطرف الآخر للعضو الحالي. إرسالها بلا
+    ``remove_keyboard`` يرسل زراً فارغاً غير قابلاً للضغط بدل الأزرار القديمة.
+    """
+    return ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False,
+                               is_persistent=False)
+
+
+def dm_subscription_chooser():
+    """زر واحد يطلب فتح محادثة البوت (الخاص) لبدء /start بعيداً عن الأعضاء.
+
+    في المجموعات لا تُرسَل لوحة الرد ولا قائمة الاشتراك (أسماء القنوات) لكل الأعضاء؛
+    يُترك للعضو اختيار بدء الخاص بنفسه.
+    """
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(inline_button("🤖 ابدأ البوت في الخاص", STYLE_PRIMARY,
+                             callback_data="start_in_private"))
+    return markup
+
+
+def link_bot_private(idle_bot, chat_id, bot_username, group_username=""):
+    """رابط البوت في «الخاص» ليبدأ منه العضو: ``?startgroup=<جروبنا>`` أو بلا معامل.
+
+    ``startgroup`` يعيد المستخدم إلى الجروب نفسه بعد فتح الخاص، فلا يضطر العضو للبحث
+    عن البوت؛ يُضاف فقط إذا كان الجروب يسمح للأعضاء بإضافة البوتات (وإلا فتح الكارت
+    يرسل خطأ في الجروب). يُبنى من اسم مُتحقَّق فقط، وإلا يعود ``https://t.me/<bot>``.
+    """
+    base = f"https://t.me/{bot_username}"
+    if not group_username:
+        return base
+    if not members_can_add_bots(idle_bot, chat_id):
+        return base
+    return f"{base}?startgroup={group_username}"
+
+
+def members_can_add_bots(bot, chat_id):
+    """هل يسمح الجروب للأعضاء بإضافة بوتات؟ (قراءة فقط؛ أي فشل ⇒ False).
+
+    إعداد ``can_add_bots`` في ``chat.permissions`` غير متاح إلا لمسؤول الجروب، فالفشل
+    في القراءة يمنع بناء رابط يكسر فتح الكارت في الجروب.
+    """
+    try:
+        chat = bot.get_chat(chat_id)
+    except Exception as exc:  # noqa: BLE001 - غياب الإذن يعني بلا رابط startgroup
+        logger.debug(f"Cannot read chat permissions for {chat_id}: {type(exc).__name__}")
+        return False
+    permissions = getattr(chat, "permissions", None)
+    return bool(getattr(permissions, "can_add_bots", False))
+
+
+def _int_id(value):
+    """معرّف رقمي صحيح أو None (بيانات بيئة/إعدادات غير موثوقة)."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
 def check_subscription(bot, user_id):
     """
     Verifies if a user is subscribed to all required channels.
@@ -112,6 +189,14 @@ def check_subscription(bot, user_id):
     """
     required_channels = get_required_channels()
     if not required_channels:
+        return True, []
+    # أدمن من يدير القنوات المطلوبة يملكها أصلاً: لا نداء API لكل قناة
+    try:
+        admins = get_admin_ids()
+    except Exception as exc:  # noqa: BLE001 - القائمة اختيارية للتحسين فقط
+        logger.debug(f"Admin list unavailable for subscription check: {type(exc).__name__}")
+        admins = set()
+    if user_id in admins:
         return True, []
     
     unsubscribed = []

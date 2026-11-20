@@ -24,7 +24,7 @@ from db_manager import (
 from .helpers import (
     main_menu, create_paginated_keyboard,
     create_video_action_keyboard, user_last_search, generate_grouping_key,
-    check_subscription, list_videos
+    check_subscription, list_videos, link_bot_private
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
 from . import ephemeral_messages
@@ -251,14 +251,81 @@ def register(bot, channel_id, admin_ids):
         clear_user_waiting_state(message.from_user.id)
         handle_private_text_search_direct(message, bot)
 
+    def safe_reply(message, text, **kwargs):
+        """رد لا يجعل فشل تنسيقه إرسالاً صامتاً: بلا HTML عند خطأ تحليل النص."""
+        try:
+            return bot.reply_to(message, text, **kwargs)
+        except telebot.apihelper.ApiTelegramException as error:
+            if "parse entities" not in str(getattr(error, "description", error)).lower():
+                raise
+            fallback = dict(kwargs)
+            fallback.pop("parse_mode", None)
+            # الإبقاء على reply_markup: لوحة/زر صالح كافٍ ليظهر الرد الذي فشل تنسيق نصه
+            return bot.reply_to(message, text, **fallback)
+
+    def private_start_markup(uname, group_username, message):
+        """زر يُنقل العضو إلى «الخاص» لبدء البوت، أو None إن لم يصلح اسم البوت."""
+        if not re.fullmatch(r"[A-Za-z0-9_]{5,32}", uname or ""):
+            return None
+        url = link_bot_private(bot, message.chat.id, uname, group_username or "")
+        markup = InlineKeyboardMarkup(row_width=1)
+        markup.add(InlineKeyboardButton("🤖 ابدأ البوت في الخاص", url=url))
+        return markup
+
+    def group_start_reply(message):
+        """بدء البوت من مجموعة أو قناة: شرح وزر يدعو للخاص، بلا لوحة أزرار مُلحَقة.
+
+        لوحة الرد (main_menu) وعرض قائمة الاشتراك خاصان بالمحادثة الخاصة، فنُرسل في
+        المجموعات رسالتين قصيرتين فقط. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
+        """
+        chat = getattr(message, "chat", None)
+        try:
+            bot_info = bot.get_me()
+        except Exception as error:  # noqa: BLE001 - نكمل برسالة عامة بلا زر
+            logger.warning(f"get_me failed for group /start: {type(error).__name__}")
+            bot_info = None
+        uname = str(getattr(bot_info, "username", "") or "")
+        group_username = str(getattr(chat, "username", "") or "")
+        title = html_escape(str(getattr(chat, "title", "") or "المحادثة الخاصة"))
+        safe_reply(message, (
+            "🎬 <b>مكتبة الفيديوهات</b>\n\n"
+            f"🔍 البحث: اكتب <code>@{html_escape(uname) or 'اسم البوت'} كلمة البحث</code>\n"
+            "📱 المكتبة: أرسل <code>/library</code> هنا\n\n"
+            "⬇️ ابدأ البوت في الخاص لتصفح كل الفيديوهات والمفضلة وسجل المشاهدة."
+        ), parse_mode="HTML")
+        markup = private_start_markup(uname, group_username, message)
+        if markup is not None:
+            safe_reply(message, f"▶️ اضغط الزر أدناه للانتقال إلى الخاص مع {title}:",
+                       reply_markup=markup)
+        else:
+            safe_reply(message, "▶️ افتح محادثة البوت الخاصة ليبدأ العرض الكامل.")
+
     @bot.message_handler(commands=["start"])
     def start(message):
-        # إضافة المستخدم إلى قاعدة البيانات
-        add_bot_user(message.from_user.id, message.from_user.username, message.from_user.first_name)
-        
+        user = getattr(message, "from_user", None)
+        user_id = getattr(user, "id", None)
+        if user_id is None:
+            logger.warning("Ignoring /start without from_user")
+            return
+        # المجموعة أولاً: لا قائمة اشتراك ولا لوحة أزرار تُنشر لكل الأعضاء
+        chat_type = str(getattr(getattr(message, "chat", None), "type", "private") or "private")
+        if chat_type in ("group", "supergroup", "channel"):
+            group_start_reply(message)
+            return
+        # إضافة المستخدم إلى قاعدة البيانات: فشل قاعدة البيانات لا يمنع الترحيب
+        try:
+            add_bot_user(user_id, getattr(user, "username", None),
+                         getattr(user, "first_name", None))
+        except Exception as error:  # noqa: BLE001 - نكمل للترحيب دائماً
+            logger.warning(f"Could not record bot user {user_id}: {type(error).__name__}")
+
         # التحقق من الاشتراك في القنوات المطلوبة
-        is_subscribed, unsub_channels = check_subscription(bot, message.from_user.id)
-        
+        try:
+            is_subscribed, unsub_channels = check_subscription(bot, user_id)
+        except Exception as error:  # noqa: BLE001 - الترحيب أهم من فحص الاشتراك
+            logger.warning(f"Subscription check failed for {user_id}: {type(error).__name__}")
+            is_subscribed, unsub_channels = True, []
+
         if not is_subscribed:
             markup = InlineKeyboardMarkup(row_width=1)
             for channel in unsub_channels:
@@ -287,7 +354,7 @@ def register(bot, channel_id, admin_ids):
                 "👇 اضغط على الأزرار أدناه للاشتراك"
             )
             
-            bot.reply_to(message, welcome_text, reply_markup=markup)
+            safe_reply(message, welcome_text, reply_markup=markup)
             return
         
         # إذا كان المستخدم مشتركاً في جميع القنوات
@@ -306,7 +373,7 @@ def register(bot, channel_id, admin_ids):
             + "استمتع بوقتك! 😊"
         )
         
-        bot.reply_to(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="HTML")
+        safe_reply(message, welcome_text, reply_markup=main_menu(bot_info.username), parse_mode="HTML")
 
     @bot.message_handler(commands=["myid"])
     def get_my_id(message):
