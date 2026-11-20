@@ -123,26 +123,26 @@ def build_category_tree(categories):
 
 
 def removable_reply_keyboard():
-    """لوحة رد تُزيل لوحة أزرار عضو آخر في «الخاص» (زر فارغ عرض 4 بايتات).
-
-    لوحة الرد في الخاص تُخزَّن لكل محادثة لا لكل عضو؛ إرسالها فاشل أو مُبعَث لطرف آخر
-    يعني أن الإرسال بدون لوحة سيوصل أزرار الطرف الآخر للعضو الحالي. إرسالها بلا
-    ``remove_keyboard`` يرسل زراً فارغاً غير قابلاً للضغط بدل الأزرار القديمة.
-    """
+    """لوحة رد تُرسل بعد مسح الجروب فيظل الشات بلا أزرار (زر فارغ عرض 4 بايتات)."""
     return ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False,
                                is_persistent=False)
 
 
-def dm_subscription_chooser():
-    """زر واحد يطلب فتح محادثة البوت (الخاص) لبدء /start بعيداً عن الأعضاء.
+def already_welcomed(bot, chat_id):
+    """هل سبق إرسال ترحيب الإضافة لهذا الجروب مع هذا البوت؟"""
+    cache = getattr(bot, WELCOME_SENT_CACHE, None)
+    try:
+        return cache is not None and chat_id in cache
+    except TypeError:  # noqa: BLE001 - قيمة غير قابلة للبحث
+        return False
 
-    في المجموعات لا تُرسَل لوحة الرد ولا قائمة الاشتراك (أسماء القنوات) لكل الأعضاء؛
-    يُترك للعضو اختيار بدء الخاص بنفسه.
-    """
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(inline_button("🤖 ابدأ البوت في الخاص", STYLE_PRIMARY,
-                             callback_data="start_in_private"))
-    return markup
+
+def remember_welcome(bot, chat_id):
+    """تسجيل أن الجروب رآه ترحيب الإضافة (بين عمليات الامتداد الجارية)."""
+    try:
+        getattr(bot, WELCOME_SENT_CACHE).setdefault(chat_id, True)
+    except Exception:  # noqa: BLE001 - الذاكرة اختيارية
+        pass
 
 
 def link_bot_private(idle_bot, chat_id, bot_username, group_username=""):

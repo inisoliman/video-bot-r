@@ -100,14 +100,23 @@ class StartTest(support.OfflineTestCase):
         return bot
 
     def press_start(self, bot, chat_type="group", user_id=support.MEMBER_ID,
-                    chat_username=None, env=None, chat_id=None):
+                    chat_username=None, env=None, chat_id=None, times=1):
         message = support.make_message(
             text="/start", user_id=user_id, chat_type=chat_type,
             chat_id=chat_id if chat_id is not None else (user_id if chat_type == "private" else GROUP_CHAT_ID))
         message.chat.username = chat_username
         with support.env(**(env or BASE_ENV)):
-            bot.handlers[0](message)  # أول معالج مسجّل هو /start
+            for _ in range(times):
+                bot.handlers[0](message)  # أول معالج مسجّل هو /start
         return bot.replies()
+
+    def test_repeated_group_start_does_not_repeat_the_welcome(self):
+        bot = self.registered_bot(RecordingBot(chat_permissions=True))
+        bot.group_welcome_sent = {}
+        replies = self.press_start(bot, chat_username=GROUP_USERNAME, times=2)
+        self.assertEqual(len(replies), 3)
+        self.assertIn("الخاص", replies[2][0])
+        self.assertEqual(len(bot.group_welcome_sent), 1)
 
     # --- الجروب ------------------------------------------------------------
 
