@@ -128,7 +128,9 @@ def register(bot, admin_ids):
                         "• 🔍 البحث عن فيديوهات معينة\n\n"
                         "<i>استمتع بوقتك!</i> 😊"
                     )
-                    bot.send_message(call.message.chat.id, welcome_text, reply_markup=helpers.main_menu())
+                    bot.send_message(call.message.chat.id, welcome_text,
+                                     reply_markup=helpers.main_menu(
+                                         chat_type=getattr(call.message.chat, "type", "private")))
                 else:
                     # إعادة إنشاء رسالة الاشتراك مع القنوات التي لم يشترك فيها المستخدم
                     markup = InlineKeyboardMarkup(row_width=1)
@@ -769,13 +771,40 @@ def register(bot, admin_ids):
                 except Exception as e:
                     logger.warning(f"Could not delete previous menu message: {e}")
 
-                bot.send_message(
-                    call.message.chat.id,
-                    "🏠 <b>القائمة الرئيسية:</b>",
-                    reply_markup=helpers.main_menu(),
-                    parse_mode="HTML"
-                )
+                chat_type = getattr(call.message.chat, "type", "private")
+                try:
+                    if chat_type == "private":
+                        bot.send_message(
+                            call.message.chat.id,
+                            "🏠 <b>القائمة الرئيسية:</b>",
+                            reply_markup=helpers.main_menu(chat_type=chat_type),
+                            parse_mode="HTML"
+                        )
+                    else:
+                        bot.send_message(
+                            call.message.chat.id,
+                            "🏠 <b>القائمة الرئيسية:</b>",
+                            reply_markup=helpers.inline_main_menu(),
+                            parse_mode="HTML"
+                        )
+                except telebot.apihelper.ApiTelegramException as error:
+                    # لوحة الرد مرفوضة في هذه المحادثة: لا نُسقط الرد كله
+                    logger.warning(f"Main menu send failed ({type(error).__name__}); retrying inline")
+                    bot.send_message(call.message.chat.id, "🏠 <b>القائمة الرئيسية:</b>",
+                                     reply_markup=helpers.inline_main_menu(),
+                                     parse_mode="HTML")
                 bot.answer_callback_query(call.id)
+
+            elif action == "menu":
+                # أزرار القائمة Inline في الجروب: نعيد نفس نص زر لوحة الرد
+                # فيعالجه معالج النص القائم بلا تكرار منطق.
+                text = helpers.CALLBACK_DELIMITER.join(data[1:]) if len(data) > 1 else ""
+                bot.answer_callback_query(call.id)
+                if text:
+                    try:
+                        bot.send_message(call.message.chat.id, text)
+                    except telebot.apihelper.ApiTelegramException as error:
+                        logger.warning(f"Menu action send failed ({type(error).__name__})")
 
             elif action == "video":
                 try:

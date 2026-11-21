@@ -24,7 +24,7 @@ from db_manager import (
 from .helpers import (
     main_menu, create_paginated_keyboard,
     create_video_action_keyboard, user_last_search, generate_grouping_key,
-    check_subscription, list_videos, link_bot_private
+    check_subscription, list_videos, link_bot_private, inline_main_menu
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
 from . import ephemeral_messages
@@ -273,10 +273,11 @@ def register(bot, channel_id, admin_ids):
         return markup
 
     def group_start_reply(message):
-        """بدء البوت من مجموعة أو قناة: شرح وزر يفتح لوحة الأزرار في المحادثة الخاصة.
+        """بدء البوت من مجموعة أو قناة: شرح + أزرار Inline تعمل داخل الجروب.
 
-        لوحة الرد (main_menu) خاصة لكل عضو فلا تُنشر في الجروب؛ يُرسل الشرح وزر يفتح
-        الخاص. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
+        لوحة الرد (main_menu) في الخاص فقط؛ في الجروب تُرسَل أزرار Inline بنفس
+        وظائفها، وكل زر يرسل نفس النص الذي تعالجه معالجات النصوص القائمة. كل إرسال
+        مستقل حتى لا يوقف فشلُ الأول الثاني.
         """
         chat = getattr(message, "chat", None)
         try:
@@ -291,14 +292,14 @@ def register(bot, channel_id, admin_ids):
             "🎬 <b>مكتبة الفيديوهات</b>\n\n"
             f"🔍 البحث: اكتب <code>@{html_escape(uname) or 'اسم البوت'} كلمة البحث</code>\n"
             "📱 المكتبة: أرسل <code>/library</code> هنا\n\n"
-            "⬇️ لوحة الأزرار الرئيسية تُفتح في الخاص."
+            "⬇️ اختر من الأزرار أدناه، أو ابدأ البوت في الخاص للوحة المفاتيح الكاملة."
         ), parse_mode="HTML")
+        safe_reply(message, "🎛️ القائمة الرئيسية:",
+                   reply_markup=inline_main_menu())
         markup = private_start_markup(uname, group_username, message)
         if markup is not None:
             safe_reply(message, f"▶️ اضغط الزر أدناه للانتقال إلى الخاص مع {title}:",
                        reply_markup=markup)
-        else:
-            safe_reply(message, "▶️ افتح محادثة البوت الخاصة ليبدأ العرض الكامل.")
 
     @bot.message_handler(commands=["start"])
     def start(message):

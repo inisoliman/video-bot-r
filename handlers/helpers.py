@@ -219,14 +219,15 @@ def list_videos(bot, message, edit_message=None, parent_id=None):
             logger.error(f"Error in list_videos: {e}")
 
 
-def main_menu(bot_username=None):
+def main_menu(bot_username=None, chat_type="private"):
+    """لوحة الأزرار الرئيسية (reply keyboard) — في المحادثة الخاصة فقط.
+
+    ``chat_type`` غير الخاص يعيد نسخة بلا زر ``web_app``: تيليجرام يرفض أي زر
+    ``web_app`` خارج الخاص برسالة 400 فيُسقط الإرسال كله (كان يمنع CTA-group من
+    الظهور). لوحة الرد نفسها ليست UI المطلوب في الجروبات — الجروب يستخدم أزرار
+    Inline (inline_main_menu).
     """
-    القائمة الرئيسية مع زر البحث السريع.
-    محدثة للعمل على Telegram Desktop والموبايل.
-    
-    Args:
-        bot_username: اسم البوت (اختياري) لإضافة زر switch inline
-    """
+    in_private = (chat_type or "private") == "private"
     markup = ReplyKeyboardMarkup(
         resize_keyboard=True,
         one_time_keyboard=False,
@@ -246,12 +247,12 @@ def main_menu(bot_username=None):
         keyboard_button("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS),
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
-    # زر التطبيق المصغّر يظهر فقط عندما يكون APP_URL رابط HTTPS صالحاً.
+    # زر التطبيق المصغّر يظهر فقط في الخاص وعندما يكون APP_URL رابط HTTPS صالحاً.
     # الحقل الرسمي ``web_app`` على زر لوحة المفاتيح يفتح المكتبة داخل تيليجرام؛
-    # العملاء التي لا تدعمه ترسل نص الزر فيعالجه user_handlers.handle_miniapp_button
-    # (في الخاص بزر web_app وفي الجروب برابط t.me لأن web_app ممنوع في الجروبات).
+    # العملاء التي لا تدعمه ترسل نص الزر فيعالجه user_handlers.handle_miniapp_button.
+    # خارج الخاص يُترك الزر كلياً: web_app ممنوع في الجروبات ويُسقط الرسالة.
     try:
-        miniapp_link = miniapp_url()
+        miniapp_link = miniapp_url() if in_private else None
     except Exception as exc:
         logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
         miniapp_link = None
@@ -260,6 +261,28 @@ def main_menu(bot_username=None):
                                            STYLE_PRIMARY))
     
     return markup
+
+
+def inline_main_menu():
+    """القائمة الرئيسية بنفس أزرار main_menu لكن كأزرار Inline تعمل في الجروب.
+
+    كل زر يرسل نفس نص زر لوحة الرد، فمعالجات النصوص الموجودة تتعامل معه كما هي؛
+    لذلك لا نضيف مسارات callback جديدة. الميني أب يستخدم رابط ``t.me`` المباشر
+    (build_group_library_markup) لأن web_app ممنوع خارج الخاص.
+    """
+    rows = (
+        (("🎬 عرض كل الفيديوهات 🟢", STYLE_SUCCESS, "🎬 عرض كل الفيديوهات 🟢"),
+         ("🔥 الفيديوهات الشائعة 🔴", STYLE_DANGER, "🔥 الفيديوهات الشائعة 🔴")),
+        (("⭐ المفضلة 🟡", STYLE_PRIMARY, "⭐ المفضلة 🟡"),
+         ("📺 سجل المشاهدة 🔵", STYLE_PRIMARY, "📺 سجل المشاهدة 🔵")),
+        (("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS, "🍿 اقترح لي فيلم 🟣"),
+         ("🔍 بحث 🟠", STYLE_PRIMARY, "🔍 بحث 🟠")),
+    )
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    for row in rows:
+        keyboard.add(*[inline_button(label, style, callback_data=f"menu::{text}")
+                       for label, style, text in row])
+    return keyboard
 
 
 

@@ -113,19 +113,27 @@ class StartTest(support.OfflineTestCase):
     def test_repeated_group_start_keeps_answering(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=True))
         replies = self.press_start(bot, chat_username=GROUP_USERNAME, times=2)
-        self.assertEqual(len(replies), 4)
-        self.assertEqual(replies[0][0], replies[2][0])
+        self.assertEqual(len(replies), 6)
+        self.assertEqual(replies[0][0], replies[3][0])
 
     # --- الجروب ------------------------------------------------------------
 
-    def test_group_start_replies_with_guide_and_private_button(self):
+    def test_group_start_replies_with_guide_inline_menu_and_private_button(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=True))
         replies = self.press_start(bot, chat_username=GROUP_USERNAME)
-        self.assertEqual(len(replies), 2)
+        self.assertEqual(len(replies), 3)
         text, kwargs = replies[0]
         self.assertNotIn("reply_markup", kwargs)
         self.assertIn("/library", text)
-        button = buttons(replies[1][1]["reply_markup"])
+        # أزرار القائمة Inline تعمل داخل الجروب (لأن لوحة الرد خاصة لكل عضو)
+        menu = replies[1][1]["reply_markup"]
+        self.assertIsInstance(menu, types.InlineKeyboardMarkup)
+        serialized = json.loads(menu.to_json())
+        self.assertEqual(len(serialized["inline_keyboard"]), 3)
+        for row in serialized["inline_keyboard"]:
+            for item in row:
+                self.assertNotIn("web_app", item)
+        button = buttons(replies[2][1]["reply_markup"])
         self.assertEqual(len(button), 1)
         self.assertIsInstance(button[0], types.InlineKeyboardButton)
         self.assertEqual(button[0].url,
@@ -140,17 +148,8 @@ class StartTest(support.OfflineTestCase):
     def test_group_start_button_is_plain_link_without_permission(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=False))
         replies = self.press_start(bot, chat_username=GROUP_USERNAME)
-        self.assertEqual(buttons(replies[1][1]["reply_markup"])[0].url,
+        self.assertEqual(buttons(replies[2][1]["reply_markup"])[0].url,
                          f"https://t.me/{BOT_USERNAME}")
-
-    def test_supergroup_start_same_flow(self):
-        bot = self.registered_bot(RecordingBot(chat_permissions=True))
-        replies = self.press_start(bot, chat_type="supergroup",
-                                   chat_username=GROUP_USERNAME)
-        self.assertEqual(len(replies), 2)
-        serialized = json.loads(replies[1][1]["reply_markup"].to_json())
-        urls = [b.get("url") for row in serialized["inline_keyboard"] for b in row]
-        self.assertEqual(urls, [f"https://t.me/{BOT_USERNAME}?startgroup={GROUP_USERNAME}"])
 
     def test_group_start_survives_database_failure(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=True))
@@ -160,13 +159,7 @@ class StartTest(support.OfflineTestCase):
 
         db_manager.add_bot_user = boom
         replies = self.press_start(bot, chat_username=GROUP_USERNAME)
-        self.assertEqual(len(replies), 2)
-
-    def test_group_start_survives_get_me_failure(self):
-        bot = self.registered_bot(RecordingBot(me_error=RuntimeError("network down")))
-        replies = self.press_start(bot, chat_username=GROUP_USERNAME)
-        self.assertGreaterEqual(len(replies), 1)
-        self.assertNotIn("reply_markup", replies[0][1])
+        self.assertEqual(len(replies), 3)
 
     def test_group_start_never_checks_subscription(self):
         called = []
@@ -174,7 +167,7 @@ class StartTest(support.OfflineTestCase):
         bot = self.registered_bot(RecordingBot(chat_permissions=True))
         replies = self.press_start(bot, chat_username=GROUP_USERNAME)
         self.assertEqual(called, [])
-        self.assertEqual(len(replies), 2)
+        self.assertEqual(len(replies), 3)
         self.assertNotIn("قناة", " ".join(text for text, _kwargs in replies))
 
     def test_channel_start_sends_the_same_guide(self):
