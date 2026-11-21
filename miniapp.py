@@ -656,7 +656,17 @@ main{padding:12px 14px}
   function openVideo(item, button) {
     if (state.opening) return;            // نقرة سريعة أثناء طلب جارٍ
     tapFeedback();
-    if (!initData()) {
+    var iData = initData();
+    var tg = telegramApp();
+    console.log("openVideo called", {
+      hasInitData: !!iData,
+      initDataLength: iData ? iData.length : 0,
+      hasTelegramApp: !!tg,
+      telegramVersion: tg ? tg.version : null,
+      platform: tg ? tg.platform : null
+    });
+    if (!iData) {
+      console.warn("Missing initData - cannot send video");
       toast("افتح المكتبة من داخل تيليجرام حتى يصل الفيديو إلى محادثتك.");
       return;
     }

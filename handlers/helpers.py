@@ -249,16 +249,9 @@ def main_menu(bot_username=None, chat_type="private"):
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
     # زر التطبيق المصغّر: في الخاص يستخدم web_app، في الجروب زر نصي عادي
+    # ملاحظة: web_app buttons لا تحتاج tgWebAppData - Telegram يحقن initData تلقائيًا!
     try:
-        base_url = miniapp_url() if in_private else None
-        if base_url and in_private:
-            # إضافة tgWebAppData parameter حتى يحقن Telegram الـ initData
-            _INITDATA_QUERY_PARAM = "tgWebAppData"
-            limit = 512 - len(f"?{_INITDATA_QUERY_PARAM}=")
-            base_url = base_url.encode("utf-8")[:limit].decode("utf-8", "ignore")
-            miniapp_link = f"{base_url}?{_INITDATA_QUERY_PARAM}={quote('{}', safe='')}"
-        else:
-            miniapp_link = base_url
+        miniapp_link = miniapp_url() if in_private else None
     except Exception as exc:
         logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
         miniapp_link = None

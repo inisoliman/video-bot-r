@@ -65,19 +65,12 @@ REGISTERED_COMMANDS = frozenset({
 
 
 def library_webapp_url():
-    """رابط يفتح التطبيق المصغّر من داخل تيليجرام كرابط web_app صالح.
+    """رابط التطبيق المصغّر للاستخدام في web_app buttons.
 
-    Telegram.WebApp.openTelegramLink لا يفتح تطبيقات الويب إنما روابط t.me،
-    والرابط العادي ``https://host/app`` يُفتح في المتصفح خارج تيليجرام. المعامل
-    ``tgWebAppData`` (يحقنه تيليجرام بالـ initData الحقيقي) يجعل الرابط يُفتح
-    كتطبيق مصغّر داخل تيليجرام. تيليجرام يقبل عناوين الويب المصغّر حتى 512 حرفاً.
+    web_app buttons (KeyboardButton و InlineKeyboardButton) لا تحتاج أي parameter -
+    Telegram يحقن initData تلقائيًا عند الفتح. الرابط المباشر فقط.
     """
-    base = miniapp_url()
-    if not base:
-        return None
-    limit = 512 - len(f"?{_INITDATA_QUERY_PARAM}=")
-    base = base.encode("utf-8")[:limit].decode("utf-8", "ignore")
-    return f"{base}?{_INITDATA_QUERY_PARAM}={quote('{}', safe='')}"
+    return miniapp_url()
 
 
 def build_library_markup():
