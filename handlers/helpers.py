@@ -247,10 +247,7 @@ def main_menu(bot_username=None, chat_type="private"):
         keyboard_button("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS),
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
-    # زر التطبيق المصغّر يظهر فقط في الخاص وعندما يكون APP_URL رابط HTTPS صالحاً.
-    # الحقل الرسمي ``web_app`` على زر لوحة المفاتيح يفتح المكتبة داخل تيليجرام؛
-    # العملاء التي لا تدعمه ترسل نص الزر فيعالجه user_handlers.handle_miniapp_button.
-    # خارج الخاص يُترك الزر كلياً: web_app ممنوع في الجروبات ويُسقط الرسالة.
+    # زر التطبيق المصغّر: في الخاص يستخدم web_app، في الجروب زر نصي عادي
     try:
         miniapp_link = miniapp_url() if in_private else None
     except Exception as exc:
@@ -259,6 +256,9 @@ def main_menu(bot_username=None, chat_type="private"):
     if miniapp_link:
         markup.row(web_app_keyboard_button(MINIAPP_KEYBOARD_TEXT, miniapp_link,
                                            STYLE_PRIMARY))
+    elif not in_private:
+        # في الجروب: زر نصي يرسل /library (سيفتح رابت t.me)
+        markup.row(keyboard_button(MINIAPP_KEYBOARD_TEXT, STYLE_PRIMARY))
     
     return markup
 

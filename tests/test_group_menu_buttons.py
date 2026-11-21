@@ -60,7 +60,8 @@ class MenuMarkupTest(support.OfflineTestCase):
                     payload = keyboard_payload(helpers.main_menu(BOT_USERNAME,
                                                                  chat_type=chat_type))
                 texts = [b["text"] for row in payload["keyboard"] for b in row]
-                self.assertNotIn(MINIAPP_KEYBOARD_TEXT, texts)
+                # زر Mini App يظهر في الجروبات كزر نصي عادي (بدون web_app)
+                self.assertIn(MINIAPP_KEYBOARD_TEXT, texts)
                 for text in MENU_TEXTS:
                     self.assertIn(text, texts)
                 for row in payload["keyboard"]:

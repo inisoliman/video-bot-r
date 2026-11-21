@@ -11,6 +11,8 @@ import logging
 import os
 import re
 import sys
+import threading
+import time
 from html import escape as html_escape
 from urllib.parse import quote
 from .button_styles import STYLE_DANGER, STYLE_PRIMARY, STYLE_SUCCESS, inline_button
@@ -277,9 +279,11 @@ def register(bot, channel_id, admin_ids):
 
         لوحة الرد (main_menu) ترسل للجروب بدون زر web_app؛ كما تُرسَل أزرار Inline بنفس
         وظائفها لمن لا يرى لوحة المفاتيح. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
+        رسائل القائمة الـInline والزر الخاص تُحذف بعد ساعة.
         """
         chat = getattr(message, "chat", None)
         chat_type = str(getattr(chat, "type", "group") or "group")
+        chat_id = getattr(chat, "id", None)
         try:
             bot_info = bot.get_me()
         except Exception as error:  # noqa: BLE001 - نكمل برسالة عامة بلا زر
@@ -288,18 +292,34 @@ def register(bot, channel_id, admin_ids):
         uname = str(getattr(bot_info, "username", "") or "")
         group_username = str(getattr(chat, "username", "") or "")
         title = html_escape(str(getattr(chat, "title", "") or "المحادثة الخاصة"))
+        # الرسالة الترحيبية مع لوحة المفاتيح تبقى (لا تُحذف)
         safe_reply(message, (
             "🎬 <b>مكتبة الفيديوهات</b>\n\n"
             f"🔍 البحث: اكتب <code>@{html_escape(uname) or 'اسم البوت'} كلمة البحث</code>\n"
             "📱 المكتبة: أرسل <code>/library</code> هنا\n\n"
             "⬇️ استخدم الأزرار أدناه، أو ابدأ البوت في الخاص للمكتبة المصغّرة."
         ), parse_mode="HTML", reply_markup=main_menu(uname, chat_type=chat_type))
-        safe_reply(message, "🎛️ القائمة الرئيسية:",
+        # رسائل القائمة الـInline والزر الخاص تُحذف بعد ساعة
+        inline_msg = safe_reply(message, "🎛️ القائمة الرئيسية:",
                    reply_markup=inline_main_menu())
         markup = private_start_markup(uname, group_username, message)
+        private_btn_msg = None
         if markup is not None:
-            safe_reply(message, f"▶️ اضغط الزر أدناه للانتقال إلى الخاص مع {title}:",
+            private_btn_msg = safe_reply(message, f"▶️ اضغط الزر أدناه للانتقال إلى الخاص مع {title}:",
                        reply_markup=markup)
+        # حذف رسائل القائمة بعد ساعة (3600 ثانية)
+        if chat_id and inline_msg:
+            def delete_menu_later():
+                try:
+                    time.sleep(3600)  # ساعة واحدة
+                    if inline_msg:
+                        bot.delete_message(chat_id, inline_msg.message_id)
+                    if private_btn_msg:
+                        bot.delete_message(chat_id, private_btn_msg.message_id)
+                    logger.info(f"Deleted menu messages in group {chat_id}")
+                except Exception as exc:
+                    logger.warning(f"Could not delete menu messages: {type(exc).__name__}")
+            threading.Thread(target=delete_menu_later, daemon=True).start()
 
     @bot.message_handler(commands=["start"])
     def start(message):
