@@ -462,9 +462,8 @@ def register(bot, channel_id, admin_ids):
     def handle_miniapp_button(message):
         """زر لوحة المفاتيح الرئيسية يحمل نفس نص الأولوية: الضغط يفتح المكتبة.
 
-        في الخاص: زر web_app (كما هو). في الجروب/السوبرجروب: تيليجرام يرفض أزرار
-        web_app برسالة BUTTON_TYPE_INVALID فلا يظهر أي رد؛ لذلك نرسل رابط تيليجرام
-        المباشر (build_group_library_markup) أو نص إرشادي بديل — دائماً بردّ واحد.
+        في الخاص: زر web_app الرسمي يفتح التطبيق مباشرة؛ إذا وصل النص (عملاء قديمة)
+        يتجاهله لأن الزر نفسه web_app. في الجروب: زر نصي عادي يفتح رابط t.me.
         """
         chat = getattr(message, "chat", None)
         chat_type = getattr(chat, "type", "private") or "private"
@@ -476,14 +475,11 @@ def register(bot, channel_id, admin_ids):
             else:
                 bot.reply_to(message, GROUP_LIBRARY_HINT_NO_LINK, parse_mode="HTML")
             return
-        if chat_type != "private":
-            bot.reply_to(message, "📱 مكتبة الفيديوهات متاحة في المحادثة الخاصة فقط.")
-            return
-        markup = build_library_markup()
-        if markup is None:
-            bot.reply_to(message, "📱 مكتبة الفيديوهات غير متاحة حالياً. استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")
-            return
-        bot.reply_to(message, "📱 <b>مكتبة الفيديوهات</b>\nافتح التطبيق المصغّر من الزر أدناه:", reply_markup=markup)
+        # في المحادثة الخاصة: الزر الموجود في لوحة المفاتيح هو web_app يفتح مباشرة؛
+        # وصول النص يعني عميل قديم لا يدعم web_app، فنتجاهله (الزر غير مدعوم لديه)
+        # أو نعيد توجيهه لاستخدام /library command
+        logger.info(f"Mini App button text received in private chat from user {message.from_user.id} (old client?)")
+        return  # نتجاهل لأن الزر الرسمي web_app يعمل في العملاء الحديثة
 
     @bot.message_handler(func=lambda message: message.text and message.text.startswith("🔍 بحث"))
     def handle_search_button(message):
