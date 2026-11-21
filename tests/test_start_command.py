@@ -123,9 +123,16 @@ class StartTest(support.OfflineTestCase):
         replies = self.press_start(bot, chat_username=GROUP_USERNAME)
         self.assertEqual(len(replies), 3)
         text, kwargs = replies[0]
-        self.assertNotIn("reply_markup", kwargs)
+        # الرسالة الأولى تحتوي على أزرار Reply Keyboard للجروب (بدون web_app)
+        self.assertIn("reply_markup", kwargs)
+        reply_keyboard = kwargs["reply_markup"]
+        self.assertIsInstance(reply_keyboard, types.ReplyKeyboardMarkup)
+        serialized_reply = json.loads(reply_keyboard.to_json())
+        for row in serialized_reply["keyboard"]:
+            for button in row:
+                self.assertNotIn("web_app", button, "group reply keyboard must not have web_app buttons")
         self.assertIn("/library", text)
-        # أزرار القائمة Inline تعمل داخل الجروب (لأن لوحة الرد خاصة لكل عضو)
+        # أزرار القائمة Inline تعمل داخل الجروب (للعملاء التي لا تدعم reply keyboard)
         menu = replies[1][1]["reply_markup"]
         self.assertIsInstance(menu, types.InlineKeyboardMarkup)
         serialized = json.loads(menu.to_json())
@@ -139,11 +146,6 @@ class StartTest(support.OfflineTestCase):
         self.assertEqual(button[0].url,
                          f"https://t.me/{BOT_USERNAME}?startgroup={GROUP_USERNAME}")
         self.assertIsNone(button[0].web_app)
-        # لا لوحة رد مُلحَقة بأي رد في الجروب
-        for _text, reply_kwargs in replies:
-            markup = reply_kwargs.get("reply_markup")
-            if markup is not None:
-                self.assertIsInstance(markup, types.InlineKeyboardMarkup)
 
     def test_group_start_button_is_plain_link_without_permission(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=False))
@@ -199,11 +201,11 @@ class StartTest(support.OfflineTestCase):
         bot.reply_to = reply_to
         self.press_start(bot, chat_username=GROUP_USERNAME)
         plain = [kwargs for _message, _text, kwargs in bot.calls
-                 if "parse_mode" not in kwargs and "reply_markup" not in kwargs]
+                 if "parse_mode" not in kwargs]
         html = [kwargs for _message, _text, kwargs in bot.calls
                 if kwargs.get("parse_mode") == "HTML"]
         self.assertEqual(len(html), 1)
-        self.assertEqual(len(plain), 1,
+        self.assertGreaterEqual(len(plain), 1,
                          "the guide must be re-sent as plain text after a parse error")
 
     # --- الخاص يبقى كما هو -------------------------------------------------

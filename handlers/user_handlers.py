@@ -273,13 +273,13 @@ def register(bot, channel_id, admin_ids):
         return markup
 
     def group_start_reply(message):
-        """بدء البوت من مجموعة أو قناة: شرح + أزرار Inline تعمل داخل الجروب.
+        """بدء البوت من مجموعة أو قناة: شرح + أزرار Inline + أزرار Reply دائمة.
 
-        لوحة الرد (main_menu) في الخاص فقط؛ في الجروب تُرسَل أزرار Inline بنفس
-        وظائفها، وكل زر يرسل نفس النص الذي تعالجه معالجات النصوص القائمة. كل إرسال
-        مستقل حتى لا يوقف فشلُ الأول الثاني.
+        لوحة الرد (main_menu) ترسل للجروب بدون زر web_app؛ كما تُرسَل أزرار Inline بنفس
+        وظائفها لمن لا يرى لوحة المفاتيح. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
         """
         chat = getattr(message, "chat", None)
+        chat_type = str(getattr(chat, "type", "group") or "group")
         try:
             bot_info = bot.get_me()
         except Exception as error:  # noqa: BLE001 - نكمل برسالة عامة بلا زر
@@ -292,8 +292,8 @@ def register(bot, channel_id, admin_ids):
             "🎬 <b>مكتبة الفيديوهات</b>\n\n"
             f"🔍 البحث: اكتب <code>@{html_escape(uname) or 'اسم البوت'} كلمة البحث</code>\n"
             "📱 المكتبة: أرسل <code>/library</code> هنا\n\n"
-            "⬇️ اختر من الأزرار أدناه، أو ابدأ البوت في الخاص للوحة المفاتيح الكاملة."
-        ), parse_mode="HTML")
+            "⬇️ استخدم الأزرار أدناه، أو ابدأ البوت في الخاص للمكتبة المصغّرة."
+        ), parse_mode="HTML", reply_markup=main_menu(uname, chat_type=chat_type))
         safe_reply(message, "🎛️ القائمة الرئيسية:",
                    reply_markup=inline_main_menu())
         markup = private_start_markup(uname, group_username, message)
