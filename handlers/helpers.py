@@ -24,6 +24,7 @@ from db_manager import (
 )
 from utils import video_title, clean_display_title
 from miniapp import miniapp_url, MINIAPP_KEYBOARD_TEXT
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +250,15 @@ def main_menu(bot_username=None, chat_type="private"):
     )
     # زر التطبيق المصغّر: في الخاص يستخدم web_app، في الجروب زر نصي عادي
     try:
-        miniapp_link = miniapp_url() if in_private else None
+        base_url = miniapp_url() if in_private else None
+        if base_url and in_private:
+            # إضافة tgWebAppData parameter حتى يحقن Telegram الـ initData
+            _INITDATA_QUERY_PARAM = "tgWebAppData"
+            limit = 512 - len(f"?{_INITDATA_QUERY_PARAM}=")
+            base_url = base_url.encode("utf-8")[:limit].decode("utf-8", "ignore")
+            miniapp_link = f"{base_url}?{_INITDATA_QUERY_PARAM}={quote('{}', safe='')}"
+        else:
+            miniapp_link = base_url
     except Exception as exc:
         logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
         miniapp_link = None
@@ -257,7 +266,7 @@ def main_menu(bot_username=None, chat_type="private"):
         markup.row(web_app_keyboard_button(MINIAPP_KEYBOARD_TEXT, miniapp_link,
                                            STYLE_PRIMARY))
     elif not in_private:
-        # في الجروب: زر نصي يرسل /library (سيفتح رابت t.me)
+        # في الجروب: زر نصي يرسل /library (سيفتح رابط t.me)
         markup.row(keyboard_button(MINIAPP_KEYBOARD_TEXT, STYLE_PRIMARY))
     
     return markup
