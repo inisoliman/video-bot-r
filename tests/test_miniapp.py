@@ -787,8 +787,9 @@ class LibraryCommandTest(QuietDbMixin, support.OfflineTestCase):
         self.assertIsInstance(button, types.InlineKeyboardButton)
         self.assertEqual(button.text, user_handlers.LIBRARY_BUTTON_TEXT)
         self.assertIsInstance(button.web_app, types.WebAppInfo)
-        self.assertTrue(button.web_app.url.startswith(f"{APP_URL}/app?"))
-        self.assertIn("tgWebAppData=", button.web_app.url)
+        # زر web_app لا يحتاج tgWebAppData: تيليجرام يحقن initData عند الفتح
+        self.assertEqual(button.web_app.url, f"{APP_URL}/app")
+        self.assertNotIn("tgWebAppData=", button.web_app.url)
         self.assertLessEqual(len(button.web_app.url), 512)
         self.assertIsNone(button.callback_data)
         serialized = button.to_dict()
@@ -824,7 +825,12 @@ class LibraryCommandTest(QuietDbMixin, support.OfflineTestCase):
         self.assertNotIn("reply_markup", kwargs)
         self.assertIn("الخاصة", text)
 
-    def test_keyboard_button_text_opens_library(self):
+    def test_keyboard_button_text_is_ignored_in_private_chats(self):
+        """الزر في الخاص هو web_app يفتح مباشرة؛ وصول النص يعني عميلاً قديماً.
+
+        الرد هنا ممنوع: أي رد إضافي يزحم المحادثة، والزر الرسمي يعمل في العملاء
+        الحديثة. المسار البديل للمستخدم هو أمر /library.
+        """
         bot = RecordingBot()
         captured = {}
 
@@ -844,11 +850,7 @@ class LibraryCommandTest(QuietDbMixin, support.OfflineTestCase):
         with support.env(**BASE_ENV):
             handler(support.make_message(text=miniapp.MINIAPP_KEYBOARD_TEXT,
                                          user_id=support.MEMBER_ID))
-        reply = bot.calls[before]
-        self.assertEqual(reply[0], "reply_to")
-        buttons = [b for row in reply[3]["reply_markup"].keyboard for b in row]
-        self.assertEqual(len(buttons), 1)
-        self.assertIsInstance(buttons[0].web_app, types.WebAppInfo)
+        self.assertEqual(bot.calls[before:], [])
 
 
 class StartTextTest(QuietDbMixin, support.OfflineTestCase):

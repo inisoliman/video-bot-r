@@ -482,6 +482,85 @@ main{padding:12px 14px}
   function telegramApp() {
     return (window.Telegram && window.Telegram.WebApp) || null;
   }
+
+  // تيليجرام يضع بيانات الإطلاق الموقّعة في جزء العنوان (#tgWebAppData=...) ويقرأها
+  // سكربت telegram-web-app.js. إن حُجب السكربت أو تعذّر تحميله تبقى البيانات في
+  // العنوان، فنقرأها محلياً بدل إعلان أن المستخدم خارج تيليجرام.
+  function urlSafeDecode(value) {
+    try { return decodeURIComponent(String(value).replace(/\\+/g, "%20")); }
+    catch (e) { return String(value); }
+  }
+
+  function parseQueryString(query) {
+    var params = {};
+    var parts = String(query == null ? "" : query).replace(/^[?#]/, "").split("&");
+    for (var i = 0; i < parts.length; i += 1) {
+      if (!parts[i]) continue;
+      var cut = parts[i].indexOf("=");
+      var name = urlSafeDecode(cut < 0 ? parts[i] : parts[i].slice(0, cut));
+      var value = cut < 0 ? "" : urlSafeDecode(parts[i].slice(cut + 1));
+      if (!name || name === "__proto__") continue;
+      if (!Object.prototype.hasOwnProperty.call(params, name)) params[name] = value;
+    }
+    return params;
+  }
+
+  function launchParams() {
+    var params = {};
+    try { params = parseQueryString(window.location.hash); } catch (e) { params = {}; }
+    // نفس مفتاح SDK: يعيد البيانات لو أزال العميل جزء العنوان بعد الإقلاع
+    try {
+      var stored = JSON.parse(window.sessionStorage.getItem("__telegram__initParams") || "null");
+      if (stored && typeof stored === "object") {
+        for (var key in stored) {
+          if (!Object.prototype.hasOwnProperty.call(params, key)) params[key] = stored[key];
+        }
+      }
+    } catch (e) {}
+    return params;
+  }
+
+  function signedInitData() {
+    var tg = telegramApp();
+    try {
+      if (tg && typeof tg.initData === "string" && tg.initData) return tg.initData;
+    } catch (e) {}
+    var raw = launchParams().tgWebAppData;
+    if (typeof raw !== "string" || !raw) return "";
+    // التوقيع الحقيقي يحمل دائماً hash=؛ أي قيمة أخرى (مثل {}) ليست بيانات صالحة
+    return parseQueryString(raw).hash ? raw : "";
+  }
+
+  function launchUser() {
+    var tg = telegramApp();
+    try {
+      if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) return tg.initDataUnsafe.user;
+    } catch (e) {}
+    var raw = signedInitData();
+    if (!raw) return null;
+    var user = parseQueryString(raw).user;
+    if (typeof user === "string") {
+      try { user = JSON.parse(user); } catch (e) { return null; }
+    }
+    return user && user.id ? user : null;
+  }
+
+  function closeWebApp() {
+    var tg = telegramApp();
+    try {
+      if (tg && typeof tg.close === "function") { tg.close(); return true; }
+    } catch (e) {}
+    try {
+      // العميل يحقن هذا الكائن حتى إن تعذّر تحميل SDK من telegram.org
+      var proxy = window.TelegramWebviewProxy;
+      if (proxy && typeof proxy.postEvent === "function") {
+        proxy.postEvent("web_app_close", "{}");
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
   var initializedTelegram = null;
   var BOT_URL = __BOT_URL_JSON__;
   var PAGE_SIZE = __PAGE_SIZE__;
@@ -521,15 +600,11 @@ main{padding:12px 14px}
   }
 
   function initData() {
-    var tg = telegramApp();
-    return (tg && typeof tg.initData === "string") ? tg.initData : "";
+    try { return signedInitData(); } catch (e) { return ""; }
   }
 
   function botUser() {
-    try {
-      var tg = telegramApp();
-      return (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) || null;
-    } catch (e) { return null; }
+    try { return launchUser(); } catch (e) { return null; }
   }
 
   function favKey(videoId) {
@@ -662,12 +737,18 @@ main{padding:12px 14px}
       hasInitData: !!iData,
       initDataLength: iData ? iData.length : 0,
       hasTelegramApp: !!tg,
+      hasWebviewProxy: !!window.TelegramWebviewProxy,
       telegramVersion: tg ? tg.version : null,
       platform: tg ? tg.platform : null
     });
     if (!iData) {
       console.warn("Missing initData - cannot send video");
-      toast("افتح المكتبة من داخل تيليجرام حتى يصل الفيديو إلى محادثتك.");
+      if (window.TelegramWebviewProxy) {
+        // داخل تيليجرام فعلاً لكن بيانات الإطلاق لم تصل: إعادة الفتح هي الحل
+        toast("لم تصل بيانات تيليجرام إلى المكتبة. أغلق النافذة وأعد فتحها من زر المكتبة.");
+      } else {
+        toast("افتح المكتبة من داخل تيليجرام حتى يصل الفيديو إلى محادثتك.");
+      }
       return;
     }
     state.opening = true;
@@ -689,12 +770,7 @@ main{padding:12px 14px}
       button.textContent = "✓ في المحادثة";
       toast("تم إرسال الفيديو إلى محادثتك مع البوت.");
       doneFeedback();          // نجاح لمسي بعد تأكيد التسليم فقط
-      try {
-        var tg = telegramApp();
-        if (tg && typeof tg.close === "function") {
-          setTimeout(function () { try { tg.close(); } catch (e) {} }, 900);
-        }
-      } catch (e) {}
+      setTimeout(function () { closeWebApp(); }, 900);
     }).catch(function (error) {
       // لا إغلاق عند الفشل: يبقى المستخدم في المكتبة ويستطيع إعادة المحاولة
       state.opening = false;
@@ -1047,11 +1123,9 @@ main{padding:12px 14px}
   // زر الرجوع داخل تيليجرام: يُسجَّل مرة واحدة لكل كائن BackButton، ويُعرض حين يدعمه العميل
   var backButtonTarget = null;
   function backToPreviousApp() {
-    try {
-      var tg = telegramApp();
-      if (tg && typeof tg.close === "function") tg.close();
-      else window.history.back();
-    } catch (e) {}
+    if (!closeWebApp()) {
+      try { window.history.back(); } catch (e) {}
+    }
   }
   function setupBackButton() {
     var tg = telegramApp();

@@ -223,24 +223,17 @@ class GroupButtonPressTest(support.OfflineTestCase):
                 self.assertEqual(text, user_handlers.GROUP_LIBRARY_HINT_NO_LINK)
                 self.assertNotIn("reply_markup", kwargs)
 
-    def test_private_press_keeps_web_app_button(self):
-        replies = self.press("private", chat_id=support.MEMBER_ID)
-        self.assertEqual(len(replies), 1)
-        text, kwargs = replies[0]
-        self.assertIn("مكتبة", text)
-        button = self.only_button(kwargs.get("reply_markup"))
-        self.assertIsInstance(button.web_app, types.WebAppInfo)
-        self.assertTrue(button.web_app.url.startswith(f"{APP_URL}/app?"))
-        self.assertIn("tgWebAppData=", button.web_app.url)
-        self.assertIsNone(button.url)
-        self.assertIn("web_app", button.to_dict())
+    def test_private_press_is_ignored_because_the_button_is_web_app(self):
+        # في الخاص الزر نفسه web_app يفتح المكتبة مباشرة؛ وصول النص يعني عميلاً
+        # قديماً لا يدعم web_app، ولا نرسل رداً حتى لا نزحم المحادثة (المسار /library).
+        self.assertEqual(self.press("private", chat_id=support.MEMBER_ID), [])
+        # عقد رابط الزر نفسه مُختبَر في MenuKeyboardTest.test_https_menu_button_opens_web_app
 
-    def test_other_chat_types_get_a_refusal(self):
-        self.bot.calls.clear()
-        replies = self.press("channel", chat_id=-100555)
-        self.assertEqual(len(replies), 1)
-        text, _kwargs = replies[0]
-        self.assertIn("الخاصة", text)
+    def test_other_chat_types_get_no_reply(self):
+        # لا لوحة مفاتيح ثابتة في القنوات/الأنواع الأخرى، ووصول النص هناك لا يُعالَج
+        for chat_type in ("channel", "sender"):
+            with self.subTest(chat_type=chat_type):
+                self.assertEqual(self.press(chat_type, chat_id=-100555), [])
 
     def test_replies_never_raise_for_group_messages(self):
         message = support.make_message(text=MINIAPP_KEYBOARD_TEXT, chat_type="group",
@@ -273,5 +266,6 @@ class SerializedMarkupTest(support.OfflineTestCase):
         buttons = [button for row in payload["inline_keyboard"] for button in row]
         self.assertEqual(len(buttons), 1)
         self.assertIn("web_app", buttons[0])
-        self.assertTrue(buttons[0]["web_app"]["url"].startswith(f"{APP_URL}/app?"))
+        self.assertEqual(buttons[0]["web_app"]["url"], f"{APP_URL}/app")
+        self.assertNotIn("tgWebAppData=", buttons[0]["web_app"]["url"])
         self.assertNotIn("url", buttons[0])

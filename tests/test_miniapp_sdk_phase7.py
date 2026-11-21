@@ -307,7 +307,8 @@ class BrowserContract(unittest.TestCase):
     def open_page(self, stub, shim="", url=PAGE_URL, deliver="ok", init_data=False,
                   setup=None):
         is_modern = "__rec" in shim
-        page = self.browser.new_page()
+        # إذن الحافظة مطلوب لاختبار زر النسخ في Chromium بلا تدخّل يدوي
+        page = self.browser.new_page(permissions=["clipboard-read", "clipboard-write"])
         self.addCleanup(page.close)
         errors = []
         page.on("pageerror", lambda exc: errors.append(str(exc)))

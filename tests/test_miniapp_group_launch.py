@@ -487,8 +487,9 @@ class GroupLibraryCommandTest(LibraryLaunchBase):
         buttons = serialized(kwargs['reply_markup'])
         self.assertEqual(buttons, expected)
         self.assertEqual(buttons[0]['text'], BUTTON_TEXT)
-        self.assertEqual(buttons[0]['web_app']['url'],
-                         APP_URL + PAGE_PATH + '?tgWebAppData=%7B%7D')
+        # رابط مباشر فقط: تيليجرام يحقن initData في أزرار web_app بلا أي معامل
+        self.assertEqual(buttons[0]['web_app']['url'], APP_URL + PAGE_PATH)
+        self.assertNotIn('tgWebAppData', buttons[0]['web_app']['url'])
         self.assertNotIn('url', {k for k in buttons[0] if k != 'web_app'})
 
 
@@ -561,8 +562,9 @@ class GroupLaunchPageContract(unittest.TestCase):
         cls.js = cls.rendered.split('<script>', 1)[1]
 
     def test_page_has_no_group_posting_hook(self):
-        for token in ('sendMessage', 'sendVideo', 'chat_id', 'chat_instance',
-                      'web_app', '/api/group', 'group-only'):
+        # web_app_close حدث إغلاق رسمي وليس إرسالاً للجروب؛ الممنوع هو إرسال بيانات
+        for token in ('sendMessage', 'sendVideo', 'sendData', 'web_app_data',
+                      'chat_id', 'chat_instance', '/api/group', 'group-only'):
             self.assertNotIn(token, self.js, token)
 
     def test_page_claims_no_chat_access(self):
