@@ -263,25 +263,40 @@ def main_menu(bot_username=None, chat_type="private"):
     return markup
 
 
+def safe_reply_markup(builder, *args, **kwargs):
+    """بناء لوحة أزرار بنفسها لا يُسقط المعالج عند خطأ بيانات/قاعدة.
+
+    ``create_paginated_keyboard`` وأخواتها تقرأ التقييمات/التصنيفات من قاعدة البيانات؛
+    فشلها كان يترك زر القائمة دون رد. هنا ترجع ``None`` ليبلّغ المعالج صراحةً.
+    """
+    try:
+        return builder(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 - المستدعي يبلّغ المستخدم
+        logger.error(f"Could not build keyboard {getattr(builder, '__name__', builder)}: "
+                     f"{type(exc).__name__}")
+        return None
+
+
 def inline_main_menu():
     """القائمة الرئيسية بنفس أزرار main_menu لكن كأزرار Inline تعمل في الجروب.
 
-    كل زر يرسل نفس نص زر لوحة الرد، فمعالجات النصوص الموجودة تتعامل معه كما هي؛
-    لذلك لا نضيف مسارات callback جديدة. الميني أب يستخدم رابط ``t.me`` المباشر
-    (build_group_library_markup) لأن web_app ممنوع خارج الخاص.
+    لوحة الرد في الجروب تظهر لكل الأعضاء وتُخزَّن لآخر عضو أرسل (ويحظرها عملاء
+    Telegram Desktop)، لذلك الجروب يستخدم هذه الأزرار بدلاً منها. كل زر يصل باسم
+    ثابت (videos/popular/...) وينفّذه ``run_inline_menu_action`` في callback_handlers.
+    الميني أب يبقى بلا زر هنا: وجود ``web_app`` في أي زر يُسقط الرسالة في الجروب.
     """
     rows = (
-        (("🎬 عرض كل الفيديوهات 🟢", STYLE_SUCCESS, "🎬 عرض كل الفيديوهات 🟢"),
-         ("🔥 الفيديوهات الشائعة 🔴", STYLE_DANGER, "🔥 الفيديوهات الشائعة 🔴")),
-        (("⭐ المفضلة 🟡", STYLE_PRIMARY, "⭐ المفضلة 🟡"),
-         ("📺 سجل المشاهدة 🔵", STYLE_PRIMARY, "📺 سجل المشاهدة 🔵")),
-        (("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS, "🍿 اقترح لي فيلم 🟣"),
-         ("🔍 بحث 🟠", STYLE_PRIMARY, "🔍 بحث 🟠")),
+        (("🎬 عرض كل الفيديوهات 🟢", STYLE_SUCCESS, "videos"),
+         ("🔥 الفيديوهات الشائعة 🔴", STYLE_DANGER, "popular")),
+        (("⭐ المفضلة 🟡", STYLE_PRIMARY, "favorites"),
+         ("📺 سجل المشاهدة 🔵", STYLE_PRIMARY, "history")),
+        (("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS, "random"),
+         ("🔍 بحث 🟠", STYLE_PRIMARY, "search")),
     )
     keyboard = InlineKeyboardMarkup(row_width=2)
     for row in rows:
-        keyboard.add(*[inline_button(label, style, callback_data=f"menu::{text}")
-                       for label, style, text in row])
+        keyboard.add(*[inline_button(label, style, callback_data=f"menu::{key}")
+                       for label, style, key in row])
     return keyboard
 
 

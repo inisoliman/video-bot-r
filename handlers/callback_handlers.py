@@ -13,7 +13,7 @@ from db_manager import (
     get_child_categories, get_category_by_id,
     is_video_favorite, add_to_favorites, remove_from_favorites,
     get_user_video_rating, get_video_rating_stats,
-    add_video_rating, add_to_history, get_popular_videos,
+    add_video_rating, add_to_history, get_popular_videos, get_random_video,
     set_active_category_id, get_required_channels,
     move_videos_bulk, delete_category_and_contents,
     delete_category_by_id, move_videos_from_category,
@@ -75,6 +75,76 @@ def register(bot, admin_ids):
 
     def _safe_page(value):
         return helpers.safe_page(value)
+
+    def run_inline_menu_action(bot, call, key):
+        """تنفيذ زر القائمة Inline بنفس أزرار لوحة الرد (للجروبات)."""
+        chat = call.message.chat
+        chat_id = chat.id
+        user_id = call.from_user.id
+        message = call.message
+        try:
+            if key == "videos":
+                helpers.list_videos(bot, message)
+            elif key == "popular":
+                keyboard = InlineKeyboardMarkup(row_width=1)
+                keyboard.add(inline_button("📈 الأكثر مشاهدة", STYLE_DANGER,
+                                           callback_data="popular::most_viewed"))
+                keyboard.add(inline_button("⭐ الأعلى تقييماً", STYLE_SUCCESS,
+                                           callback_data="popular::highest_rated"))
+                bot.send_message(chat_id, "اختر نوع الفيديوهات الشائعة:", reply_markup=keyboard)
+            elif key == "favorites":
+                videos, total_count = get_user_favorites(user_id, page=0)
+                if not videos:
+                    bot.send_message(chat_id, "💭 لا توجد فيديوهات في قائمتك المفضلة حالياً.")
+                    return
+                keyboard = helpers.safe_reply_markup(
+                    helpers.create_paginated_keyboard, videos, total_count, 0,
+                    "fav_page", "user_fav")
+                if keyboard is None:
+                    bot.send_message(chat_id, "❌ تعذّر عرض المفضلة حالياً، حاول مرة أخرى.")
+                    return
+                bot.send_message(chat_id, f"💖 <b>قائمة مفضلاتك</b>\n📊 العدد: "
+                                          f"<code>{total_count}</code> فيديو",
+                                 reply_markup=keyboard, parse_mode="HTML")
+            elif key == "history":
+                videos, total_count = get_user_history(user_id, page=0)
+                if not videos:
+                    bot.send_message(chat_id, "📭 سجل المشاهدة الخاص بك فارغ حالياً.")
+                    return
+                keyboard = helpers.safe_reply_markup(
+                    helpers.create_paginated_keyboard, videos, total_count, 0,
+                    "history_page", "user_history")
+                if keyboard is None:
+                    bot.send_message(chat_id, "❌ تعذّر عرض السجل حالياً، حاول مرة أخرى.")
+                    return
+                bot.send_message(chat_id, f"📺 <b>سجل مشاهداتك</b>\n📊 العدد: "
+                                          f"<code>{total_count}</code> فيديو",
+                                 reply_markup=keyboard, parse_mode="HTML")
+            elif key == "random":
+                video = get_random_video()
+                if not video:
+                    bot.send_message(chat_id, "لا توجد فيديوهات في قاعدة البيانات حالياً.")
+                    return
+                increment_video_view_count(video['id'])
+                add_to_history(user_id, video['id'])
+                bot.copy_message(chat_id, video['chat_id'], video['message_id'])
+                rating = helpers.safe_reply_markup(
+                    helpers.create_video_action_keyboard, video['id'], user_id)
+                bot.send_message(chat_id, "ما رأيك بهذا الفيديو؟ يمكنك تقييمه:",
+                                 reply_markup=rating)
+            elif key == "search":
+                bot.send_message(chat_id, "🔎 <b>البحث عن فيديوهات</b>\n\n"
+                                          "✏️ اكتب كلمة البحث بعد منشن البوت:\n"
+                                          "<code>@اسم_البوت كلمة البحث</code>",
+                                 parse_mode="HTML")
+            else:
+                bot.send_message(chat_id, "❌ زر غير معروف، أرسل /start من جديد.")
+        except telebot.apihelper.ApiTelegramException as error:
+            logger.error(f"Inline menu action {key} failed: {error}")
+            try:
+                bot.send_message(chat_id, "❌ تعذّر تنفيذ الإجراء حالياً. حاول مرة أخرى.")
+            except Exception:  # noqa: BLE001 - الإبلاغ اختياري
+                pass
 
     @bot.callback_query_handler(func=lambda call: True)
     def callback_query(call):
@@ -181,7 +251,12 @@ def register(bot, admin_ids):
                     add_to_favorites(user_id, video_id)
                     text = "💖 تم إضافة الفيديو إلى المفضلة بنجاح!"
 
-                new_keyboard = helpers.create_video_action_keyboard(video_id, user_id)
+                new_keyboard = helpers.safe_reply_markup(
+                    helpers.create_video_action_keyboard, video_id, user_id)
+                if new_keyboard is None:
+                    bot.answer_callback_query(call.id, "❌ حدث خطأ في تحديث الأزرار. حاول مرة أخرى.",
+                                              show_alert=True)
+                    return
                 bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=new_keyboard)
                 bot.answer_callback_query(call.id, text)
                 return
@@ -202,7 +277,11 @@ def register(bot, admin_ids):
                     bot.edit_message_text("لا توجد المزيد من النتائج.", call.message.chat.id, call.message.message_id)
                     return
 
-                keyboard = helpers.create_paginated_keyboard(videos, total_count, page, prefix, "user_data")
+                keyboard = helpers.safe_reply_markup(
+                    helpers.create_paginated_keyboard, videos, total_count, page, prefix, "user_data")
+                if keyboard is None:
+                    bot.answer_callback_query(call.id, "❌ تعذّر عرض النتائج حالياً.", show_alert=True)
+                    return
                 bot.edit_message_text(title, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
                 return
 
@@ -796,15 +875,10 @@ def register(bot, admin_ids):
                 bot.answer_callback_query(call.id)
 
             elif action == "menu":
-                # أزرار القائمة Inline في الجروب: نعيد نفس نص زر لوحة الرد
-                # فيعالجه معالج النص القائم بلا تكرار منطق.
-                text = helpers.CALLBACK_DELIMITER.join(data[1:]) if len(data) > 1 else ""
+                # أزرار القائمة Inline (الجروب): تنفّذ نفس وظيفة زر لوحة الرد مباشرة،
+                # فإعادة إرسال النص لا تُشغّل معالجاً (المعالجات مقيّدة بمحتوى الرسالة).
                 bot.answer_callback_query(call.id)
-                if text:
-                    try:
-                        bot.send_message(call.message.chat.id, text)
-                    except telebot.apihelper.ApiTelegramException as error:
-                        logger.warning(f"Menu action send failed ({type(error).__name__})")
+                run_inline_menu_action(bot, call, data[1] if len(data) > 1 else "")
 
             elif action == "video":
                 try:

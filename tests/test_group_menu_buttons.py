@@ -71,10 +71,11 @@ class MenuMarkupTest(support.OfflineTestCase):
         payload = keyboard_payload(helpers.inline_main_menu())
         buttons = [b for row in payload["inline_keyboard"] for b in row]
         self.assertEqual(len(buttons), len(MENU_TEXTS))
-        expected = {text: f"menu::{text}" for text in MENU_TEXTS}
+        expected = {text: key for text, key in zip(
+            MENU_TEXTS, ("videos", "popular", "favorites", "history", "random", "search"))}
         for button in buttons:
             self.assertIn(button["text"], expected)
-            self.assertEqual(button["callback_data"], expected[button["text"]])
+            self.assertEqual(button["callback_data"], f"menu::{expected[button['text']]}")
             self.assertNotIn("web_app", button)
 
 
@@ -131,11 +132,22 @@ class MenuCallbackTest(support.OfflineTestCase):
         return self.bot.calls
 
     def test_group_menu_press_replays_the_button_text(self):
-        calls = self.press("menu::🎬 عرض كل الفيديوهات 🟢")
+        calls = self.press("menu::search")
         sends = [c for c in calls if c[0] == "send_message"]
         self.assertEqual(len(sends), 1)
-        self.assertEqual(sends[0][2], "🎬 عرض كل الفيديوهات 🟢")
+        self.assertIn("كلمة البحث", sends[0][2])
         self.assertIsNone(sends[0][3])
+
+    def test_group_menu_press_runs_the_action_directly(self):
+        calls = self.press("menu::popular")
+        sends = [c for c in calls if c[0] == "send_message"]
+        self.assertEqual(len(sends), 1)
+        markup = sends[0][3]
+        self.assertIsInstance(markup, types.InlineKeyboardMarkup)
+        payload = keyboard_payload(markup)
+        buttons = [b for row in payload["inline_keyboard"] for b in row]
+        self.assertEqual([b["callback_data"] for b in buttons],
+                         ["popular::most_viewed", "popular::highest_rated"])
 
     def test_back_to_main_in_group_uses_inline_menu(self):
         calls = self.press("back_to_main")
