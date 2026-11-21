@@ -24,8 +24,7 @@ from db_manager import (
 from .helpers import (
     main_menu, create_paginated_keyboard,
     create_video_action_keyboard, user_last_search, generate_grouping_key,
-    check_subscription, list_videos, link_bot_private,
-    already_welcomed, remember_welcome
+    check_subscription, list_videos, link_bot_private
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
 from . import ephemeral_messages
@@ -276,9 +275,8 @@ def register(bot, channel_id, admin_ids):
     def group_start_reply(message):
         """بدء البوت من مجموعة أو قناة: شرح وزر يفتح لوحة الأزرار في المحادثة الخاصة.
 
-        لوحة الرد (main_menu) في الجروب تُرسل بأسناد كل عضو، فتُرسل **للعضو الطالب**
-        في الخاص فقط، وفي الجروب يصل الشرح وزر يفتحه هناك. كل إرسال مستقل حتى لا
-        يوقف فشلُ الأول الثاني.
+        لوحة الرد (main_menu) خاصة لكل عضو فلا تُنشر في الجروب؛ يُرسل الشرح وزر يفتح
+        الخاص. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
         """
         chat = getattr(message, "chat", None)
         try:
@@ -309,16 +307,9 @@ def register(bot, channel_id, admin_ids):
         if user_id is None:
             logger.warning("Ignoring /start without from_user")
             return
-        # المجموعة أولاً: لا قائمة اشتراك ولا لوحة أزرار تُنشر لكل الأعضاء
         chat = getattr(message, "chat", None)
-        chat_id = getattr(chat, "id", None)
         chat_type = str(getattr(chat, "type", "private") or "private")
         if chat_type in ("group", "supergroup", "channel"):
-            if already_welcomed(bot, chat_id):
-                # الترحيب مرة واحدة لكل عملية: /start المتكرر لا يكرره للجروب
-                safe_reply(message, "🎬 المكتبة ولوحة الأزرار في الخاص 👆")
-                return
-            remember_welcome(bot, chat_id)
             group_start_reply(message)
             return
         # إضافة المستخدم إلى قاعدة البيانات: فشل قاعدة البيانات لا يمنع الترحيب

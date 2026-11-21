@@ -110,13 +110,11 @@ class StartTest(support.OfflineTestCase):
                 bot.handlers[0](message)  # أول معالج مسجّل هو /start
         return bot.replies()
 
-    def test_repeated_group_start_does_not_repeat_the_welcome(self):
+    def test_repeated_group_start_keeps_answering(self):
         bot = self.registered_bot(RecordingBot(chat_permissions=True))
-        bot.group_welcome_sent = {}
         replies = self.press_start(bot, chat_username=GROUP_USERNAME, times=2)
-        self.assertEqual(len(replies), 3)
-        self.assertIn("الخاص", replies[2][0])
-        self.assertEqual(len(bot.group_welcome_sent), 1)
+        self.assertEqual(len(replies), 4)
+        self.assertEqual(replies[0][0], replies[2][0])
 
     # --- الجروب ------------------------------------------------------------
 

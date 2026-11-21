@@ -34,10 +34,6 @@ user_last_search = {}
 # أقصى رقم صفحة مقبول من callback_data (حماية من قيم مشوّهة)
 MAX_PAGE_INDEX = 9999
 
-# نفس متغير ترتيب الترحيب عند إضافة البوت للجروب في handlers/group_handlers.py
-# (webhook_bot يسجّله أولاً، ثم user_handlers، لذلك نقرأ ذاكرة إرساله)
-WELCOME_SENT_CACHE = "group_welcome_sent"
-
 
 def get_admin_ids():
     """معرّفات الأدمن من ``ADMIN_IDS`` (نفس القائمة التي يقرأها webhook_bot)."""
@@ -126,23 +122,6 @@ def removable_reply_keyboard():
     """لوحة رد تُرسل بعد مسح الجروب فيظل الشات بلا أزرار (زر فارغ عرض 4 بايتات)."""
     return ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False,
                                is_persistent=False)
-
-
-def already_welcomed(bot, chat_id):
-    """هل سبق إرسال ترحيب الإضافة لهذا الجروب مع هذا البوت؟"""
-    cache = getattr(bot, WELCOME_SENT_CACHE, None)
-    try:
-        return cache is not None and chat_id in cache
-    except TypeError:  # noqa: BLE001 - قيمة غير قابلة للبحث
-        return False
-
-
-def remember_welcome(bot, chat_id):
-    """تسجيل أن الجروب رآه ترحيب الإضافة (بين عمليات الامتداد الجارية)."""
-    try:
-        getattr(bot, WELCOME_SENT_CACHE).setdefault(chat_id, True)
-    except Exception:  # noqa: BLE001 - الذاكرة اختيارية
-        pass
 
 
 def link_bot_private(idle_bot, chat_id, bot_username, group_username=""):
