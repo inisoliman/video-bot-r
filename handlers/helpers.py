@@ -248,20 +248,22 @@ def main_menu(bot_username=None, chat_type="private"):
         keyboard_button("🍿 اقترح لي فيلم 🟣", STYLE_SUCCESS),
         keyboard_button("🔍 بحث 🟠", STYLE_PRIMARY)
     )
-    # زر التطبيق المصغّر: في الخاص يستخدم web_app، في الجروب زر نصي عادي
-    # ملاحظة: web_app buttons لا تحتاج tgWebAppData - Telegram يحقن initData تلقائيًا!
+    # زر التطبيق المصغّر: زر نصي دائماً — لا ``web_app`` في لوحة الرد.
+    #
+    # سبب مقصود: العميل (خصوصاً Telegram Desktop) يفتح أزرار ``web_app`` في لوحة
+    # الرد في متصفح خارجي، فلا يوجد ``TelegramWebviewProxy`` ولا ``initData``،
+    # فتفشل إرسال الفيديو برسالة «افتح المكتبة من داخل تيليجرام». زر ``web_app``
+    # داخل رسالة (InlineKeyboardButton) هو المسار الموثوق على كل العملاء.
+    # لذلك الضغط هنا يرسل النص، و``handle_miniapp_button`` يرد برسالة المكتبة
+    # نفسها التي يرسلها /library.
+    miniapp_ready = False
     try:
-        miniapp_link = miniapp_url() if in_private else None
+        miniapp_ready = bool(miniapp_url())
     except Exception as exc:
         logger.warning(f"Mini App keyboard button skipped: {type(exc).__name__}")
-        miniapp_link = None
-    if miniapp_link:
-        markup.row(web_app_keyboard_button(MINIAPP_KEYBOARD_TEXT, miniapp_link,
-                                           STYLE_PRIMARY))
-    elif not in_private:
-        # في الجروب: زر نصي يرسل /library (سيفتح رابط t.me)
+    if miniapp_ready or not in_private:
         markup.row(keyboard_button(MINIAPP_KEYBOARD_TEXT, STYLE_PRIMARY))
-    
+
     return markup
 
 

@@ -81,6 +81,64 @@ class LaunchDataPageContract(unittest.TestCase):
         self.assertIn("لم تصل بيانات تيليجرام إلى المكتبة", self.js)
 
 
+class ReplyKeyboardContract(unittest.TestCase):
+    """لوحة الرد يجب ألا تحمل ``web_app`` — وإلا فشل الإرسال على Desktop.
+
+    العميل يفتح زر ``web_app`` في لوحة الرد في متصفح خارجي: لا
+    ``TelegramWebviewProxy`` ولا ``initData``، فتظهر رسالة «افتح المكتبة من داخل
+    تيليجرام». المسار الموثوق زر ``web_app`` داخل رسالة (InlineKeyboardButton)،
+    وهو ما يرسله /library وزر اللوحة معاً.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from handlers import helpers, user_handlers
+        cls.helpers = helpers
+        cls.user_handlers = user_handlers
+
+    def test_main_menu_has_no_web_app_button(self):
+        import json
+        from handlers import helpers, button_styles
+
+        with support.env(BOT_TOKEN="123456:X",
+                         APP_URL="https://example.onrender.com"):
+            markup = helpers.main_menu("video_bot")
+        payload = json.loads(markup.to_json())
+        buttons = [button for row in payload["keyboard"] for button in row]
+        self.assertTrue(buttons)
+        for button in buttons:
+            self.assertNotIn("web_app", button,
+                             "reply keyboard web_app opens an external browser")
+
+    def test_miniapp_text_button_is_a_plain_keyboard_button(self):
+        import json
+        from handlers import helpers
+
+        with support.env(BOT_TOKEN="123456:X",
+                         APP_URL="https://example.onrender.com"):
+            markup = helpers.main_menu("video_bot")
+        payload = json.loads(markup.to_json())
+        rows = [row for row in payload["keyboard"]
+                if any(button.get("text") == helpers.MINIAPP_KEYBOARD_TEXT
+                       for button in row)]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]), 1)
+        button = rows[0][0]
+        self.assertEqual(button["text"], helpers.MINIAPP_KEYBOARD_TEXT)
+        # نص فقط: لا web_app ولا أي حقل يفتح نافذة خارجية
+        self.assertNotIn("web_app", button)
+
+    def test_library_prompt_carries_the_web_app_button(self):
+        from handlers import user_handlers
+
+        with support.env(BOT_TOKEN="123456:X",
+                         APP_URL="https://example.onrender.com"):
+            markup = user_handlers.build_library_markup()
+        self.assertIsNotNone(markup)
+        button = [b for row in markup.keyboard for b in row][0]
+        self.assertEqual(button.web_app.url, "https://example.onrender.com/app")
+
+
 @unittest.skipUnless(SYNC_PLAYWRIGHT is not None,
                      "Playwright is not installed (pip install playwright && "
                      "python -m playwright install chromium)")

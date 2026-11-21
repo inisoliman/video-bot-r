@@ -120,12 +120,18 @@ class MenuKeyboardTest(support.OfflineTestCase):
         return [button for row in keyboard_json["keyboard"] for button in row
                 if button.get("text") == MINIAPP_KEYBOARD_TEXT]
 
-    def test_https_menu_button_opens_web_app(self):
+    def test_menu_button_is_plain_text_not_web_app(self):
+        """زر لوحة الرد نصي: ``web_app`` فيها يفتح متصفحاً خارجياً بلا initData.
+
+        المسار الموثوق هو زر ``web_app`` داخل رسالة يرسلها البوت رداً على النص
+        (نفس مسار /library). انظر handle_miniapp_button.
+        """
         with support.env(**BASE_ENV):
             keyboard = self.menu_json()["keyboard"]
         buttons = self.miniapp_buttons({"keyboard": keyboard})
         self.assertEqual(len(buttons), 1)
-        self.assertEqual(buttons[0]["web_app"]["url"], f"{APP_URL}/app")
+        self.assertNotIn("web_app", buttons[0],
+                         "reply keyboard must not carry web_app: it opens externally")
         self.assertNotIn("request_contact", buttons[0])
         # الزر في صفّه وحده
         self.assertEqual(len([row for row in keyboard
@@ -223,11 +229,21 @@ class GroupButtonPressTest(support.OfflineTestCase):
                 self.assertEqual(text, user_handlers.GROUP_LIBRARY_HINT_NO_LINK)
                 self.assertNotIn("reply_markup", kwargs)
 
-    def test_private_press_is_ignored_because_the_button_is_web_app(self):
-        # في الخاص الزر نفسه web_app يفتح المكتبة مباشرة؛ وصول النص يعني عميلاً
-        # قديماً لا يدعم web_app، ولا نرسل رداً حتى لا نزحم المحادثة (المسار /library).
-        self.assertEqual(self.press("private", chat_id=support.MEMBER_ID), [])
-        # عقد رابط الزر نفسه مُختبَر في MenuKeyboardTest.test_https_menu_button_opens_web_app
+    def test_private_press_sends_the_web_app_button(self):
+        """الضغط في الخاص يرد بزر web_app داخل رسالة — نفس مسار /library.
+
+        هذا هو المسار الذي يعمل: زر ``web_app`` في لوحة الرد كان يفتح متصفحاً
+        خارجياً بلا ``initData`` على Telegram Desktop.
+        """
+        replies = self.press("private", chat_id=support.MEMBER_ID)
+        self.assertEqual(len(replies), 1)
+        text, kwargs = replies[0]
+        self.assertEqual(text, user_handlers.LIBRARY_PROMPT_TEXT)
+        markup = kwargs.get("reply_markup")
+        self.assertIsNotNone(markup)
+        button = self.only_button(markup)
+        self.assertIsInstance(button, types.InlineKeyboardButton)
+        self.assertEqual(button.web_app.url, f"{APP_URL}/app")
 
     def test_other_chat_types_get_no_reply(self):
         # لا لوحة مفاتيح ثابتة في القنوات/الأنواع الأخرى، ووصول النص هناك لا يُعالَج

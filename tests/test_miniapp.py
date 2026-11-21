@@ -825,11 +825,11 @@ class LibraryCommandTest(QuietDbMixin, support.OfflineTestCase):
         self.assertNotIn("reply_markup", kwargs)
         self.assertIn("الخاصة", text)
 
-    def test_keyboard_button_text_is_ignored_in_private_chats(self):
-        """الزر في الخاص هو web_app يفتح مباشرة؛ وصول النص يعني عميلاً قديماً.
+    def test_keyboard_button_text_opens_the_library_prompt(self):
+        """نص الزر في الخاص يرد بزر ``web_app`` داخل رسالة (لا يُتجاهَل).
 
-        الرد هنا ممنوع: أي رد إضافي يزحم المحادثة، والزر الرسمي يعمل في العملاء
-        الحديثة. المسار البديل للمستخدم هو أمر /library.
+        زر ``web_app`` في لوحة الرد يفتحه Telegram Desktop في متصفح خارجي بلا
+        ``initData``، فصار الزر نصياً والردّ يحمل زر التطبيق الحقيقي.
         """
         bot = RecordingBot()
         captured = {}
@@ -850,7 +850,15 @@ class LibraryCommandTest(QuietDbMixin, support.OfflineTestCase):
         with support.env(**BASE_ENV):
             handler(support.make_message(text=miniapp.MINIAPP_KEYBOARD_TEXT,
                                          user_id=support.MEMBER_ID))
-        self.assertEqual(bot.calls[before:], [])
+        replies = bot.replies()[before:]
+        self.assertEqual(len(replies), 1)
+        text, kwargs = replies[0]
+        self.assertEqual(text, user_handlers.LIBRARY_PROMPT_TEXT)
+        markup = kwargs.get("reply_markup")
+        self.assertIsNotNone(markup)
+        buttons = library_buttons(markup)
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(buttons[0].web_app.url, f"{APP_URL}/app")
 
 
 class StartTextTest(QuietDbMixin, support.OfflineTestCase):

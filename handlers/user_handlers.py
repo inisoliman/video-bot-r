@@ -89,6 +89,27 @@ def miniapp_webapp_url():
     return library_webapp_url()
 
 
+# نص رسالة المكتبة في الخاص (يستخدمها /library وزر لوحة المفاتيح معاً)
+LIBRARY_PROMPT_TEXT = "📱 <b>مكتبة الفيديوهات</b>\nافتح التطبيق المصغّر من الزر أدناه:"
+LIBRARY_PROMPT_FALLBACK = ("📱 مكتبة الفيديوهات غير متاحة حالياً. "
+                           "استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")
+
+
+def send_library_prompt(bot, message):
+    """يرسل زر ``web_app`` لفتح المكتبة في الخاص، أو نصاً بديلاً بلا زر.
+
+    نقطة واحدة يستخدمها أمر /library وزر لوحة المفاتيح: كلاهما يجب أن يوصل
+    المستخدم إلى زر ``web_app`` داخل رسالة، لأن زر ``web_app`` في لوحة الرد
+    يفتحه بعض العملاء في متصفح خارجي حيث لا يصل ``initData``.
+    """
+    markup = build_library_markup()
+    if markup is not None:
+        bot.reply_to(message, LIBRARY_PROMPT_TEXT, reply_markup=markup)
+        return True
+    bot.reply_to(message, LIBRARY_PROMPT_FALLBACK)
+    return False
+
+
 # رابط التطبيق المصغّر الرئيسي (Main Mini App) — الطريقة الصحيحة للجروب:
 # زر web_app لا يعمل خارج المحادثة الخاصة، وهذا الرابط يُفتح «في المحادثة الحالية»
 # (جروب أو خاص) ويحقن initData بسياق chat_type/chat_instance. بلا وصول للرسائل.
@@ -415,11 +436,7 @@ def register(bot, channel_id, admin_ids):
         if message.chat.type != "private":
             bot.reply_to(message, "📱 مكتبة الفيديوهات متاحة في المحادثة الخاصة فقط. أرسل /library هناك.")
             return
-        markup = build_library_markup()
-        if markup is not None:
-            bot.reply_to(message, "📱 <b>مكتبة الفيديوهات</b>\nافتح التطبيق المصغّر من الزر أدناه:", reply_markup=markup)
-        else:
-            bot.reply_to(message, "📱 مكتبة الفيديوهات غير متاحة حالياً. استخدم 🔍 بحث أو 🎬 عرض كل الفيديوهات.")
+        send_library_prompt(bot, message)
 
     # [تعديل] المطابقة بـ `in` لتدعم النصوص القديمة والجديدة (بعد إضافة الدوائر الملوّنة 🟢🔴🟡🔵🟣🟠)
     @bot.message_handler(func=lambda message: message.text and "عرض كل الفيديوهات" in message.text)
@@ -453,10 +470,11 @@ def register(bot, channel_id, admin_ids):
 
     @bot.message_handler(func=lambda message: message.text and MINIAPP_KEYBOARD_TEXT in message.text)
     def handle_miniapp_button(message):
-        """زر لوحة المفاتيح الرئيسية يحمل نفس نص الأولوية: الضغط يفتح المكتبة.
+        """زر لوحة المفاتيح أسفل المحادثة يفتح المكتبة بنفس مسار /library.
 
-        في الخاص: زر web_app الرسمي يفتح التطبيق مباشرة؛ إذا وصل النص (عملاء قديمة)
-        يتجاهله لأن الزر نفسه web_app. في الجروب: زر نصي عادي يفتح رابط t.me.
+        الزر الآن نصي (لا ``web_app``) لأن العميل يفتح أزرار ``web_app`` في لوحة
+        الرد في متصفح خارجي بلا ``initData``، فتفشل إرسال الفيديو. الرد هنا يرسل
+        زر ``web_app`` داخل رسالة — وهو المسار الذي يعمل على كل العملاء.
         """
         chat = getattr(message, "chat", None)
         chat_type = getattr(chat, "type", "private") or "private"
@@ -468,11 +486,12 @@ def register(bot, channel_id, admin_ids):
             else:
                 bot.reply_to(message, GROUP_LIBRARY_HINT_NO_LINK, parse_mode="HTML")
             return
-        # في المحادثة الخاصة: الزر الموجود في لوحة المفاتيح هو web_app يفتح مباشرة؛
-        # وصول النص يعني عميل قديم لا يدعم web_app، فنتجاهله (الزر غير مدعوم لديه)
-        # أو نعيد توجيهه لاستخدام /library command
-        logger.info(f"Mini App button text received in private chat from user {message.from_user.id} (old client?)")
-        return  # نتجاهل لأن الزر الرسمي web_app يعمل في العملاء الحديثة
+        if chat_type != "private":
+            return  # لا لوحة مفاتيح ثابتة في القنوات/الأنواع الأخرى
+        logger.info(f"Mini App keyboard button pressed in private chat by user "
+                    f"{message.from_user.id}; replying with the web_app button")
+        send_library_prompt(bot, message)
+        return
 
     @bot.message_handler(func=lambda message: message.text and message.text.startswith("🔍 بحث"))
     def handle_search_button(message):
