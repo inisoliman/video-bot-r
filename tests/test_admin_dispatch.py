@@ -19,6 +19,7 @@ from handlers import admin_flows
 from handlers import admin_handlers
 from handlers import callback_handlers
 from handlers import comment_handlers
+from handlers import group_settings
 from handlers import helpers
 from handlers import thumbnails as thumbnail_flows
 from handlers import user_handlers
@@ -391,6 +392,21 @@ class CallbackWiringTest(support.OfflineTestCase):
         self.dispatch('admin::set_miniapp_limit')
         self.assertEqual(self.flow_writes[-1][1], admin_flows.ST_MINIAPP_LIMIT)
         self.assertIn('أرسل حد فتح المكتبة', self.bot.last())
+
+    def test_group_autodelete_toggle_saves_and_refreshes_panel(self):
+        values = {'group_menu_autodelete_enabled': 'true'}
+        original_get = group_settings.get_bot_setting
+        original_set = group_settings.set_bot_setting
+        group_settings.get_bot_setting = lambda key, default=None: values.get(key, default)
+        group_settings.set_bot_setting = lambda key, value: (
+            values.__setitem__(key, value), True)[1]
+        self.addCleanup(_restore, group_settings, 'get_bot_setting', original_get)
+        self.addCleanup(_restore, group_settings, 'set_bot_setting', original_set)
+
+        self.dispatch('admin::toggle_group_autodelete')
+
+        self.assertEqual(values['group_menu_autodelete_enabled'], 'false')
+        self.assertIn('إيقاف', self.bot.answers[-1][0] or '')
 
     def test_thumbnails_start_and_cancel_through_callbacks(self):
         started = []

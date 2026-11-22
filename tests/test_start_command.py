@@ -10,6 +10,8 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
+from unittest import mock
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -227,3 +229,80 @@ class StartTest(support.OfflineTestCase):
         replies = self.press_start(bot, chat_type="private")
         self.assertEqual(len(replies), 1)
         self.assertIn("أهلاً", replies[0][0])
+
+    # --- تنظيف الجروب بعد ساعة ----------------------------------------------
+
+    def test_cleanup_deletes_messages_and_resends_reply_keyboard(self):
+        """بعد ساعة: تُحذف رسائل القائمة وتُعاد لوحة الرد كي لا تختفي أزرار الجروب.
+
+        في الجروبات تختفي لوحة الرد بعد حذف رسائل البوت حتى لو بقيت رسالة الترحيب؛
+        لذلك يُشغَّل خيط الحذف فوراً بساعة وهمية ثم تُفحص إعادة إرسال اللوحة.
+        """
+        bot = self.registered_bot(RecordingBot(chat_permissions=True))
+        jobs = []
+
+        class ImmediateThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                jobs.append(self)
+
+            def start(self):
+                self.target()
+
+        with mock.patch.object(user_handlers, "threading",
+                               SimpleNamespace(Thread=ImmediateThread)), \
+                mock.patch.object(user_handlers, "time",
+                                  SimpleNamespace(sleep=lambda _seconds: None)):
+            self.press_start(bot, chat_username=GROUP_USERNAME)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertTrue(jobs[0].daemon)
+
+        deletes = [call for call in bot.calls if call[0] == "delete_message"]
+        self.assertEqual(len(deletes), 3, deletes)
+
+        sends = [call for call in bot.calls if call[0] == "send_message"]
+        self.assertEqual(len(sends), 1, sends)
+        _name, args, kwargs = sends[0]
+        self.assertEqual(args[0], GROUP_CHAT_ID)
+        self.assertIn("مكتبة الفيديوهات", args[1])
+        self.assertTrue(kwargs.get("disable_notification"))
+        markup = kwargs["reply_markup"]
+        self.assertIsInstance(markup, types.ReplyKeyboardMarkup)
+        payload = json.loads(markup.to_json())
+        for row in payload["keyboard"]:
+            for button in row:
+                self.assertNotIn("web_app", button)
+
+        # إعادة اللوحة تكون بعد كل عمليات الحذف
+        last_delete = max(index for index, call in enumerate(bot.calls)
+                          if call[0] == "delete_message")
+        resend = next(index for index, call in enumerate(bot.calls)
+                      if call[0] == "send_message")
+        self.assertGreater(resend, last_delete)
+
+    def test_cleanup_can_be_disabled_from_admin_settings(self):
+        """إيقاف الخيار من لوحة الأدمن يمنع الحذف ويُبقي رسائل الجروب ولوحة الرد."""
+        bot = self.registered_bot(RecordingBot(chat_permissions=True))
+        started = []
+
+        class ForbiddenThread:
+            def __init__(self, *args, **kwargs):
+                started.append(self)
+
+            def start(self):
+                raise AssertionError("cleanup thread must not start when disabled")
+
+        with mock.patch.object(user_handlers, "group_menu_autodelete_enabled",
+                               lambda: False), \
+                mock.patch.object(user_handlers, "threading",
+                                  SimpleNamespace(Thread=ForbiddenThread)):
+            replies = self.press_start(bot, chat_username=GROUP_USERNAME)
+
+        self.assertEqual(started, [])
+        self.assertNotIn("delete_message", [call[0] for call in bot.calls])
+        self.assertNotIn("send_message", [call[0] for call in bot.calls])
+        self.assertEqual(len(replies), 3)
+        self.assertIsInstance(replies[0][1]["reply_markup"],
+                              types.ReplyKeyboardMarkup)

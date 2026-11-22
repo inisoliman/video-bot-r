@@ -511,6 +511,7 @@ class PanelCallbackInventoryTest(FlowTestCase):
                        'admin::remove_channel', 'admin::set_default_thumb', 'admin::manual_thumb',
                        'admin::heal_archive', 'admin::list_documents', 'admin::broadcast',
                        'admin::stats', 'admin::sub_count', 'admin::set_miniapp_limit',
+                       'admin::toggle_group_autodelete',
                        'admin::rename_title', 'admin::edit_title', 'admin::update_metadata',
                        'admin::convert_all_docs', 'admin::delete_old_comments',
                        'admin::delete_all_comments', 'noop', 'back_to_main'}

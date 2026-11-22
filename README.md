@@ -259,6 +259,11 @@ covered by the offline suite:
     `web_app` button) to `https://t.me/<bot>?startapp=library`; `/library` in the group
     replies with the same button and opens the Mini App inside that group. `web_app`
     buttons stay private-only, and a directly opened Mini App cannot read chat messages.
+19. Group menu cleanup (default **on**): send `/start` in the test group, then confirm via
+    admin panel → «👥 رسائل الجروب» that the switch shows `✅ مفعّل`. After the hour the
+    welcome/menu/private-button messages are removed and one quiet welcome message is sent
+    again so the bottom reply keyboard stays visible. Turn the switch to `⏸️ متوقف` and
+    confirm a new `/start` leaves the menu messages in place (no hourly deletion).
 
 ### Admin panel notes and limitations
 - Admin input flows (broadcast, category, channel, move/delete, Mini App setting/IP,
@@ -276,6 +281,12 @@ covered by the offline suite:
   an empty audience.
 - Thumbnail and video deletion/move/category actions are never exercised against live
   Telegram/PostgreSQL in the offline suite; steps 9–17 above are the verification path.
+- «👥 رسائل الجروب» stores `group_menu_autodelete_enabled` in `bot_settings` (`true` by
+  default). The hourly cleanup only reads it when `/start` is handled, so turning the
+  switch off affects new group `/start` messages; an already scheduled timer for an older
+  message still runs. The cleanup deletes the group menu messages and then re-sends the
+  welcome message with the reply keyboard, because deleting bot messages hides a group's
+  reply keyboard even when its own message survives.
 
 ## 🛠️ Development
 ```bash

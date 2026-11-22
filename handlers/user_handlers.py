@@ -30,6 +30,7 @@ from .helpers import (
 )
 from . import comment_handlers  # إضافة معالجات التعليقات
 from . import ephemeral_messages
+from .group_settings import group_menu_autodelete_enabled
 from utils import extract_video_metadata
 from miniapp import MINIAPP_KEYBOARD_TEXT, app_base_url, miniapp_url
 from state_manager import (
@@ -293,7 +294,11 @@ def register(bot, channel_id, admin_ids):
 
         لوحة الرد (main_menu) ترسل للجروب بدون زر web_app؛ كما تُرسَل أزرار Inline بنفس
         وظائفها لمن لا يرى لوحة المفاتيح. كل إرسال مستقل حتى لا يوقف فشلُ الأول الثاني.
-        رسائل القائمة الـInline والزر الخاص تُحذف بعد ساعة.
+
+        بعد ساعة تُحذف رسائل القائمة والزر الخاص ورسالة الترحيب القديمة، ثم تُعاد
+        رسالة الترحيب بلوحة الرد: في الجروبات تختفي لوحة الرد بعد حذف رسائل البوت
+        حتى لو بقيت رسالة الترحيب، فإعادة الإرسال بعد الحذف تُبقي الأزرار ظاهرة.
+        الحذف التلقائي خيار أدمن (افتراضياً مفعّل) ويُقرأ من bot_settings.
         """
         chat = getattr(message, "chat", None)
         chat_type = str(getattr(chat, "type", "group") or "group")
@@ -306,14 +311,16 @@ def register(bot, channel_id, admin_ids):
         uname = str(getattr(bot_info, "username", "") or "")
         group_username = str(getattr(chat, "username", "") or "")
         title = html_escape(str(getattr(chat, "title", "") or "المحادثة الخاصة"))
-        # الرسالة الترحيبية مع لوحة المفاتيح تبقى (لا تُحذف)
-        safe_reply(message, (
+        welcome_text = (
             "🎬 <b>مكتبة الفيديوهات</b>\n\n"
             f"🔍 البحث: اكتب <code>@{html_escape(uname) or 'اسم البوت'} كلمة البحث</code>\n"
             "📱 المكتبة: أرسل <code>/library</code> هنا\n\n"
             "⬇️ استخدم الأزرار أدناه، أو ابدأ البوت في الخاص للمكتبة المصغّرة."
-        ), parse_mode="HTML", reply_markup=main_menu(uname, chat_type=chat_type))
-        # رسائل القائمة الـInline والزر الخاص تُحذف بعد ساعة
+        )
+        # رسالة الترحيب تحمل لوحة الرد؛ تُحذف وتُعاد بعد ساعة مع بقية الرسائل
+        welcome_msg = safe_reply(message, welcome_text, parse_mode="HTML",
+                                 reply_markup=main_menu(uname, chat_type=chat_type))
+        # رسائل القائمة الـInline والزر الخاص تُحذف بعد ساعة مع رسالة الترحيب القديمة
         inline_msg = safe_reply(message, "🎛️ القائمة الرئيسية:",
                    reply_markup=inline_main_menu())
         markup = private_start_markup(uname, group_username, message)
@@ -321,18 +328,33 @@ def register(bot, channel_id, admin_ids):
         if markup is not None:
             private_btn_msg = safe_reply(message, f"▶️ اضغط الزر أدناه للانتقال إلى الخاص مع {title}:",
                        reply_markup=markup)
-        # حذف رسائل القائمة بعد ساعة (3600 ثانية)
-        if chat_id and inline_msg:
+        # حذف رسائل القائمة بعد ساعة (3600 ثانية) ثم إعادة لوحة الرد
+        if (chat_id and (welcome_msg or inline_msg or private_btn_msg)
+                and group_menu_autodelete_enabled()):
             def delete_menu_later():
                 try:
                     time.sleep(3600)  # ساعة واحدة
-                    if inline_msg:
-                        bot.delete_message(chat_id, inline_msg.message_id)
-                    if private_btn_msg:
-                        bot.delete_message(chat_id, private_btn_msg.message_id)
-                    logger.info(f"Deleted menu messages in group {chat_id}")
+                except Exception:
+                    return
+                # كل حذف مستقل: فشل رسالة لا يمنع حذف الباقي ولا إعادة اللوحة
+                for sent in (inline_msg, private_btn_msg, welcome_msg):
+                    if not sent:
+                        continue
+                    try:
+                        bot.delete_message(chat_id, sent.message_id)
+                    except Exception as exc:
+                        logger.warning(
+                            f"Could not delete group menu message: {type(exc).__name__}")
+                try:
+                    bot.send_message(
+                        chat_id, welcome_text, parse_mode="HTML",
+                        reply_markup=main_menu(uname, chat_type=chat_type),
+                        disable_notification=True)
+                    logger.info(
+                        f"Deleted group menu messages and restored the reply keyboard in {chat_id}")
                 except Exception as exc:
-                    logger.warning(f"Could not delete menu messages: {type(exc).__name__}")
+                    logger.warning(
+                        f"Could not restore group reply keyboard: {type(exc).__name__}")
             threading.Thread(target=delete_menu_later, daemon=True).start()
 
     @bot.message_handler(commands=["start"])

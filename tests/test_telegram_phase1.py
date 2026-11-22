@@ -287,13 +287,14 @@ class DisabledInformationalButtonTest(support.OfflineTestCase):
         keyboard = admin_handlers.build_admin_panel()
         buttons = flat_buttons(keyboard)
         headings = [data for data in buttons if data["text"].startswith("╭─")]
-        self.assertEqual(len(headings), 7, headings)
+        self.assertEqual(len(headings), 8, headings)
         for data in headings:
             self.assert_display_only(data, data["text"])
         callbacks = {data["callback_data"] for data in buttons if "callback_data" in data}
         for expected in ("admin::add_new_cat", "admin::delete_category_select",
                          "admin::set_active", "admin::view_comments",
-                         "admin::broadcast", "admin::stats"):
+                         "admin::broadcast", "admin::stats",
+                         "admin::toggle_group_autodelete"):
             self.assertIn(expected, callbacks)
         self.assertEqual(len(buttons), len(headings) + len(callbacks))
 
@@ -308,6 +309,14 @@ class DisabledInformationalButtonTest(support.OfflineTestCase):
         self.assertIn("5", current["text"])
         self.assertEqual(button_data(keyboard, "حد فتح المكتبة")["callback_data"],
                          "admin::set_miniapp_limit")
+
+    def test_group_autodelete_toggle_reflects_setting(self):
+        self.patch(admin_handlers, "_miniapp_active", lambda: False)
+        self.patch(admin_handlers, "group_menu_autodelete_enabled", lambda: False)
+        keyboard = admin_handlers.build_admin_panel()
+        toggle = button_data(keyboard, "حذف رسائل القائمة")
+        self.assertIn("متوقف", toggle["text"])
+        self.assertEqual(toggle["callback_data"], "admin::toggle_group_autodelete")
 
     def test_comment_thread_page_counter_is_disabled(self):
         markup = comment_handlers._thread_nav_markup(7, 1, 3, "thread")

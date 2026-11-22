@@ -476,6 +476,10 @@ def register(bot, admin_ids):
                                                   show_alert=True)
                     return
 
+                elif sub_action == "toggle_group_autodelete":
+                    admin_handlers.toggle_group_menu_autodelete(bot, call)
+                    return
+
                 elif sub_action == "add_new_cat":
                     keyboard = InlineKeyboardMarkup()
                     keyboard.add(inline_button("📂 تصنيف رئيسي جديد 🟢", STYLE_SUCCESS, callback_data="admin::add_cat_main"))

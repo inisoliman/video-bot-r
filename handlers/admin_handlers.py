@@ -30,6 +30,10 @@ from state_manager import state_handler, clear_user_waiting_state, set_user_wait
 
 from . import admin_broadcast
 from . import ephemeral_messages
+from .group_settings import (
+    group_menu_autodelete_enabled,
+    set_group_menu_autodelete,
+)
 # تدفق البث (زر -> حالة مخزّنة -> رسالة -> عامل): يبقى مخفياً في module منفصل
 from .admin_broadcast import (  # noqa: F401  (أسماء متوافقة مع استيرادات قديمة)
     STATE_BROADCAST as STATE_BROADCAST_MESSAGE,
@@ -181,6 +185,14 @@ def build_admin_panel():
                  inline_button("➖ إزالة قناة 🔴", STYLE_DANGER, callback_data="admin::remove_channel"))
     keyboard.add(inline_button("📋 عرض القنوات 🔵", STYLE_PRIMARY, callback_data="admin::list_channels"))
 
+    # ─── قسم: رسائل الجروب ───
+    keyboard.add(disabled_button("╭─ 👥 رسائل الجروب ─╮", STYLE_PRIMARY))
+    autodelete = group_menu_autodelete_enabled()
+    keyboard.add(inline_button(
+        f"🧹 حذف رسائل القائمة بعد ساعة: {'✅ مفعّل' if autodelete else '⏸️ متوقف'}",
+        STYLE_SUCCESS if autodelete else STYLE_DANGER,
+        callback_data="admin::toggle_group_autodelete"), row_width=1)
+
     # ─── قسم: الصور المصغرة ───
     keyboard.add(disabled_button("╭─ 🖼️ الصور المصغرة ─╮", STYLE_PRIMARY))
     keyboard.add(inline_button("🖼️ صورة افتراضية 🟡", STYLE_PRIMARY, callback_data="admin::set_default_thumb"),
@@ -219,6 +231,29 @@ ADMIN_PRIVATE_ONLY_NOTICE = "⛔ أوامر الإدارة متاحة في ال�
 def send_admin_panel(bot, chat_id):
     """إرسال لوحة الأدمن (وتحمل أزرار التطبيق المصغّر عند تفعيله)."""
     bot.send_message(chat_id, ADMIN_PANEL_TEXT, reply_markup=build_admin_panel())
+    return True
+
+
+def toggle_group_menu_autodelete(bot, call):
+    """قلب إعداد حذف رسائل الجروب بعد ساعة وتحديث اللوحة في مكانها."""
+    enabled = not group_menu_autodelete_enabled()
+    if not set_group_menu_autodelete(enabled):
+        bot.answer_callback_query(
+            call.id, "⚠️ تعذّر حفظ الإعداد في قاعدة البيانات. حاول مجدداً.",
+            show_alert=True)
+        return False
+    bot.answer_callback_query(
+        call.id,
+        "✅ سيتم حذف رسائل القائمة بعد ساعة وإعادة لوحة الرد." if enabled
+        else "⏸️ تم إيقاف الحذف التلقائي؛ ستبقى الرسائل ولوحة الرد.")
+    try:
+        bot.edit_message_reply_markup(
+            call.message.chat.id, call.message.message_id,
+            reply_markup=build_admin_panel())
+    except Exception as exc:  # noqa: BLE001 - التأكيد وصل بالفعل
+        logger.warning(
+            "Could not refresh admin panel after group toggle: %s",
+            type(exc).__name__)
     return True
 
 
